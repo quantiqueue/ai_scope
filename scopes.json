@@ -1,0 +1,56 @@
+{
+  "_readme": "Scope catalog. Every entry shows up on the Scopes page (+). 'builtin' scopes are always installed. 'modules' are the server-side files (without .js) that collect the data; each exports start(settings) and stop(). 'settings' are asked for when the scope is installed; values are saved in data/installed.json. Field types: text, url, folder, number. In defaults, ~ is the user's home folder and %NAME% an environment variable. The scope's page is the <section data-panel=\"id\"> in server.js; a scope without one gets a placeholder page.",
+  "scopes": [
+    {
+      "id": "system",
+      "name": "SYSTEM",
+      "desc": "Live CPU, RAM, GPU and VRAM usage",
+      "builtin": true,
+      "modules": [],
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"6\" y=\"6\" width=\"12\" height=\"12\" rx=\"2\"/><rect x=\"9.5\" y=\"9.5\" width=\"5\" height=\"5\" rx=\"1\"/><path d=\"M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4\"/></svg>",
+      "settings": []
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio",
+      "desc": "Loaded and installed models, plus token performance for recent requests",
+      "logo": true,
+      "modules": ["lmstats", "lmapi"],
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 3v18h18\"/><path d=\"M7 15l4-4 3 3 5-6\"/></svg>",
+      "settings": [
+        { "key": "home", "label": "LM Studio folder", "type": "folder", "default": "~/.lmstudio", "required": true, "mustExist": true,
+          "help": "LM Studio's data folder. Request stats are read from its server logs." },
+        { "key": "url", "label": "Server URL", "type": "url", "default": "", "placeholder": "Auto-detect (127.0.0.1:1234, then :1235)",
+          "help": "LM Studio's local server (Developer tab). Leave empty to auto-detect." },
+        { "key": "modelsDir", "label": "Models folder", "type": "folder", "default": "", "placeholder": "Default: the models folder inside the LM Studio folder", "mustExist": true,
+          "help": "Only needed if you moved your models (My Models → Models directory)." }
+      ]
+    },
+    {
+      "id": "comfyui",
+      "name": "ComfyUI",
+      "desc": "Current workflow progress, run history and installed models",
+      "logo": true,
+      "modules": ["comfystats"],
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"2\" y=\"3\" width=\"7\" height=\"6\" rx=\"1.5\"/><rect x=\"15\" y=\"9\" width=\"7\" height=\"6\" rx=\"1.5\"/><rect x=\"2\" y=\"15\" width=\"7\" height=\"6\" rx=\"1.5\"/><path d=\"M9 6h2a2 2 0 0 1 2 2v2.5a1.5 1.5 0 0 0 1.5 1.5H15M9 18h2a2 2 0 0 0 2-2v-2.5a1.5 1.5 0 0 1 1.5-1.5\"/></svg>",
+      "settings": [
+        { "key": "url", "label": "ComfyUI URL", "type": "url", "default": "", "placeholder": "Auto-detect (127.0.0.1:8188, then :8000)",
+          "help": "Leave empty to auto-detect. ComfyUI Desktop uses port 8000 or 8188." }
+      ]
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "desc": "Loaded models, GPU/CPU split and token performance",
+      "logo": true,
+      "modules": ["ollamastats"],
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2l9 5v10l-9 5-9-5V7z\"/><path d=\"M3 7l9 5 9-5M12 12v10\"/></svg>",
+      "settings": [
+        { "key": "url", "label": "Ollama URL", "type": "url", "default": "http://127.0.0.1:11434", "required": true,
+          "help": "Where Ollama is running." },
+        { "key": "proxyPort", "label": "Relay port", "type": "number", "default": 11435, "min": 1024, "max": 65535, "required": true,
+          "help": "AI_SCOPE relays requests on 127.0.0.1:<port> to record token stats. Point apps here instead of 11434." }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "name": "ai-scope",
+  "version": "1.0.0",
+  "description": "AI_SCOPE: local dashboard for monitoring AI tools (LM Studio, Ollama, ComfyUI, CPU/GPU/VRAM)",
+  "keywords": [
+    "ai",
+    "llm",
+    "dashboard",
+    "monitor",
+    "lmstudio",
+    "ollama",
+    "comfyui",
+    "gpu",
+    "vram",
+    "local-ai"
+  ],
+  "homepage": "https://github.com/quantiqueue/ai_scope#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quantiqueue/ai_scope.git"
+  },
+  "bugs": {
+    "url": "https://github.com/quantiqueue/ai_scope/issues"
+  },
+  "license": "MIT",
+  "author": "ferr",
+  "main": "server.js",
+  "bin": {
+    "ai-scope": "bin/ai-scope.js"
+  },
+  "files": [
+    "bin/",
+    "server.js",
+    "scopes.js",
+    "scopes.json",
+    "paths.js",
+    "sysstats.js",
+    "lmstats.js",
+    "lmapi.js",
+    "comfystats.js",
+    "ollamastats.js",
+    "logos.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node dev.js",
+    "serve": "node bin/ai-scope.js"
+  }
+}
