@@ -1,0 +1,10 @@
+# Local data from older versions (now kept in ~/.ai_scope)
+data/
+# npm
+node_modules/
+*.tgz
+npm-debug.log*
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,49 @@
+# Checks every push and pull request: syntax on all supported Node versions,
+# the package contents, and that the CLI starts and serves the page.
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [18, 22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Syntax check
+        shell: bash
+        run: for f in *.js bin/*.js; do node --check "$f"; done
+      - name: Installer scripts (syntax)
+        if: runner.os == 'Linux'
+        run: sh -n install/install.sh && sh -n install/uninstall.sh
+      - name: Installer scripts (PowerShell parse)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($f in 'install/install.ps1', 'install/uninstall.ps1') {
+            $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errs) | Out-Null
+            if ($errs) { $errs | ForEach-Object { Write-Error "${f}: $_" }; exit 1 }
+          }
+      - name: Package contents
+        run: npm pack --dry-run
+      - name: CLI smoke test
+        shell: bash
+        env:
+          AI_SCOPE_DATA: ${{ runner.temp }}/ai_scope_data
+        run: |
+          node bin/ai-scope.js --version
+          node bin/ai-scope.js --help > /dev/null
+          node bin/ai-scope.js --port 9123 &
+          for i in $(seq 1 20); do curl -sf -o /dev/null http://127.0.0.1:9123/ && break; sleep 1; done
+          curl -sf -o /dev/null http://127.0.0.1:9123/
+          curl -sf http://127.0.0.1:9123/api/scopes | grep -q '"system"'
+          echo "Dashboard responded"
