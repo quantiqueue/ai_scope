@@ -54,6 +54,18 @@ function setTile(id, value, big, sub, series) {
   el.querySelector('.area').setAttribute('d', valid.length ? d + ` L${valid[valid.length-1][0]} 100 L${valid[0][0]} 100 Z` : '');
 }
 
+// GPU temperature badge on the GPU tile (top right). Amber from 80 °C, red from 90 °C. Hidden when unknown.
+function setTemp(id, temp) {
+  const el = document.getElementById('t-' + id);
+  if (!el) return;
+  let b = el.querySelector('.temp');
+  if (temp == null) { if (b) b.hidden = true; return; }
+  if (!b) { b = document.createElement('span'); b.className = 'temp'; b.title = 'GPU temperature'; el.querySelector('.k').appendChild(b); }
+  b.hidden = false;
+  b.textContent = Math.round(temp) + ' °C';
+  b.className = 'temp' + (temp >= 90 ? ' hot' : temp >= 80 ? ' warm' : '');
+}
+
 async function loadSystem() {
   try {
     const data = await (await fetch('/api/system', { cache:'no-store' })).json();
@@ -74,7 +86,10 @@ async function loadSystem() {
       const g = (s.gpus && s.gpus[i]) || (i === 0 ? { util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal } : {});
       const name = gpus[i] ? gpus[i].name : (info.gpuSource === 'none' ? 'No GPU stats available' : 'detecting…');
       const util = v['gpu' + i], vram = v['vram' + i];
-      setTile('gpu' + i, util, util != null ? util.toFixed(0) + '<small>%</small>' : na, name, series('gpu' + i));
+      // Sub line: card name, then power draw / limit when the card reports it (NVIDIA). Temperature is the badge.
+      const extra = [g.power != null ? Math.round(g.power) + (g.powerLimit ? ' / ' + Math.round(g.powerLimit) : '') + ' W' : null].filter(Boolean);
+      setTile('gpu' + i, util, util != null ? util.toFixed(0) + '<small>%</small>' : na, [name].concat(extra).join(' · '), series('gpu' + i));
+      setTemp('gpu' + i, g.temp);
       let vramBig = na, vramSub = name;
       if (g.vramUsed != null) {
         vramBig = GB(g.vramUsed) + (g.vramTotal ? '<small> / ' + GB(g.vramTotal) + ' GB</small>' : '<small> GB</small>');

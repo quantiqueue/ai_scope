@@ -56,15 +56,25 @@ function numOrNull(x) { const n = parseFloat(x); return isFinite(n) ? n : null; 
 function allCards() { return nvCards.concat(winCards); }
 
 // ---- NVIDIA: one line per card ----
+// Temperature (°C) and power draw / limit (W) are extra fields; very old drivers may not know them, so if the
+// full query fails once we fall back to the basic one for good (temperature then shows n/a).
+const NV_BASIC = 'index,name,utilization.gpu,memory.used,memory.total';
+const NV_FULL = NV_BASIC + ',temperature.gpu,power.draw,power.limit';
+let nvQuery = NV_FULL;
 function readNvidia(cb) {
-  run('nvidia-smi', ['--query-gpu=index,name,utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'], 5000,
+  const query = nvQuery;
+  run('nvidia-smi', ['--query-gpu=' + query, '--format=csv,noheader,nounits'], 5000,
     function (err, out) {
-      if (err || !out.trim()) return cb(null);
+      if (err || !out.trim()) {
+        if (query === NV_FULL) { nvQuery = NV_BASIC; return readNvidia(cb); }
+        return cb(null);
+      }
       const cards = out.trim().split(/\r?\n/).map(function (l) {
         const p = l.split(',').map(function (x) { return x.trim(); });
         const used = numOrNull(p[3]), total = numOrNull(p[4]);
         return { id: 'nv' + p[0], name: p[1], vendor: 'NVIDIA', source: 'nvidia', util: numOrNull(p[2]),
-                 vramUsed: used == null ? null : used * 1048576, vramTotal: total == null ? null : total * 1048576 };
+                 vramUsed: used == null ? null : used * 1048576, vramTotal: total == null ? null : total * 1048576,
+                 temp: numOrNull(p[5]), power: numOrNull(p[6]), powerLimit: numOrNull(p[7]) };
       }).filter(function (c) { return c.name; });
       cb(cards.length ? cards : null);
     });
@@ -273,7 +283,7 @@ function pollGpu() {
     // Keep the card list stable; update readings by id.
     cards.forEach(function (c) {
       const old = nvCards.filter(function (o) { return o.id === c.id; })[0];
-      if (old) { old.util = c.util; old.vramUsed = c.vramUsed; old.vramTotal = c.vramTotal; }
+      if (old) { old.util = c.util; old.vramUsed = c.vramUsed; old.vramTotal = c.vramTotal; old.temp = c.temp; old.power = c.power; old.powerLimit = c.powerLimit; }
     });
   });
 }
@@ -293,7 +303,10 @@ function sample() {
     vramUsed: has('vramUsed') ? sum('vramUsed') : null,
     vramTotal: has('vramTotal') ? sum('vramTotal') : null,
     // ...and per card, in the same order as info.gpus.
-    gpus: cards.map(function (c) { return { util: c.util, vramUsed: c.vramUsed, vramTotal: c.vramTotal }; }),
+    // temp °C, power / powerLimit W: NVIDIA only (null for AMD/Intel - Windows' counters don't report them).
+    gpus: cards.map(function (c) { return { util: c.util, vramUsed: c.vramUsed, vramTotal: c.vramTotal,
+                                            temp: c.temp == null ? null : c.temp, power: c.power == null ? null : c.power,
+                                            powerLimit: c.powerLimit == null ? null : c.powerLimit }; }),
   };
   if (s.cpu != null) {
     history.push(s);
