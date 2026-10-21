@@ -20,16 +20,17 @@ const PORT = parseInt(process.env.AI_SCOPE_PORT, 10) || 9000;
 const HOST = process.env.AI_SCOPE_HOST || '0.0.0.0';
 const BOOT_ID = Date.now().toString(); // changes on every restart; the page uses it to auto-reload
 
-// ---------- The dashboard page: web/index.html + web/app.css + web/app.js ----------
+// ---------- The dashboard page: web/index.html + web/app.css + web/js/*.js ----------
 // Plain files (no build step). Read on each request - they're small - so they're never stale.
 const WEB_DIR = path.join(__dirname, 'web');
 const WEB_FILES = {
   '/app.css': ['app.css', 'text/css; charset=utf-8'],
-  '/app.js':  ['app.js', 'text/javascript; charset=utf-8'],
 };
+// Client scripts: /js/<name>.js -> web/js/<name>.js (plain names only, so nothing outside web/js can be asked for).
+const WEB_JS = /^\/js\/([a-z0-9-]+)\.js$/;
 function sendWebFile(res, name, type) {
   fs.readFile(path.join(WEB_DIR, name), (err, buf) => {
-    if (err) { res.writeHead(500, { 'Content-Type': 'text/plain' }); return res.end('AI_SCOPE: missing web/' + name); }
+    if (err) { res.writeHead(err.code === 'ENOENT' ? 404 : 500, { 'Content-Type': 'text/plain' }); return res.end('AI_SCOPE: missing web/' + name); }
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
     res.end(buf);
   });
@@ -91,6 +92,8 @@ http.createServer((req, res) => {
   if (url.pathname === '/home') { res.writeHead(302, { Location: '/#home' }); return res.end(); }
   if (url.pathname === '/favicon.ico') return sendIcon(res);
   if (WEB_FILES[url.pathname]) return sendWebFile(res, WEB_FILES[url.pathname][0], WEB_FILES[url.pathname][1]);
+  const js = WEB_JS.exec(url.pathname);
+  if (js) return sendWebFile(res, 'js/' + js[1] + '.js', 'text/javascript; charset=utf-8');
   // "Is AI_SCOPE running here?" for `ai-scope --app` / `--stop`; `local` = request from this PC (shows the Stop button).
   if (url.pathname === '/api/ping') return sendJson(res, 200, { app: 'ai-scope', version: PKG_VERSION, pid: process.pid, port: PORT, local: isLocal(req) });
   // Stop AI_SCOPE (ai-scope --stop, or the Stop button). Only from this PC, and only with the custom header,

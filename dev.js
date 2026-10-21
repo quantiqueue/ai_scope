@@ -1,5 +1,5 @@
 // Tiny auto-restart runner (works on any Node version, no dependencies).
-// - Restarts server.js whenever a .js/.html/.css/.json file in this folder or web/ changes
+// - Restarts server.js whenever a .js/.html/.css/.json file in this folder, web/ or web/js/ changes
 //   (the restart also makes open dashboards reload themselves).
 // - If server.js crashes, it is restarted automatically after 2 seconds.
 'use strict';
@@ -44,5 +44,6 @@ function watch(dir, prefix) {
 }
 watch(__dirname, '');
 watch(path.join(__dirname, 'web'), 'web/');
+watch(path.join(__dirname, 'web', 'js'), 'web/js/');
 
 start();
