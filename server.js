@@ -343,6 +343,7 @@ const html = `<!doctype html>
       </table>
       <div class="err" id="cErr" hidden></div>
     </div>
+    <div class="pager" id="cPager" hidden></div>
 
     <div class="blockhead">Installed models <span class="hint" id="cmHint"></span></div>
     <div class="chips" id="cmChips"></div>
@@ -740,7 +741,7 @@ async function loadComfy() {
   $('cErr').hidden = d.runs.length > 0;
   $('cErr').style.color = 'var(--muted)';
   $('cErr').textContent = 'No runs recorded yet. Run a workflow in ComfyUI and it will appear here.';
-  $('cRows').innerHTML = d.runs.map(r => {
+  $('cRows').innerHTML = paginate('comfyui', d.runs.map(r => {
     const s = r.summary, isNew = !cFirst && !cSeen.has(r.id);
     cSeen.add(r.id);
     const thumbs = r.images.slice(0, 3).map(im => '<a href="' + imgUrl(im, true) + '" target="_blank"><img loading="lazy" src="' + imgUrl(im) + '" alt=""></a>').join('') +
@@ -755,9 +756,10 @@ async function loadComfy() {
       peakCell(r.peak) +
       '<td><span class="status ' + escH(r.status) + '" title="' + escH(r.error || '') + '">' + escH(r.status) + '</span></td>' +
       '<td><div class="thumbs">' + (thumbs || '<span class="more">—</span>') + '</div></td></tr>';
-  }).join('');
+  }), 'cPager').join('');
   cFirst = false;
 }
+pagerReload.comfyui = loadComfy;
 loadComfy();
 setInterval(loadComfy, 2000);
 
