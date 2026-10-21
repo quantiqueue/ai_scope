@@ -355,5 +355,24 @@ function vramFit(size, vram, canSplit) {
   return { fit: 'spills' };
 }
 
-module.exports = { start: start, getStats: getStats, vramInfo: vramInfo, vramFit: vramFit,
+// ---- Peak whole-PC load while a request/run was going (from the 2 s samples, last 5 minutes) ----
+// Returns { gpu, vramUsed, vramTotal, cpu, ramUsed, ramTotal, partial } or null when no sample falls in
+// [t0, t1]. partial = the request started before the oldest kept sample, so only its last 5 min count.
+function peakBetween(t0, t1) {
+  if (t0 == null || t1 == null || !history.length) return null;
+  let p = null;
+  const mx = function (a, b) { return b == null ? a : a == null ? b : Math.max(a, b); };
+  history.forEach(function (s) {
+    if (s.t < t0 || s.t > t1) return;
+    if (!p) p = { gpu: null, vramUsed: null, vramTotal: s.vramTotal, cpu: null, ramUsed: null, ramTotal: s.ramTotal };
+    p.gpu = mx(p.gpu, s.gpu); p.vramUsed = mx(p.vramUsed, s.vramUsed); p.cpu = mx(p.cpu, s.cpu); p.ramUsed = mx(p.ramUsed, s.ramUsed);
+  });
+  if (!p) return null;
+  ['gpu', 'cpu'].forEach(function (k) { if (p[k] != null) p[k] = Math.round(p[k]); });
+  p.partial = t0 < history[0].t;
+  return p;
+}
+function oldestSample() { return history.length ? history[0].t : null; }
+
+module.exports = { start: start, getStats: getStats, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
                    _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards } };

@@ -215,6 +215,16 @@ const html = `<!doctype html>
   .now-grid .v.small { font-size:1.05rem; }
   .dot.off { background:var(--bad); }
   .countdown { margin-top:10px; font-size:.78rem; color:var(--muted); }
+  .sysload { display:flex; flex-wrap:wrap; align-items:flex-start; gap:6px 18px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); font-size:.8rem; }
+  .sysload[hidden] { display:none; }
+  .sysload .sl-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; cursor:help; }
+  .sysload .sl-items { display:grid; grid-auto-flow:row; gap:6px 22px; max-width:100%; overflow-x:auto; } /* row 1: GPU % + CPU %, row 2: VRAM + RAM */
+  .sl-item { display:inline-flex; align-items:center; gap:6px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .sl-k { color:var(--muted); min-width:4.3em; } /* same label width in both rows, so the meters line up */
+  .sl-meter { width:46px; height:5px; background:var(--line); border-radius:3px; overflow:hidden; }
+  .sl-meter > div { height:100%; background:var(--accent); border-radius:3px; transition:width .4s; }
+  .sl-v { font-weight:600; }
+  td.peak { cursor:help; }
   .blockhead { font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600;
                margin:22px 2px 8px; display:flex; flex-wrap:wrap; gap:10px; align-items:baseline; }
   .blockhead .hint { text-transform:none; letter-spacing:0; font-weight:400; }
@@ -310,6 +320,7 @@ const html = `<!doctype html>
         <div id="cRateBox"><div class="k">Speed</div><div class="v small" id="cRate">—</div></div>
         <div id="cTimeBox"><div class="k" id="cTimeLabel">Elapsed</div><div class="v" id="cTime">—</div></div>
       </div>
+      <div class="sysload" id="cLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
       <div class="countdown" id="cFoot">&nbsp;</div>
     </div>
     <div class="blockhead">Runs</div>
@@ -317,7 +328,7 @@ const html = `<!doctype html>
       <table>
         <thead><tr>
           <th>Finished</th><th>Model</th><th>Size</th><th>Steps</th><th>Sampler</th>
-          <th>Run time</th><th>Status</th><th>Images</th>
+          <th>Run time</th><th>Peak load</th><th>Status</th><th>Images</th>
         </tr></thead>
         <tbody id="cRows"></tbody>
       </table>
@@ -351,6 +362,7 @@ const html = `<!doctype html>
         <div id="oTokBox"><div class="k">Tokens so far</div><div class="v small" id="oTok">—</div></div>
         <div id="oTimeBox"><div class="k">Elapsed</div><div class="v" id="oTime">—</div></div>
       </div>
+      <div class="sysload" id="oLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
       <div class="countdown" id="oFoot">&nbsp;</div>
     </div>
 
@@ -370,7 +382,7 @@ const html = `<!doctype html>
       <table>
         <thead><tr>
           <th>Timestamp</th><th>Model</th><th>Gen tok/s</th><th>Gen tokens</th><th>Prompt tok/s</th><th>Prompt tokens</th>
-          <th>Load time</th><th>Time to first token</th><th>Total time</th>
+          <th>Load time</th><th>Time to first token</th><th>Total time</th><th>Peak load</th>
         </tr></thead>
         <tbody id="oRows"></tbody>
       </table>
@@ -412,6 +424,7 @@ const html = `<!doctype html>
       <div id="nowTokBox"><div class="k">Tokens so far</div><div class="v small" id="nowTok">—</div></div>
       <div id="nowTimeBox"><div class="k">Elapsed</div><div class="v" id="nowTime">—</div></div>
     </div>
+    <div class="sysload" id="nowLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
     <div class="countdown" id="countdown">&nbsp;</div>
   </div>
 
@@ -431,7 +444,7 @@ const html = `<!doctype html>
         <th>Timestamp</th><th>Model</th>
         <th>Gen tok/s</th><th>Gen tokens</th>
         <th>Prompt tok/s</th><th>Prompt tokens</th>
-        <th>Time to first token</th><th>Total time</th>
+        <th>Time to first token</th><th>Total time</th><th>Peak load</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -572,6 +585,46 @@ async function loadSystem() {
   }
 }
 
+// ---- "System load" row on the Current request / Current job cards ----
+// Whole-computer totals from the latest SYSTEM sample (all apps together, not this request alone).
+// Shown only while something is running.
+function setSysLoad(id, on) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const s = on ? sysHist[sysHist.length - 1] : null;
+  el.hidden = !s;
+  if (!s) return;
+  const pct = (u, t) => (u != null && t) ? 100 * u / t : null;
+  const item = (k, p, txt) => '<span class="sl-item"><span class="sl-k">' + k + '</span><span class="sl-meter"><div style="width:' +
+    (p == null ? 0 : Math.max(0, Math.min(100, p))) + '%"></div></span><span class="sl-v">' + txt + '</span></span>';
+  // Two rows, one column per card (+ one for the CPU): usage % on top, memory below.
+  const top = [], mem = [];
+  const blank = '<span></span>';
+  const cards = s.gpus && s.gpus.length ? s.gpus : (s.gpu != null ? [{ util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal }] : []);
+  cards.forEach((g, i) => {
+    const n = cards.length > 1 ? ' ' + (i + 1) : '';
+    top.push(g.util != null ? item('GPU' + n, g.util, g.util.toFixed(0) + '%') : blank);
+    mem.push(g.vramUsed != null ? item('VRAM' + n, pct(g.vramUsed, g.vramTotal), GB(g.vramUsed) + (g.vramTotal ? ' / ' + GB(g.vramTotal) : '') + ' GB') : blank);
+  });
+  top.push(s.cpu != null ? item('CPU', s.cpu, s.cpu.toFixed(0) + '%') : blank);
+  mem.push(item('MEM', pct(s.ramUsed, s.ramTotal), GB(s.ramUsed) + ' / ' + GB(s.ramTotal) + ' GB'));
+  const html = top.concat(mem).join('');
+  const box = el.querySelector('.sl-items');
+  if (box._html !== html) { box._html = html; box.innerHTML = html; box.style.gridTemplateColumns = 'repeat(' + top.length + ', max-content)'; }
+}
+// "Peak load" cell in the history tables: highest whole-PC GPU % and VRAM while it ran; details on hover.
+function peakCell(p) {
+  if (!p) return '<td class="na" title="No peak recorded (AI_SCOPE was not sampling while this ran, or it ran before v0.2)">—</td>';
+  const parts = [];
+  if (p.gpu != null) parts.push('GPU ' + p.gpu + '%');
+  if (p.vramUsed != null) parts.push('VRAM ' + GB(p.vramUsed) + (p.vramTotal ? ' / ' + GB(p.vramTotal) : '') + ' GB');
+  if (p.cpu != null) parts.push('CPU ' + p.cpu + '%');
+  if (p.ramUsed != null) parts.push('RAM ' + GB(p.ramUsed) + (p.ramTotal ? ' / ' + GB(p.ramTotal) : '') + ' GB');
+  const tip = 'Peak system load while this ran (whole computer, all apps): ' + parts.join(' · ') + (p.partial ? ' (last 5 minutes only)' : '');
+  const short = [p.gpu != null ? p.gpu + '%' : null, p.vramUsed != null ? GB(p.vramUsed) + ' GB' : null].filter(Boolean).join(' · ') || '—';
+  return '<td class="peak" title="' + tip + '">' + short + '</td>';
+}
+
 // Hover on a sparkline: show the value at that point in time.
 document.getElementById('tiles').addEventListener('mousemove', e => {
   const spark = e.target.closest('.spark'); if (!spark || !sysHist.length) return;
@@ -633,6 +686,7 @@ async function loadComfy() {
     $('cModel').textContent = '—';
     show('cProgBox', false); show('cRateBox', false); show('cTimeBox', false);
     $('cFoot').textContent = d.error || '';
+    setSysLoad('cLoad', false);
   } else if (cur) {
     $('cTitle').textContent = 'Current job' + (d.pending ? ' (+' + d.pending + ' queued)' : '');
     $('cModel').textContent = cur.summary.models.join(' + ') || 'unknown';
@@ -645,6 +699,7 @@ async function loadComfy() {
     $('cTimeLabel').textContent = 'Elapsed';
     $('cTime').textContent = fmtDur(cur.elapsedMs);
     const sm = cur.summary;
+    setSysLoad('cLoad', true);
     $('cFoot').textContent = [sm.width ? sm.width + '×' + sm.height + (sm.batch > 1 ? ' ×' + sm.batch : '') : null,
       sm.steps ? sm.steps + ' steps' : null, sm.sampler, sm.loras.length ? 'LoRA: ' + sm.loras.join(', ') : null].filter(Boolean).join(' · ') || ' ';
   } else {
@@ -655,6 +710,7 @@ async function loadComfy() {
     $('cTimeLabel').textContent = a ? 'Avg run time (last ' + a.runs + ' runs)' : 'Avg run time';
     $('cTime').textContent = a ? fmtDur(a.avgMs) : '—';
     $('cFoot').textContent = ' ';
+    setSysLoad('cLoad', false);
   }
 
   $('cErr').hidden = d.runs.length > 0;
@@ -672,6 +728,7 @@ async function loadComfy() {
       '<td>' + (s.steps != null ? s.steps : '—') + '</td>' +
       '<td>' + escH(s.sampler || '—') + '</td>' +
       '<td class="tps">' + fmtDur(r.durationMs) + '</td>' +
+      peakCell(r.peak) +
       '<td><span class="status ' + escH(r.status) + '" title="' + escH(r.error || '') + '">' + escH(r.status) + '</span></td>' +
       '<td><div class="thumbs">' + (thumbs || '<span class="more">—</span>') + '</div></td></tr>';
   }).join('');
@@ -734,6 +791,7 @@ async function loadOllama() {
     $('oModel').textContent = ONONE;
     show('oTpsBox', false); show('oTokBox', false); show('oTimeBox', false);
     $('oFoot').textContent = d.error || '';
+    setSysLoad('oLoad', false);
   } else if (cur) {
     $('oTitle').textContent = 'Current request' + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
     $('oModel').textContent = cur.model;
@@ -744,6 +802,7 @@ async function loadOllama() {
     $('oTok').textContent = fmtNum(cur.tokens) + (cur.thinkTokens ? ' (' + fmtNum(cur.thinkTokens) + ' thinking)' : '');
     $('oTime').textContent = fmtSec(cur.elapsedMs);
     $('oFoot').textContent = cur.endpoint + ' via AI_SCOPE proxy';
+    setSysLoad('oLoad', true);
   } else {
     const a = d.average;
     $('oTitle').textContent = 'Idle — no request running';
@@ -752,6 +811,7 @@ async function loadOllama() {
     $('oTpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
     $('oTps').textContent = a ? fmtTps(a.genTps) : ONONE;
     $('oFoot').textContent = 'Requests are recorded when apps talk to ' + proxyUrl + ' (forwards to Ollama).';
+    setSysLoad('oLoad', false);
   }
 
   // loaded models
@@ -803,7 +863,7 @@ async function loadOllama() {
       '<td>' + fmtNum(r.promptTokens) + '</td>' +
       '<td>' + (r.loadMs != null ? fmtSec(r.loadMs) : ONONE) + '</td>' +
       '<td>' + fmtSec(r.ttftMs) + '</td>' +
-      '<td>' + fmtSec(r.totalMs) + '</td></tr>';
+      '<td>' + fmtSec(r.totalMs) + '</td>' + peakCell(r.peak) + '</tr>';
   }), 'oPager').join('');
 
   // installed models
@@ -1300,7 +1360,7 @@ async function load() {
         '<td>' + fmtTps(r.promptTps) + '</td>' +
         '<td>' + fmtNum(r.promptTokens) + '</td>' +
         '<td>' + fmtSec(r.promptMs) + '</td>' +
-        '<td>' + fmtSec(r.totalMs) + '</td></tr>';
+        '<td>' + fmtSec(r.totalMs) + '</td>' + peakCell(r.peak) + '</tr>';
     });
     document.getElementById('rows').innerHTML = paginate('lmstudio', rows, 'lPager').join('');
     document.getElementById('meta').textContent =
@@ -1330,6 +1390,7 @@ function renderCurrent(cur, avg) {
     $('nowTime').textContent = fmtSec(cur.elapsedMs);
     $('nowTokBox').hidden = !(cur.phase === 'gen' && cur.genTokens);
     $('nowTok').textContent = fmtNum(cur.genTokens);
+    setSysLoad('nowLoad', true);
   } else {
     $('nowTitle').textContent = 'Idle — no request running';
     $('nowModel').textContent = avg ? avg.model : '—';
@@ -1337,6 +1398,7 @@ function renderCurrent(cur, avg) {
     $('nowTps').textContent = avg ? fmtTps(avg.genTps) : '—';
     $('nowTimeBox').hidden = true;
     $('nowTokBox').hidden = true;
+    setSysLoad('nowLoad', false);
   }
 }
 
@@ -1404,6 +1466,23 @@ setInterval(async () => {
 </html>`;
 
 // Which scope each data endpoint belongs to: endpoints of scopes that aren't installed answer 404.
+// Peak whole-PC load per LM Studio request. Its log rows are re-read on every poll, so peaks are cached
+// in memory by row. The log timestamp is written when the request finishes (1 s resolution).
+const lmPeaks = new Map();
+function lmPeak(r) {
+  const key = r.timestamp + '|' + r.task;
+  if (lmPeaks.has(key)) return lmPeaks.get(key);
+  const end = lmstats.tsToMs(r.timestamp);
+  if (end == null || r.totalMs == null) return null;
+  const oldest = sysstats.oldestSample();
+  if (Date.now() - end < 4000) return null;          // let the samples after the end come in first
+  const p = sysstats.peakBetween(end - r.totalMs - 1000, end + 2000);
+  if (p || oldest == null || end < oldest) {          // final: found, or too old to ever find
+    lmPeaks.set(key, p);
+    if (lmPeaks.size > 5000) lmPeaks.delete(lmPeaks.keys().next().value);
+  }
+  return p;
+}
 const SCOPE_ROUTES = [['/api/requests', 'lmstudio'], ['/api/lmstudio/', 'lmstudio'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama']];
 function sendJson(res, code, obj) {
   res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -1475,6 +1554,7 @@ http.createServer((req, res) => {
     let body;
     try {
       body = lmstats.getLatestRequests(limit);
+      body.rows.forEach(r => { r.peak = lmPeak(r); });
       body.current = lmstats.getCurrentRequest();
       body.average = lmstats.getAverage(body.rows);
     }

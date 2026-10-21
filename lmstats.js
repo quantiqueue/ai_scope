@@ -170,4 +170,4 @@ function getAverage(rows) {
   return ms ? { model: model, genTps: tokens / (ms / 1000), requests: n } : null;
 }
 
-module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage };
+module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage, tsToMs: tsToMs };

@@ -10,7 +10,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const vramFit = require('./sysstats').vramFit;  // VRAM fit vs the largest card
+const sysstats = require('./sysstats');
+const vramFit = sysstats.vramFit;  // VRAM fit vs the largest card
 const StringDecoder = require('string_decoder').StringDecoder;
 
 let OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -232,6 +233,7 @@ function finish(rec, aborted) {
   }
   r.genTps = r.genTokens && r.genMs ? r.genTokens / (r.genMs / 1000) : null;
   r.promptTps = r.promptTokens && r.promptMs ? r.promptTokens / (r.promptMs / 1000) : null;
+  r.peak = sysstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
   if (r.status === 'ok' || rec.tokens || r.error) saveRequest(r);
   if (r.model !== 'unknown' && !installed.some(function (m) { return m.name === r.model; })) tagsAt = 0;
 }
