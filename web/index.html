@@ -1,0 +1,215 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI_SCOPE</title>
+<link rel="icon" href="/favicon.ico">
+<script>try { var t = JSON.parse(localStorage.getItem('aiscope.theme')); if (t === 'dark' || t === 'magenta' || t === 'neo') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;800&display=swap">
+</head>
+<body>
+<nav class="topbar">
+  <a class="brand" href="#home">AI<span>_</span>SCOPE</a>
+  <div class="tabs" id="tabs"><!-- rendered from SCOPES in the script below --></div>
+  <div class="addwrap">
+    <a class="addbtn" id="addBtn" href="#scopes" title="Scopes">+</a>
+  </div>
+  <div class="themewrap">
+    <button class="themebtn" id="themeBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="Theme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r="1.2"/><circle cx="17.5" cy="10.5" r="1.2"/><circle cx="8.5" cy="7.5" r="1.2"/><circle cx="6.5" cy="12.5" r="1.2"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16c3.1 0 5.6-2.5 5.6-5.6C21.6 6 17.3 2 12 2z"/></svg>
+      <span id="themeName">Default</span>
+    </button>
+    <div class="thememenu" id="themeMenu" role="menu" hidden>
+      <button type="button" role="menuitemradio" data-theme-opt="default" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#f6f6f7 50%,#18181b 50%)"></span>Default<span class="ck">&#10003;</span></button>
+      <button type="button" role="menuitemradio" data-theme-opt="dark" aria-checked="false"><span class="sw" style="background:#18181b"></span>Dark<span class="ck">&#10003;</span></button>
+      <button type="button" role="menuitemradio" data-theme-opt="magenta" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#1f0d19 50%,#ff3fa4 50%)"></span>Magenta<span class="ck">&#10003;</span></button>
+      <button type="button" role="menuitemradio" data-theme-opt="neo" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#09130b 50%,#2bff88 50%)"></span>Neo<span class="ck">&#10003;</span></button>
+    </div>
+  </div>
+</nav>
+<div class="empty" id="noTabs" hidden>No scopes open. Click <b>+</b> to open one.</div>
+
+<section class="panel home" data-panel="home" hidden>
+  <canvas id="homeBg" aria-hidden="true"></canvas>
+  <div class="vignette"></div>
+  <div class="hero">
+    <h1 class="mark">AI<span>_</span>SCOPE</h1>
+    <p class="sub">Local AI monitor</p>
+    <a class="go" id="homeGo" href="#scopes">Open dashboard &rarr;</a>
+  </div>
+</section>
+
+<section class="panel" data-panel="scopes">
+  <div class="section-head">
+    <h1>Scopes</h1>
+    <span class="meta">Install a scope to add its tab &middot; click an installed scope to open it</span>
+    <button type="button" class="stopbtn" id="stopBtn" hidden title="Stops the AI_SCOPE server on this computer (Ollama relay and ComfyUI run history stop recording too)">Stop AI_SCOPE</button>
+  </div>
+  <div class="wrap"><div class="gallery" id="gallery"></div></div>
+</section>
+<dialog class="modal" id="scopeDlg"><form method="dialog" id="scopeForm" novalidate></form></dialog>
+
+<section class="panel" data-panel="comfyui">
+  <div class="section-head">
+    <h1>ComfyUI &mdash; Workflow Runs</h1>
+    <span class="meta" id="cMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap">
+    <div class="card now">
+      <div class="now-label"><span class="dot" id="cDot"></span><span id="cTitle">Current job</span></div>
+      <div class="now-grid">
+        <div><div class="k">Model</div><div class="v model" id="cModel">—</div></div>
+        <div id="cProgBox"><div class="k" id="cProgLabel">Progress</div><div class="v" id="cProg">—</div>
+          <div class="pbar"><div id="cBar"></div></div></div>
+        <div id="cRateBox"><div class="k">Speed</div><div class="v small" id="cRate">—</div></div>
+        <div id="cTimeBox"><div class="k" id="cTimeLabel">Elapsed</div><div class="v" id="cTime">—</div></div>
+      </div>
+      <div class="sysload" id="cLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
+      <div class="countdown" id="cFoot">&nbsp;</div>
+    </div>
+    <div class="blockhead">Runs</div>
+    <div class="card">
+      <table>
+        <thead><tr>
+          <th>Finished</th><th>Model</th><th>Size</th><th>Steps</th><th>Sampler</th>
+          <th>Run time</th><th>Peak load</th><th>Status</th><th>Images</th>
+        </tr></thead>
+        <tbody id="cRows"></tbody>
+      </table>
+      <div class="err" id="cErr" hidden></div>
+    </div>
+    <div class="pager" id="cPager" hidden></div>
+
+    <div class="blockhead">Installed models <span class="hint" id="cmHint"></span></div>
+    <div class="chips" id="cmChips"></div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Model</th><th>Publisher</th><th>Type</th><th>Size</th><th>VRAM fit</th><th>Runs</th><th>Last used</th><th>Avg run time</th><th>Added</th></tr></thead>
+        <tbody id="cmRows"></tbody>
+      </table>
+      <div class="hintbox" id="cmEmpty" hidden></div>
+    </div>
+    <div class="pager" id="cmPager" hidden></div>
+  </div>
+</section>
+
+<section class="panel" data-panel="ollama">
+  <div class="section-head">
+    <h1>Ollama &mdash; Models &amp; Requests</h1>
+    <span class="meta" id="oMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap">
+    <div class="card now">
+      <div class="now-label"><span class="dot" id="oDot"></span><span id="oTitle">Current request</span></div>
+      <div class="now-grid">
+        <div><div class="k">Model</div><div class="v model" id="oModel">—</div></div>
+        <div id="oTpsBox"><div class="k" id="oTpsLabel">Current gen tok/s</div><div class="v" id="oTps">—</div></div>
+        <div id="oTokBox"><div class="k">Tokens so far</div><div class="v small" id="oTok">—</div></div>
+        <div id="oTimeBox"><div class="k">Elapsed</div><div class="v" id="oTime">—</div></div>
+      </div>
+      <div class="sysload" id="oLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
+      <div class="countdown" id="oFoot">&nbsp;</div>
+    </div>
+
+    <div class="blockhead">Loaded in memory <span class="hint" id="oLoadedHint"></span></div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Model</th><th>Params</th><th>Size</th><th>Context</th><th>GPU</th><th>Auto-unload</th></tr></thead>
+        <tbody id="oLoaded"></tbody>
+      </table>
+      <div class="hintbox" id="oLoadedEmpty" hidden></div>
+    </div>
+
+    <div class="blockhead">Requests <span class="hint" id="oReqHint"></span>
+      <button class="helpbtn" id="oHelpBtn" type="button" title="Why only these requests? How to set it up" aria-expanded="false">?</button></div>
+    <div class="card helpcard" id="oHelp" hidden></div>
+    <div class="card">
+      <table>
+        <thead><tr>
+          <th>Timestamp</th><th>Model</th><th>Gen tok/s</th><th>Gen tokens</th><th>Prompt tok/s</th><th>Prompt tokens</th>
+          <th>Load time</th><th>Time to first token</th><th>Total time</th><th>Peak load</th>
+        </tr></thead>
+        <tbody id="oRows"></tbody>
+      </table>
+      <div class="hintbox" id="oRowsEmpty" hidden></div>
+    </div>
+    <div class="pager" id="oPager" hidden></div>
+
+    <div class="blockhead">Installed models <span class="hint" id="oInstHint"></span></div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Model</th><th>Publisher</th><th>Arch</th><th>Params</th><th>Quant</th><th>Size</th><th>Features</th><th>VRAM fit</th><th>Max context</th><th>Modified</th></tr></thead>
+        <tbody id="oInst"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="panel" data-panel="system">
+  <div class="section-head">
+    <h1>System</h1>
+    <span class="meta" id="sysMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap">
+    <div class="tiles" id="tiles"></div>
+  </div>
+</section>
+
+<section class="panel" data-panel="lmstudio">
+<div class="section-head">
+  <h1>LM Studio &mdash; Models &amp; Requests</h1>
+  <span class="meta" id="meta">Loading&hellip;</span>
+</div>
+<div class="wrap">
+  <div class="card now">
+    <div class="now-label"><span class="dot" id="nowDot"></span><span id="nowTitle">Current request</span></div>
+    <div class="now-grid">
+      <div><div class="k">Model</div><div class="v model" id="nowModel">—</div></div>
+      <div><div class="k" id="nowTpsLabel">Current gen tok/s</div><div class="v" id="nowTps">—</div></div>
+      <div id="nowTokBox"><div class="k">Tokens so far</div><div class="v small" id="nowTok">—</div></div>
+      <div id="nowTimeBox"><div class="k">Elapsed</div><div class="v" id="nowTime">—</div></div>
+    </div>
+    <div class="sysload" id="nowLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
+    <div class="countdown" id="countdown">&nbsp;</div>
+  </div>
+
+  <div class="blockhead">Loaded in memory <span class="hint" id="lLoadedHint"></span></div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Model</th><th>Params</th><th>Size</th><th>Context</th><th>Flash attention</th><th>KV cache</th><th>Parallel</th><th>Auto-unload</th></tr></thead>
+      <tbody id="lLoaded"></tbody>
+    </table>
+    <div class="hintbox" id="lLoadedEmpty" hidden></div>
+  </div>
+
+  <div class="blockhead">Requests <span class="hint">— from LM Studio&#39;s server logs</span></div>
+  <div class="card">
+    <table>
+      <thead><tr>
+        <th>Timestamp</th><th>Model</th>
+        <th>Gen tok/s</th><th>Gen tokens</th>
+        <th>Prompt tok/s</th><th>Prompt tokens</th>
+        <th>Time to first token</th><th>Total time</th><th>Peak load</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="err" id="err" hidden></div>
+  </div>
+  <div class="pager" id="lPager" hidden></div>
+
+  <div class="blockhead">Installed models <span class="hint" id="lInstHint"></span></div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Model</th><th>Publisher</th><th>Arch</th><th>Params</th><th>Quant</th><th>Size</th><th>Features</th><th>VRAM fit</th><th>Max context</th><th>Modified</th></tr></thead>
+      <tbody id="lInst"></tbody>
+    </table>
+    <div class="hintbox" id="lInstEmpty" hidden></div>
+  </div>
+</div>
+</section>
+<script>window.AI_SCOPE_SCOPES = /*__SCOPES__*/[];</script>
+<script src="/app.js"></script>
+</body>
+</html>

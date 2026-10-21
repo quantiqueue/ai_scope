@@ -30,7 +30,7 @@ jobs:
             exit 1
           fi
       - name: Syntax check
-        run: for f in *.js bin/*.js; do node --check "$f"; done
+        run: for f in *.js bin/*.js web/*.js; do node --check "$f"; done
       - name: Point the installers at this repository (matters for forks or a renamed repo)
         run: sed -i "s#quantiqueue/ai_scope#${GITHUB_REPOSITORY}#g" install/install.ps1 install/install.sh
       - name: Build ai-scope.zip and ai-scope.tar.gz

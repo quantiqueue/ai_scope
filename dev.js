@@ -1,5 +1,6 @@
 // Tiny auto-restart runner (works on any Node version, no dependencies).
-// - Restarts server.js whenever a .js/.html/.css/.json file in this folder changes.
+// - Restarts server.js whenever a .js/.html/.css/.json file in this folder or web/ changes
+//   (the restart also makes open dashboards reload themselves).
 // - If server.js crashes, it is restarted automatically after 2 seconds.
 'use strict';
 const { spawn } = require('child_process');
@@ -34,8 +35,14 @@ function restart(file) {
   }, 300); // debounce: editors often fire several events per save
 }
 
-fs.watch(__dirname, function (event, file) {
-  if (file && /\.(js|html|css|json)$/.test(file) && file !== 'dev.js') restart(file);
-});
+function watch(dir, prefix) {
+  try {
+    fs.watch(dir, function (event, file) {
+      if (file && /\.(js|html|css|json)$/.test(file) && file !== 'dev.js') restart(prefix + file);
+    });
+  } catch (e) { console.log('[dev] cannot watch ' + dir + ': ' + e.message); }
+}
+watch(__dirname, '');
+watch(path.join(__dirname, 'web'), 'web/');
 
 start();
