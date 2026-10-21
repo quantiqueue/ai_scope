@@ -30,6 +30,7 @@
   },
   "files": [
     "bin/",
+    "assets/",
     "server.js",
     "scopes.js",
     "scopes.json",

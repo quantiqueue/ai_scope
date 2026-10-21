@@ -19,6 +19,7 @@ function start() {
     if (child !== me) return; // an old process we replaced on purpose
     child = null;
     if (restarting) { restarting = false; start(); return; }
+    if (code === 0) { console.log('[dev] server stopped (ai-scope --stop / Stop button) - exiting'); process.exit(0); }
     console.log('[dev] server exited (code ' + code + ') - restarting in 2s...');
     crashTimer = setTimeout(start, 2000);
   });

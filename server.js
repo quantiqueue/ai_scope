@@ -24,6 +24,7 @@ const html = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI_SCOPE</title>
+<link rel="icon" href="/favicon.ico">
 <script>try { var t = JSON.parse(localStorage.getItem('aiscope.theme')); if (t === 'dark' || t === 'magenta') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <style>
   :root { --bg:#f6f6f7; --card:#fff; --text:#18181b; --muted:#71717a; --line:#e4e4e7; --accent:#2563eb; --good:#16a34a; --mid:#ca8a04; --bad:#dc2626; }
@@ -156,6 +157,13 @@ const html = `<!doctype html>
   .modal .btn.danger { background:var(--bad); border-color:var(--bad); color:#fff; }
   .modal .btn:disabled { opacity:.6; cursor:default; }
   .modal .formerr { font-size:.8rem; color:var(--bad); margin-top:10px; }
+  .stopbtn { margin-left:auto; align-self:center; font:inherit; font-size:.8rem; font-weight:600; color:var(--muted); background:var(--card);
+             border:1px solid var(--line); border-radius:6px; padding:5px 12px; cursor:pointer; }
+  .stopbtn:hover, .stopbtn:focus-visible { color:var(--bad); border-color:var(--bad); }
+  .stopped { position:fixed; inset:0; z-index:100; display:grid; place-items:center; background:var(--bg); color:var(--text); text-align:center; padding:24px; }
+  .stopped h2 { margin:0 0 8px; font-size:1.3rem; }
+  .stopped p { margin:0; color:var(--muted); line-height:1.6; }
+  .stopped code { font-family: ui-monospace, Consolas, monospace; font-size:.85rem; }
   .empty { padding:60px 24px; text-align:center; color:var(--muted); }
   .section-head { padding:20px 24px 8px; display:flex; flex-wrap:wrap; align-items:baseline; gap:12px; }
   h1 { font-size:1.3rem; margin:0; }
@@ -300,6 +308,7 @@ const html = `<!doctype html>
   <div class="section-head">
     <h1>Scopes</h1>
     <span class="meta">Install a scope to add its tab &middot; click an installed scope to open it</span>
+    <button type="button" class="stopbtn" id="stopBtn" hidden title="Stops the AI_SCOPE server on this computer (Ollama relay and ComfyUI run history stop recording too)">Stop AI_SCOPE</button>
   </div>
   <div class="wrap"><div class="gallery" id="gallery"></div></div>
 </section>
@@ -624,6 +633,21 @@ function peakCell(p) {
   const short = [p.gpu != null ? p.gpu + '%' : null, p.vramUsed != null ? GB(p.vramUsed) + ' GB' : null].filter(Boolean).join(' · ') || '—';
   return '<td class="peak" title="' + tip + '">' + short + '</td>';
 }
+
+// ---- Stop AI_SCOPE (Scopes page). Only shown when the page is opened on this computer. ----
+fetch('/api/ping', { cache:'no-store' }).then(r => r.json()).then(p => { document.getElementById('stopBtn').hidden = !p.local; }).catch(() => {});
+document.getElementById('stopBtn').addEventListener('click', async () => {
+  if (!confirm('Stop AI_SCOPE?\\n\\nThe dashboard closes, and the Ollama relay and ComfyUI run history stop recording until you start it again.')) return;
+  try {
+    const r = await fetch('/api/stop', { method:'POST', headers:{ 'X-AI-Scope':'stop' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (e) { alert('Could not stop AI_SCOPE: ' + e.message); return; }
+  window.aiScopeStopped = true;
+  const d = document.createElement('div');
+  d.className = 'stopped';
+  d.innerHTML = '<div><h2>AI_SCOPE has stopped</h2><p>You can close this window.<br>Start it again from the Start Menu, or with <code>ai-scope --app</code>.</p></div>';
+  document.body.appendChild(d);
+});
 
 // Hover on a sparkline: show the value at that point in time.
 document.getElementById('tiles').addEventListener('mousemove', e => {
@@ -1488,6 +1512,18 @@ function lmPeak(r) {
   return p;
 }
 const SCOPE_ROUTES = [['/api/requests', 'lmstudio'], ['/api/lmstudio/', 'lmstudio'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama']];
+const PKG_VERSION = require('./package.json').version;
+function isLocal(req) {
+  const a = (req.socket && req.socket.remoteAddress) || '';
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+}
+let iconBuf = null;
+function sendIcon(res) {
+  if (!iconBuf) { try { iconBuf = require('fs').readFileSync(require('path').join(__dirname, 'assets', 'ai-scope.ico')); } catch (e) { iconBuf = Buffer.alloc(0); } }
+  if (!iconBuf.length) { res.writeHead(404); return res.end(); }
+  res.writeHead(200, { 'Content-Type': 'image/x-icon', 'Cache-Control': 'max-age=86400' });
+  res.end(iconBuf);
+}
 function sendJson(res, code, obj) {
   res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(obj));
@@ -1510,6 +1546,17 @@ http.createServer((req, res) => {
     return res.end(BOOT_ID);
   }
   if (url.pathname === '/home') { res.writeHead(302, { Location: '/#home' }); return res.end(); }
+  if (url.pathname === '/favicon.ico') return sendIcon(res);
+  // "Is AI_SCOPE running here?" for `ai-scope --app` / `--stop`; `local` = request from this PC (shows the Stop button).
+  if (url.pathname === '/api/ping') return sendJson(res, 200, { app: 'ai-scope', version: PKG_VERSION, pid: process.pid, port: PORT, local: isLocal(req) });
+  // Stop AI_SCOPE (ai-scope --stop, or the Stop button). Only from this PC, and only with the custom header,
+  // so other web pages can't trigger it (a cross-site request with that header needs CORS, which we never allow).
+  if (url.pathname === '/api/stop' && req.method === 'POST') {
+    if (!isLocal(req) || req.headers['x-ai-scope'] !== 'stop') return sendJson(res, 403, { ok: false, error: 'Only allowed from this computer' });
+    console.log('[server] stop requested - exiting');
+    sendJson(res, 200, { ok: true });
+    return setTimeout(() => process.exit(0), 150);
+  }
   if (url.pathname === '/api/scopes' && req.method === 'GET') return sendJson(res, 200, scopes.list());
   if ((url.pathname === '/api/scopes/install' || url.pathname === '/api/scopes/remove') && req.method === 'POST') {
     return readJson(req, body => {
