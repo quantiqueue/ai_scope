@@ -1117,7 +1117,11 @@ function renderTabs() {
 }
 
 function showTab() {
-  const want = location.hash.slice(1);
+  let want = location.hash.slice(1);
+  if (!want) {   // plain http://localhost:<port>/ (no hash) lands on Home, like the launchers
+    want = 'home';
+    history.replaceState(null, '', '#home');
+  }
   const gallery = want === 'scopes';
   const home = want === 'home';
   const name = gallery ? 'scopes' : home ? 'home'
@@ -1584,5 +1588,6 @@ http.createServer((req, res) => {
     console.log('  (this PC only - use --host 0.0.0.0 to open it from other devices)');
   }
   console.log(`  Data:    ${require('./paths').DATA_DIR}`);
-  if (process.env.AI_SCOPE_OPEN === '1') require('./bin/open')(`http://localhost:${PORT}`);
+  // --open (and so the Start Menu shortcut and the installer's first start) lands on the Home page.
+  if (process.env.AI_SCOPE_OPEN === '1') require('./bin/open')(`http://localhost:${PORT}/#home`);
 });
