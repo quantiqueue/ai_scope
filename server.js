@@ -25,7 +25,7 @@ const html = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI_SCOPE</title>
 <link rel="icon" href="/favicon.ico">
-<script>try { var t = JSON.parse(localStorage.getItem('aiscope.theme')); if (t === 'dark' || t === 'magenta') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<script>try { var t = JSON.parse(localStorage.getItem('aiscope.theme')); if (t === 'dark' || t === 'magenta' || t === 'neo') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <style>
   :root { --bg:#f6f6f7; --card:#fff; --text:#18181b; --muted:#71717a; --line:#e4e4e7; --accent:#2563eb; --good:#16a34a; --mid:#ca8a04; --bad:#dc2626; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme]) { --bg:#0f0f11; --card:#18181b; --text:#f4f4f5; --muted:#a1a1aa; --line:#27272a; --accent:#60a5fa; color-scheme:dark; } }
@@ -33,6 +33,8 @@ const html = `<!doctype html>
   :root[data-theme="dark"] { --bg:#0f0f11; --card:#18181b; --text:#f4f4f5; --muted:#a1a1aa; --line:#27272a; --accent:#60a5fa; color-scheme:dark; }
   :root[data-theme="magenta"] { --bg:#13080f; --card:#1f0d19; --text:#fdeaf5; --muted:#c79ab7; --line:#3d1d33; --accent:#ff3fa4;
     --good:#34d399; --mid:#fbbf24; --bad:#f43f5e; color-scheme:dark; }
+  :root[data-theme="neo"] { --bg:#040905; --card:#09130b; --text:#d4f7dc; --muted:#79a985; --line:#15321c; --accent:#2bff88;
+    --good:#7dffb0; --mid:#f5d742; --bad:#ff5a5a; color-scheme:dark; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
   .topbar { position:sticky; top:0; z-index:10; display:flex; align-items:stretch; gap:28px; padding:0 24px;
@@ -99,6 +101,15 @@ const html = `<!doctype html>
   [data-theme="magenta"] .home .sub { color:#c79ab7; }
   [data-theme="magenta"] .home .go { color:#fdeaf5; border-color:rgba(199,154,183,.28); background:rgba(10,2,8,.45); }
   [data-theme="magenta"] .home .go:hover, [data-theme="magenta"] .home .go:focus-visible { border-color:#ff4fb0; background:rgba(90,10,60,.5); }
+  /* Neo theme: green on black */
+  [data-theme="neo"] .home { background:#010502; color:#d4f7dc; }
+  [data-theme="neo"] .home .vignette { background: radial-gradient(ellipse at 50% 50%, rgba(1,5,2,0) 35%, rgba(1,5,2,.6) 100%); }
+  [data-theme="neo"] .home .mark { color:#d4f7dc; text-shadow:0 0 40px rgba(43,255,136,.35), 0 2px 18px rgba(0,0,0,.6); }
+  [data-theme="neo"] .home .mark span { color:#2bff88; }
+  [data-theme="neo"] .home .sub { color:#79a985; }
+  [data-theme="neo"] .home .go { color:#d4f7dc; border-color:rgba(121,169,133,.3); background:rgba(1,5,2,.5); }
+  [data-theme="neo"] .home .go:hover, [data-theme="neo"] .home .go:focus-visible { border-color:#2bff88; background:rgba(8,60,26,.55); }
+  [data-theme="neo"] .brand, [data-theme="neo"] h1 { text-shadow:0 0 12px rgba(43,255,136,.18); }
   .gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows:1fr; gap:16px; } /* every card the same size */
   .square { min-height:200px; /* height comes from the grid row (tallest card), so all match */ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px;
             display:flex; flex-direction:column; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; min-width:0; }
@@ -289,6 +300,7 @@ const html = `<!doctype html>
       <button type="button" role="menuitemradio" data-theme-opt="default" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#f6f6f7 50%,#18181b 50%)"></span>Default<span class="ck">&#10003;</span></button>
       <button type="button" role="menuitemradio" data-theme-opt="dark" aria-checked="false"><span class="sw" style="background:#18181b"></span>Dark<span class="ck">&#10003;</span></button>
       <button type="button" role="menuitemradio" data-theme-opt="magenta" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#1f0d19 50%,#ff3fa4 50%)"></span>Magenta<span class="ck">&#10003;</span></button>
+      <button type="button" role="menuitemradio" data-theme-opt="neo" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#09130b 50%,#2bff88 50%)"></span>Neo<span class="ck">&#10003;</span></button>
     </div>
   </div>
 </nav>
@@ -1022,6 +1034,7 @@ const homeAnim = (function () {
   const STOPS_BY_THEME = {
     blue: [[2,4,10],[4,12,32],[8,34,84],[18,88,180],[60,160,255]],
     magenta: [[10,2,8],[30,4,24],[84,8,62],[184,24,128],[255,84,190]],
+    neo: [[1,5,2],[3,16,7],[6,48,20],[14,128,58],[60,255,140]],
   };
   let STOPS = STOPS_BY_THEME.blue;
   let W = 0, H = 0, pts = [], tris = [], running = false;
@@ -1105,14 +1118,14 @@ const homeAnim = (function () {
 })();
 
 // Theme picker (top-right). Saved per browser; 'default' follows the OS light/dark setting.
-const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta' };
+const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo' };
 function applyTheme(t) {
   if (!THEMES[t]) t = 'default';
   if (t === 'default') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
   store.set('aiscope.theme', t);
   document.getElementById('themeName').textContent = THEMES[t];
   document.querySelectorAll('[data-theme-opt]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.themeOpt === t)));
-  homeAnim.setPalette(t === 'magenta' ? 'magenta' : 'blue');
+  homeAnim.setPalette(t === 'magenta' || t === 'neo' ? t : 'blue');
 }
 (function () {
   const btn = document.getElementById('themeBtn'), menu = document.getElementById('themeMenu');
