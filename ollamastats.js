@@ -10,6 +10,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const vramFit = require('./sysstats').vramFit;  // VRAM fit vs the largest card
 const StringDecoder = require('string_decoder').StringDecoder;
 
 let OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -303,17 +304,17 @@ function average() {
   rs.forEach(function (r) { tok += r.genTokens; ms += r.genMs; });
   return { model: model, requests: rs.length, genTps: ms ? tok / (ms / 1000) : null };
 }
-function getState(limit, vramTotal) {
+// vram: sysstats.vramInfo() (card sizes); Ollama can split a model across cards.
+function getState(limit, vram) {
   return {
-    online: online, url: OLLAMA_URL, version: version, error: lastError, proxy: proxy, vramTotal: vramTotal || null,
+    online: online, url: OLLAMA_URL, version: version, error: lastError, proxy: proxy, vramTotal: vram ? vram.largest : null, vramCards: vram ? vram.cards.length : 0,
     loaded: loaded.map(function (l) {
       const inst = installed.filter(function (m) { return m.name === l.name; })[0];
       return Object.assign({ maxContext: inst ? sourceOf(inst).maxContext : null }, l);
     }),
     installed: installed.map(function (m) {
-      let fit = null;
-      if (vramTotal && m.size) fit = m.size <= vramTotal * 0.8 ? 'fits' : m.size <= vramTotal ? 'tight' : 'spills';
-      return Object.assign({ fit: fit, loaded: loaded.some(function (l) { return l.name === m.name; }) }, m, sourceOf(m));
+      const f = vramFit(m.size, vram, true);
+      return Object.assign({ fit: f ? f.fit : null, fitGpus: f ? f.gpus || null : null, loaded: loaded.some(function (l) { return l.name === m.name; }) }, m, sourceOf(m));
     }).sort(function (a, b) { return (b.loaded - a.loaded) || ((b.size || 0) - (a.size || 0)); }),
     current: currentRequest(), average: average(),
     totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),

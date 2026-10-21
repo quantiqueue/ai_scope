@@ -184,7 +184,9 @@ const html = `<!doctype html>
   .now-grid .k { font-size:.78rem; color:var(--muted); }
   .now-grid .v { font-size:1.6rem; font-weight:650; font-variant-numeric:tabular-nums; }
   .now-grid .v.model { font-size:1.05rem; font-family: ui-monospace, Consolas, monospace; font-weight:600; }
-  .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:16px; }
+  .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 496px), 1fr)); gap:16px; }
+  .tgroup { display:grid; grid-template-columns: 1fr 1fr; gap:16px; min-width:0; } /* CPU+RAM, then GPU n + VRAM n side by side */
+  @media (max-width: 560px) { .tgroup { grid-template-columns: 1fr; } }
   .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px 12px; min-width:0; }
   .tile .k { font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; }
   .tile .v { font-size:2rem; font-weight:650; font-variant-numeric:tabular-nums; margin-top:4px; }
@@ -223,6 +225,7 @@ const html = `<!doctype html>
   .fit.fits { color:var(--good); background:rgba(22,163,74,.12); }
   .fit.tight { color:var(--mid); background:rgba(202,138,4,.14); }
   .fit.spills { color:var(--bad); background:rgba(220,38,38,.12); }
+  .fit.multi { color:var(--accent); background:color-mix(in srgb, var(--accent) 14%, transparent); }
   .hintbox { color:var(--muted); padding:16px; font-size:.88rem; line-height:1.6; white-space:normal; }
   .hintbox code { font-family: ui-monospace, Consolas, monospace; font-size:.82rem; background:var(--bg); border:1px solid var(--line); padding:1px 6px; border-radius:4px; color:var(--text); }
   .helpbtn { width:18px; height:18px; border-radius:50%; border:1px solid var(--line); background:var(--card); color:var(--muted);
@@ -483,14 +486,11 @@ document.addEventListener('click', e => {
 });
 
 // ---------- System tab ----------
-const TILES = [
-  { id:'cpu',  label:'CPU' },
-  { id:'ram',  label:'RAM' },
-  { id:'gpu',  label:'GPU' },
-  { id:'vram', label:'VRAM' },
-];
+// One CPU and one RAM tile, then a GPU and a VRAM tile per graphics card (built once the card list is known).
 const GB = b => (b / 1073741824).toFixed(1);
-document.getElementById('tiles').innerHTML = TILES.map(t => \`
+let tileKey = null;
+function tileHtml(t) {
+  return \`
   <div class="tile" id="t-\${t.id}">
     <div class="k">\${t.label}</div>
     <div class="v">—</div>
@@ -500,22 +500,37 @@ document.getElementById('tiles').innerHTML = TILES.map(t => \`
       <path class="area"></path><path class="line"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
       <div class="tip" hidden></div></div>
     <div class="spark-axis"><span>5 min ago</span><span>now</span></div>
-  </div>\`).join('');
+  </div>\`;
+}
+function buildTiles(gpus) {
+  const n = Math.max(1, gpus.length);
+  const key = String(gpus.length) + '|' + gpus.map(g => g.id).join(',');
+  if (key === tileKey) return;
+  tileKey = key;
+  const groups = [[{ id:'cpu', label:'CPU' }, { id:'ram', label:'RAM' }]];
+  for (let i = 0; i < n; i++) {
+    const num = gpus.length > 1 ? ' ' + (i + 1) : '';
+    groups.push([{ id:'gpu' + i, label:'GPU' + num }, { id:'vram' + i, label:'VRAM' + num }]);
+  }
+  document.getElementById('tiles').innerHTML = groups.map(g => '<div class="tgroup">' + g.map(tileHtml).join('') + '</div>').join('');
+}
+buildTiles([]);
 
 let sysHist = [];
 function tileValues(s) {
   const pct = (u, t) => (u != null && t) ? 100 * u / t : null;
-  return {
-    cpu:  s.cpu,
-    ram:  pct(s.ramUsed, s.ramTotal),
-    gpu:  s.gpu,
-    vram: pct(s.vramUsed, s.vramTotal) != null ? pct(s.vramUsed, s.vramTotal) : null,
-  };
+  const v = { cpu: s.cpu, ram: pct(s.ramUsed, s.ramTotal) };
+  // Older samples (or no per-card data): fall back to the whole-PC numbers for the first card.
+  const cards = s.gpus && s.gpus.length ? s.gpus : [{ util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal }];
+  cards.forEach((g, i) => { v['gpu' + i] = g.util; v['vram' + i] = pct(g.vramUsed, g.vramTotal); });
+  return v;
 }
 function setTile(id, value, big, sub, series) {
   const el = document.getElementById('t-' + id);
+  if (!el) return;
   el.querySelector('.v').innerHTML = big;
   el.querySelector('.sub').textContent = sub;
+  el.querySelector('.sub').title = sub;
   el.querySelector('.meter > div').style.width = (value == null ? 0 : Math.max(0, Math.min(100, value))) + '%';
   const pts = series.map((v, i) => v == null ? null : [series.length < 2 ? 100 : 100 * i / (series.length - 1), 100 - Math.max(0, Math.min(100, v))]);
   const valid = pts.filter(Boolean);
@@ -530,6 +545,8 @@ async function loadSystem() {
     sysHist = data.history;
     const s = sysHist[sysHist.length - 1];
     const info = data.info;
+    const gpus = info.gpus || [];
+    buildTiles(gpus);
     document.getElementById('sysMeta').textContent = s ? 'updated ' + new Date(s.t).toLocaleTimeString() + ' · every 2 s' : 'warming up…';
     if (!s) return;
     const series = id => sysHist.map(h => tileValues(h)[id]);
@@ -537,14 +554,19 @@ async function loadSystem() {
     const na = '<span class="na">n/a</span>';
     setTile('cpu', v.cpu, v.cpu.toFixed(0) + '<small>%</small>', info.cpuModel + ' · ' + info.cores + ' threads', series('cpu'));
     setTile('ram', v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', series('ram'));
-    const gpuSub = info.gpuName || (info.gpuSource === 'none' ? 'No GPU stats available' : 'detecting…');
-    setTile('gpu', v.gpu, v.gpu != null ? v.gpu.toFixed(0) + '<small>%</small>' : na, gpuSub, series('gpu'));
-    let vramBig = na, vramSub = gpuSub;
-    if (s.vramUsed != null) {
-      vramBig = GB(s.vramUsed) + (s.vramTotal ? '<small> / ' + GB(s.vramTotal) + ' GB</small>' : '<small> GB</small>');
-      vramSub = v.vram != null ? v.vram.toFixed(0) + '% used' : 'total unknown';
+    const n = Math.max(1, gpus.length);
+    for (let i = 0; i < n; i++) {
+      const g = (s.gpus && s.gpus[i]) || (i === 0 ? { util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal } : {});
+      const name = gpus[i] ? gpus[i].name : (info.gpuSource === 'none' ? 'No GPU stats available' : 'detecting…');
+      const util = v['gpu' + i], vram = v['vram' + i];
+      setTile('gpu' + i, util, util != null ? util.toFixed(0) + '<small>%</small>' : na, name, series('gpu' + i));
+      let vramBig = na, vramSub = name;
+      if (g.vramUsed != null) {
+        vramBig = GB(g.vramUsed) + (g.vramTotal ? '<small> / ' + GB(g.vramTotal) + ' GB</small>' : '<small> GB</small>');
+        vramSub = (vram != null ? vram.toFixed(0) + '% used' : 'total unknown') + (gpus.length > 1 ? ' · ' + name : '');
+      }
+      setTile('vram' + i, vram, vramBig, vramSub, series('vram' + i));
     }
-    setTile('vram', v.vram, vramBig, vramSub, series('vram'));
   } catch (e) {
     document.getElementById('sysMeta').textContent = 'Could not reach server: ' + e.message;
   }
@@ -663,6 +685,15 @@ function fmtBytes(b) {
   if (b == null) return '—';
   return b >= 1073741824 ? (b / 1073741824).toFixed(1) + ' GB' : Math.round(b / 1048576) + ' MB';
 }
+// VRAM fit (installed-model tables): measured against the largest single card.
+function vramWord(d) {
+  return fmtBytes(d.vramTotal) + ' VRAM' + (d.vramCards > 1 ? ' (largest of ' + d.vramCards + ' GPUs)' : '');
+}
+function fitPill(m, fitText) {
+  if (!m.fit) return ONONE;
+  if (m.fit === 'multi') return '<span class="fit multi" title="Too big for one card, but fits when split across ' + m.fitGpus + ' GPUs">fits across ' + m.fitGpus + ' GPUs</span>';
+  return '<span class="fit ' + m.fit + '">' + fitText[m.fit] + '</span>';
+}
 function fmtUntil(ms) {
   if (!ms) return '—';
   const left = ms - Date.now();
@@ -778,7 +809,7 @@ async function loadOllama() {
   // installed models
   const vt = d.vramTotal;
   $('oInstHint').textContent = d.installed.length ? '— ' + d.installed.length + ' models · ' + fmtBytes(d.installed.reduce((a, m) => a + (m.size || 0), 0)) + ' on disk' +
-    (vt ? ' · fit is weights vs ' + fmtBytes(vt) + ' VRAM (context adds more)' : '') : '';
+    (vt ? ' · fit is weights vs ' + vramWord(d) + ' (context adds more)' : '') : '';
   const fitText = { fits:'fits', tight:'tight', spills:'partly CPU' };
   $('oInst').innerHTML = d.installed.map(m =>
     '<tr><td class="model">' + extLink(m.name, m.libraryUrl || m.modelUrl, m.libraryUrl ? 'Ollama library page' : 'Hugging Face repo') +
@@ -788,7 +819,7 @@ async function loadOllama() {
     '<td>' + escH(m.family || ONONE) + '</td><td>' + escH(m.params || ONONE) + '</td><td>' + escH(m.quant || ONONE) + '</td>' +
     '<td>' + fmtBytes(m.size) + '</td>' +
     '<td>' + featTags(m.features) + '</td>' +
-    '<td>' + (m.fit ? '<span class="fit ' + m.fit + '">' + fitText[m.fit] + '</span>' : ONONE) + '</td>' +
+    '<td>' + fitPill(m, fitText) + '</td>' +
     '<td>' + (m.maxContext ? fmtNum(m.maxContext) : ONONE) + '</td>' +
     '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>').join('');
   oFirst = false;
@@ -825,7 +856,7 @@ function renderComfyModels() {
   const list = all.filter(m => cmFilter === 'all' || m.folder === cmFilter);
   const total = list.reduce((a, m) => a + (m.size || 0), 0);
   $('cmHint').textContent = all.length ? '— ' + list.length + ' files · ' + fmtBytes(total) + ' on disk' +
-    (d.vramTotal ? ' · fit is file size vs ' + fmtBytes(d.vramTotal) + ' VRAM (ComfyUI can offload, so bigger models still run, slower)' : '') : '';
+    (d.vramTotal ? ' · fit is file size vs ' + vramWord(d) + ' (ComfyUI can offload, so bigger models still run, slower)' : '') : '';
   $('cmEmpty').hidden = all.length > 0;
   $('cmEmpty').textContent = d.online ? 'Loading model list…' : 'ComfyUI is offline.';
   const fitText = { fits:'fits', tight:'tight', spills:'offloads' };
@@ -834,7 +865,7 @@ function renderComfyModels() {
     '<td>' + escH(m.publisher || ONONE) + '</td>' +
     '<td>' + escH(cmType(m.folder)) + '</td>' +
     '<td>' + fmtBytes(m.size) + '</td>' +
-    '<td>' + (m.fit ? '<span class="fit ' + m.fit + '">' + fitText[m.fit] + '</span>' : ONONE) + '</td>' +
+    '<td>' + fitPill(m, fitText) + '</td>' +
     '<td>' + (m.runs ? fmtNum(m.runs) : ONONE) + '</td>' +
     '<td>' + (m.lastUsed ? escH(fmtWhen(m.lastUsed)) : ONONE) + '</td>' +
     '<td>' + (m.avgMs ? fmtDur(m.avgMs) : ONONE) + '</td>' +
@@ -1333,7 +1364,7 @@ async function loadLmModels() {
     : 'LM Studio server is not reachable' + (d.error ? ' (' + d.error + ')' : '') + '. Start the server in LM Studio (Developer tab) to see models.';
   const vt = d.vramTotal;
   const big = vt ? d.loaded.filter(m => m.size && m.size > vt) : [];
-  $('lLoadedHint').textContent = big.length ? '— larger than ' + fmtBytes(vt) + ' VRAM, so part of it runs from system RAM' : (d.loaded.length ? '— LM Studio does not report GPU offload; compare VRAM on the SYSTEM tab' : '');
+  $('lLoadedHint').textContent = big.length ? (d.vramCards > 1 ? '— larger than one card (' + fmtBytes(vt) + ' VRAM), so it is split across GPUs or partly in system RAM' : '— larger than ' + fmtBytes(vt) + ' VRAM, so part of it runs from system RAM') : (d.loaded.length ? '— LM Studio does not report GPU offload; compare VRAM on the SYSTEM tab' : '');
 
   const fitText = { fits:'fits', tight:'tight', spills:'partly CPU' };
   $('lInst').innerHTML = d.installed.map(m => {
@@ -1343,14 +1374,14 @@ async function loadLmModels() {
       '<td>' + (m.publisher ? extLink(m.publisher, m.publisherUrl, 'Publisher on Hugging Face') : ONONE) + '</td><td>' + escH(m.arch || ONONE) + '</td><td>' + escH(m.params || ONONE) + '</td>' +
       '<td>' + escH(m.quant || ONONE) + '</td><td>' + fmtBytes(m.size) + '</td>' +
       '<td>' + featTags(feats) + '</td>' +
-      '<td>' + (m.fit ? '<span class="fit ' + m.fit + '">' + fitText[m.fit] + '</span>' : ONONE) + '</td>' +
+      '<td>' + fitPill(m, fitText) + '</td>' +
       '<td>' + (m.maxContext ? fmtNum(m.maxContext) : ONONE) + '</td>' +
       '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>';
   }).join('');
   $('lInstEmpty').hidden = d.installed.length > 0;
   $('lInstEmpty').textContent = d.online ? 'No models found.' : 'LM Studio server is not reachable.';
   $('lInstHint').textContent = d.installed.length ? '— ' + d.installed.length + ' models · ' + fmtBytes(d.installed.reduce((a, m) => a + (m.size || 0), 0)) + ' on disk' +
-    (vt ? ' · fit is weights vs ' + fmtBytes(vt) + ' VRAM (context adds more)' : '') : '';
+    (vt ? ' · fit is weights vs ' + vramWord(d) + ' (context adds more)' : '') : '';
 }
 loadLmModels();
 setInterval(loadLmModels, 2000);
@@ -1413,26 +1444,20 @@ http.createServer((req, res) => {
     return res.end(JSON.stringify(comfystats.getState(limit)));
   }
   if (url.pathname === '/api/comfy/models') {
-    const hist = sysstats.getStats().history || [];
-    const last = hist[hist.length - 1];
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(comfystats.getModels(last ? last.vramTotal : null)));
+    return res.end(JSON.stringify(comfystats.getModels(sysstats.vramInfo())));
   }
   if (url.pathname === '/api/comfy/view') {
     return comfystats.proxyImage(url.searchParams, res);
   }
   if (url.pathname === '/api/ollama') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
-    const hist = sysstats.getStats().history || [];
-    const last = hist[hist.length - 1];
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(ollamastats.getState(limit, last ? last.vramTotal : null)));
+    return res.end(JSON.stringify(ollamastats.getState(limit, sysstats.vramInfo())));
   }
   if (url.pathname === '/api/lmstudio/models') {
-    const hist = sysstats.getStats().history || [];
-    const last = hist[hist.length - 1];
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(lmapi.getState(last ? last.vramTotal : null)));
+    return res.end(JSON.stringify(lmapi.getState(sysstats.vramInfo())));
   }
   if (url.pathname === '/api/lmstudio/raw') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
