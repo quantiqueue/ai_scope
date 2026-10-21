@@ -8,6 +8,7 @@ const sysstats = require('./sysstats');
 const logos = require('./logos');
 const comfystats = require('./comfystats');
 const ollamastats = require('./ollamastats');
+const stratastats = require('./stratastats');
 const lmapi = require('./lmapi');
 const scopes = require('./scopes');
 sysstats.start();   // SYSTEM is built in (its VRAM total is also used by the other scopes)
@@ -54,7 +55,7 @@ function lmPeak(r) {
   }
   return p;
 }
-const SCOPE_ROUTES = [['/api/requests', 'lmstudio'], ['/api/lmstudio/', 'lmstudio'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama']];
+const SCOPE_ROUTES = [['/api/requests', 'lmstudio'], ['/api/lmstudio/', 'lmstudio'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata']];
 const PKG_VERSION = require('./package.json').version;
 function isLocal(req) {
   const a = (req.socket && req.socket.remoteAddress) || '';
@@ -132,6 +133,11 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(ollamastats.getState(limit, sysstats.vramInfo())));
   }
+  if (url.pathname === '/api/strata') {
+    const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(stratastats.getState(limit)));
+  }
   if (url.pathname === '/api/lmstudio/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(lmapi.getState(sysstats.vramInfo())));
@@ -139,6 +145,12 @@ http.createServer((req, res) => {
   if (url.pathname === '/api/lmstudio/raw') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(lmapi.getRaw(), null, 2));
+  }
+  if (url.pathname === '/api/logo/strata') {   // Strata's mark, served by the running Strata app (SVG)
+    const svg = stratastats.getLogo(url.searchParams.get('theme'));
+    if (!svg) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no logo'); }
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=3600' });
+    return res.end(svg);
   }
   if (url.pathname.indexOf('/api/logo/') === 0) {
     return logos.serve(url.pathname.slice('/api/logo/'.length), res);

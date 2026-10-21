@@ -207,6 +207,7 @@
   .pbar { height:6px; width:180px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:8px; }
   .pbar > div { height:100%; background:var(--accent); width:0; transition:width .4s; }
   .now-grid .v.small { font-size:1.05rem; }
+  #sPromptBox .pbar, #sCtxBox .pbar { width:140px; }
   .dot.off { background:var(--bad); }
   .countdown { margin-top:10px; font-size:.78rem; color:var(--muted); }
   .sysload { display:flex; flex-wrap:wrap; align-items:flex-start; gap:6px 18px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); font-size:.8rem; }

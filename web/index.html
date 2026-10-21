@@ -147,6 +147,61 @@
   </div>
 </section>
 
+<section class="panel" data-panel="strata">
+  <div class="section-head">
+    <h1>Strata &mdash; Model &amp; Requests</h1>
+    <span class="meta" id="sMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap">
+    <div class="card now">
+      <div class="now-label"><span class="dot" id="sDot"></span><span id="sTitle">Current request</span></div>
+      <div class="now-grid">
+        <div><div class="k">Model</div><div class="v model" id="sModel">—</div></div>
+        <div id="sTpsBox"><div class="k" id="sTpsLabel">Current gen tok/s</div><div class="v" id="sTps">—</div></div>
+        <div id="sTokBox"><div class="k">Tokens so far</div><div class="v small" id="sTok">—</div></div>
+        <div id="sPromptBox"><div class="k" id="sPromptLabel">Prompt</div><div class="v small" id="sPrompt">—</div>
+          <div class="pbar"><div id="sPromptBar"></div></div></div>
+        <div id="sCtxBox"><div class="k">Context</div><div class="v small" id="sCtx">—</div>
+          <div class="pbar"><div id="sCtxBar"></div></div></div>
+        <div id="sTimeBox"><div class="k">Elapsed</div><div class="v" id="sTime">—</div></div>
+      </div>
+      <div class="sysload" id="sLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
+      <div class="countdown" id="sFoot">&nbsp;</div>
+    </div>
+
+    <div class="blockhead">Loaded model <span class="hint" id="sLoadedHint"></span></div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Model</th><th>Variant</th><th>Context</th><th>KV cache</th><th>GPUs</th><th>Experts in VRAM</th><th>Free VRAM</th><th>Speculation</th><th>Loaded</th></tr></thead>
+        <tbody id="sLoaded"></tbody>
+      </table>
+      <div class="hintbox" id="sLoadedEmpty" hidden></div>
+    </div>
+
+    <div class="blockhead">Requests <span class="hint" id="sReqHint"></span></div>
+    <div class="card">
+      <table>
+        <thead><tr>
+          <th>Finished</th><th>Model</th><th>Prompt</th><th>Reused</th><th>Output</th><th>Gen tok/s</th><th>Prompt tok/s</th>
+          <th>First token</th><th>Hit rate</th><th>Duration</th><th>Peak load</th>
+        </tr></thead>
+        <tbody id="sRows"></tbody>
+      </table>
+      <div class="hintbox" id="sRowsEmpty" hidden></div>
+    </div>
+    <div class="pager" id="sPager" hidden></div>
+
+    <div class="blockhead">Installed models <span class="hint" id="sInstHint"></span></div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Model</th><th>Variant</th><th>On disk</th><th>Context</th><th>Memory needed</th><th>On this PC (Strata)</th><th>Status</th></tr></thead>
+        <tbody id="sInst"></tbody>
+      </table>
+      <div class="hintbox" id="sInstEmpty" hidden></div>
+    </div>
+  </div>
+</section>
+
 <section class="panel" data-panel="system">
   <div class="section-head">
     <h1>System</h1>
@@ -216,6 +271,7 @@
 <script src="/js/comfyui.js"></script>
 <script src="/js/ollama.js"></script>
 <script src="/js/lmstudio.js"></script>
+<script src="/js/strata.js"></script>
 <script src="/js/shell.js"></script>
 </body>
 </html>

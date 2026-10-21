@@ -145,6 +145,14 @@ const homeAnim = (function () {
 
 // Theme picker (top-right). Saved per browser; 'default' follows the OS light/dark setting.
 const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo' };
+// Some apps ship a logo for light and one for dark backgrounds (Strata): ask for the one matching the theme.
+let logosReady = false;   // set once the logo checks below have started (renderTabs needs LOGO_OK)
+function darkTheme() {
+  const t = document.documentElement.dataset.theme;
+  if (t) return t !== 'default';   // Dark, Magenta and Neo are all dark
+  return !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+}
+function logoUrl(id) { return '/api/logo/' + id + (darkTheme() ? '?theme=dark' : ''); }
 function applyTheme(t) {
   if (!THEMES[t]) t = 'default';
   if (t === 'default') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
@@ -152,6 +160,12 @@ function applyTheme(t) {
   document.getElementById('themeName').textContent = THEMES[t];
   document.querySelectorAll('[data-theme-opt]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.themeOpt === t)));
   homeAnim.setPalette(t === 'magenta' || t === 'neo' ? t : 'blue');
+  if (logosReady) renderTabs();   // logos that differ for light/dark backgrounds
+}
+if (window.matchMedia) {   // Default theme follows the OS: redraw the logos when it switches light/dark
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  const redraw = () => { if (logosReady) renderTabs(); };
+  if (mq.addEventListener) mq.addEventListener('change', redraw); else if (mq.addListener) mq.addListener(redraw);
 }
 (function () {
   const btn = document.getElementById('themeBtn'), menu = document.getElementById('themeMenu');
@@ -173,7 +187,7 @@ function renderTabs() {
     const sc = scopeById(id);
     if (!sc) return '';
     // app logo, or the scope's own SVG icon (accent colored) when the app has none
-    const bg = LOGO_OK[id] ? 'url(/api/logo/' + id + ')' : sc.icon ? svgUri(sc.icon) : '';
+    const bg = LOGO_OK[id] ? 'url(' + logoUrl(id) + ')' : sc.icon ? svgUri(sc.icon) : '';
     const logo = bg ? ' has-logo" style="--logo:' + bg : '';
     return '<a class="tab" href="#' + id + '" data-tab="' + id + '" draggable="true" title="Drag to reorder"><span class="tname' + logo + '">' + escH(sc.name) + '</span>' +
            '<span class="x" data-close="' + id + '" title="Close tab">&times;</span></a>';
@@ -260,7 +274,7 @@ document.getElementById('tabs').addEventListener('click', e => {
 
 // ---- Scopes gallery (the "+" view): install / remove ----
 function scopeIcon(sc, cls) {
-  return (sc.logo && LOGO_OK[sc.id]) ? '<div class="' + cls + ' logo"><img src="/api/logo/' + sc.id + '" alt=""></div>'
+  return (sc.logo && LOGO_OK[sc.id]) ? '<div class="' + cls + ' logo"><img src="' + logoUrl(sc.id) + '" alt=""></div>'
                                      : '<div class="' + cls + '">' + (sc.icon || '') + '</div>';
 }
 function renderGallery() {
@@ -315,7 +329,7 @@ let dlgSubmit = null;
 dlgForm.addEventListener('submit', e => { e.preventDefault(); if (dlgSubmit) dlgSubmit(); });
 dlgForm.addEventListener('click', e => { if (e.target.closest('[data-cancel]')) dlg.close(); });
 function dlgTitle(sc, text) {
-  const ic = (sc.logo && LOGO_OK[sc.id]) ? '<img src="/api/logo/' + sc.id + '" alt="">' : (sc.icon || '');
+  const ic = (sc.logo && LOGO_OK[sc.id]) ? '<img src="' + logoUrl(sc.id) + '" alt="">' : (sc.icon || '');
   return '<h2>' + ic + '<span>' + escH(text) + '</span></h2>';
 }
 function dlgBusy(btnText) {
@@ -401,6 +415,7 @@ SCOPES.filter(sc => sc.logo).forEach(sc => {
   img.onload = () => { LOGO_OK[sc.id] = true; renderTabs(); };
   img.src = '/api/logo/' + sc.id;
 });
+logosReady = true;
 
 window.addEventListener('hashchange', showTab);
 renderTabs();
