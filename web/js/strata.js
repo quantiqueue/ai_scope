@@ -14,22 +14,13 @@ defineLens({
   id: 'strata.current', scope: 'strata', size: 'wide',
   name: 'Current request',
   description: 'What Strata is answering right now: speed, tokens, prompt, context and system load.',
-  markup: `
-    <div class="card now">
-      <div class="now-label"><span class="dot" data-k="dot"></span><span data-k="title">Current request</span></div>
-      <div class="now-grid">
-        <div><div class="k">Model</div><div class="v model" data-k="model">—</div></div>
-        <div data-k="tpsBox"><div class="k" data-k="tpsLabel">Current gen tok/s</div><div class="v" data-k="tps">—</div></div>
-        <div data-k="tokBox"><div class="k">Tokens so far</div><div class="v small" data-k="tok">—</div></div>
-        <div data-k="promptBox"><div class="k" data-k="promptLabel">Prompt</div><div class="v small" data-k="prompt">—</div>
-          <div class="pbar"><div data-k="promptBar"></div></div></div>
-        <div data-k="ctxBox"><div class="k">Context</div><div class="v small" data-k="ctx">—</div>
-          <div class="pbar"><div data-k="ctxBar"></div></div></div>
-        <div data-k="timeBox"><div class="k">Elapsed</div><div class="v" data-k="time">—</div></div>
-      </div>
-      <div class="sysload" data-k="load" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
-      <div class="countdown" data-k="foot">&nbsp;</div>
-    </div>`,
+  markup: nowCardMarkup([
+    { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
+    { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
+    { box:'promptBox', label:'Prompt', labelK:'promptLabel', k:'prompt', small:true, bar:'promptBar' },
+    { box:'ctxBox', label:'Context', k:'ctx', small:true, bar:'ctxBar' },
+    { box:'timeBox', label:'Elapsed', k:'time' },
+  ]),
   render(L, d) {
     const $ = L.$, cur = d.current, show = (k, on) => { $(k).hidden = !on; };
     const boxes = ['tpsBox', 'tokBox', 'promptBox', 'ctxBox', 'timeBox'];
@@ -77,15 +68,8 @@ defineLens({
   id: 'strata.loaded', scope: 'strata', size: 'full',
   name: 'Loaded model',
   description: 'The model Strata has loaded: variant, context, KV cache, GPUs, experts in VRAM, free VRAM.',
-  markup: `
-    <div class="blockhead">Loaded model <span class="hint" data-k="hint"></span></div>
-    <div class="card">
-      <table>
-        <thead><tr><th>Model</th><th>Variant</th><th>Context</th><th>KV cache</th><th>GPUs</th><th>Experts in VRAM</th><th>Free VRAM</th><th>Speculation</th><th>Loaded</th></tr></thead>
-        <tbody data-k="rows"></tbody>
-      </table>
-      <div class="hintbox" data-k="empty" hidden></div>
-    </div>`,
+  markup: tableLensMarkup({ title:'Loaded model',
+    cols:['Model', 'Variant', 'Context', 'KV cache', 'GPUs', 'Experts in VRAM', 'Free VRAM', 'Speculation', 'Loaded'] }),
   render(L, d) {
     const $ = L.$, l = d.loaded;
     $('rows').innerHTML = l ? '<tr><td class="model">' + escH(l.label) + '</td>' +
@@ -109,30 +93,17 @@ defineLens({
   id: 'strata.requests', scope: 'strata', size: 'full',
   name: 'Requests',
   description: 'Finished requests: tokens, reused prompt, speeds, first token, hit rate, duration, peak load.',
-  markup: `
-    <div class="blockhead">Requests <span class="hint" data-k="hint"></span></div>
-    <div class="card">
-      <table>
-        <thead><tr>
-          <th>Finished</th><th>Model</th><th>Prompt</th><th>Reused</th><th>Output</th><th>Gen tok/s</th><th>Prompt tok/s</th>
-          <th>First token</th><th>Hit rate</th><th>Duration</th><th>Peak load</th>
-        </tr></thead>
-        <tbody data-k="rows"></tbody>
-      </table>
-      <div class="hintbox" data-k="empty" hidden></div>
-    </div>
-    <div class="pager" data-k="pager" hidden></div>`,
-  init(L) { L.state.seen = new Set(); L.state.first = true; },
+  markup: tableLensMarkup({ title:'Requests', pager:true,
+    cols:['Finished', 'Model', 'Prompt', 'Reused', 'Output', 'Gen tok/s', 'Prompt tok/s', 'First token', 'Hit rate', 'Duration', 'Peak load'] }),
   render(L, d) {
-    const $ = L.$, t = d.totals, st = L.state;
+    const $ = L.$, t = d.totals;
     $('hint').textContent = t && t.requests ? '— since load: ' + fmtNum(t.requests) + ' requests' +
       (t.promptTokens ? ' · ' + fmtNum(t.reused || 0) + ' of ' + fmtNum(t.promptTokens) + ' prompt tokens reused (' + Math.round(100 * (t.reused || 0) / t.promptTokens) + '%)' : '') +
       (t.draftsOffered ? ' · drafts ' + Math.round(100 * (t.draftsAccepted || 0) / t.draftsOffered) + '% accepted' : '') : '';
     $('empty').hidden = d.rows.length > 0;
     $('empty').textContent = 'No requests yet. Requests from Strata\'s chat and from apps using its API appear here once they finish.';
     $('rows').innerHTML = paginate(L.key, d.rows.map(r => {
-      const isNew = !st.first && !st.seen.has(r.key);
-      st.seen.add(r.key);
+      const isNew = isNewRow(L, r.key);
       const genTip = [r.decodeMs != null ? 'decode ' + fmtSec(r.decodeMs) : null,
         r.draftsOffered ? 'drafts ' + fmtNum(r.draftsAccepted || 0) + ' of ' + fmtNum(r.draftsOffered) + ' accepted' : null].filter(Boolean).join(' · ');
       const promptTip = [r.promptRead != null ? fmtNum(r.promptRead) + ' tokens read' : null, r.promptMs != null ? 'in ' + fmtSec(r.promptMs) : null].filter(Boolean).join(' ');
@@ -149,7 +120,7 @@ defineLens({
         '<td title="Share of needed experts already in VRAM (the rest came from RAM)">' + fmtPct(r.hitRate) + '</td>' +
         '<td>' + fmtSec(r.durationMs) + '</td>' + peakCell(r.peak) + '</tr>';
     }), $('pager')).join('');
-    st.first = false;
+    rowsDrawn(L);
   },
 });
 
@@ -159,15 +130,8 @@ defineLens({
   id: 'strata.installed', scope: 'strata', size: 'full',
   name: 'Installed models',
   description: 'Models installed in Strata, with size on disk, memory needed and Strata\'s own fit verdict.',
-  markup: `
-    <div class="blockhead">Installed models <span class="hint" data-k="hint"></span></div>
-    <div class="card">
-      <table>
-        <thead><tr><th>Model</th><th>Variant</th><th>On disk</th><th>Context</th><th>Memory needed</th><th>On this PC (Strata)</th><th>Status</th></tr></thead>
-        <tbody data-k="rows"></tbody>
-      </table>
-      <div class="hintbox" data-k="empty" hidden></div>
-    </div>`,
+  markup: tableLensMarkup({ title:'Installed models',
+    cols:['Model', 'Variant', 'On disk', 'Context', 'Memory needed', 'On this PC (Strata)', 'Status'] }),
   render(L, d) {
     const $ = L.$;
     $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' model' + (d.installed.length > 1 ? 's' : '') + ' · ' +

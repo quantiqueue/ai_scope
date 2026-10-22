@@ -100,51 +100,7 @@
     <h1>Ollama &mdash; Models &amp; Requests</h1>
     <span class="meta" id="oMeta">Loading&hellip;</span>
   </div>
-  <div class="wrap">
-    <div class="card now">
-      <div class="now-label"><span class="dot" id="oDot"></span><span id="oTitle">Current request</span></div>
-      <div class="now-grid">
-        <div><div class="k">Model</div><div class="v model" id="oModel">—</div></div>
-        <div id="oTpsBox"><div class="k" id="oTpsLabel">Current gen tok/s</div><div class="v" id="oTps">—</div></div>
-        <div id="oTokBox"><div class="k">Tokens so far</div><div class="v small" id="oTok">—</div></div>
-        <div id="oTimeBox"><div class="k">Elapsed</div><div class="v" id="oTime">—</div></div>
-      </div>
-      <div class="sysload" id="oLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
-      <div class="countdown" id="oFoot">&nbsp;</div>
-    </div>
-
-    <div class="blockhead">Loaded in memory <span class="hint" id="oLoadedHint"></span></div>
-    <div class="card">
-      <table>
-        <thead><tr><th>Model</th><th>Params</th><th>Size</th><th>Context</th><th>GPU</th><th>Auto-unload</th></tr></thead>
-        <tbody id="oLoaded"></tbody>
-      </table>
-      <div class="hintbox" id="oLoadedEmpty" hidden></div>
-    </div>
-
-    <div class="blockhead">Requests <span class="hint" id="oReqHint"></span>
-      <button class="helpbtn" id="oHelpBtn" type="button" title="Why only these requests? How to set it up" aria-expanded="false">?</button></div>
-    <div class="card helpcard" id="oHelp" hidden></div>
-    <div class="card">
-      <table>
-        <thead><tr>
-          <th>Timestamp</th><th>Model</th><th>Gen tok/s</th><th>Gen tokens</th><th>Prompt tok/s</th><th>Prompt tokens</th>
-          <th>Load time</th><th>Time to first token</th><th>Total time</th><th>Peak load</th>
-        </tr></thead>
-        <tbody id="oRows"></tbody>
-      </table>
-      <div class="hintbox" id="oRowsEmpty" hidden></div>
-    </div>
-    <div class="pager" id="oPager" hidden></div>
-
-    <div class="blockhead">Installed models <span class="hint" id="oInstHint"></span></div>
-    <div class="card">
-      <table>
-        <thead><tr><th>Model</th><th>Publisher</th><th>Arch</th><th>Params</th><th>Quant</th><th>Size</th><th>Features</th><th>VRAM fit</th><th>Max context</th><th>Modified</th></tr></thead>
-        <tbody id="oInst"></tbody>
-      </table>
-    </div>
-  </div>
+  <div class="wrap" data-lenses><!-- Ollama lenses (web/js/ollama.js) --></div>
 </section>
 
 <section class="panel" data-panel="strata">
@@ -170,52 +126,7 @@
   <h1>LM Studio &mdash; Models &amp; Requests</h1>
   <span class="meta" id="meta">Loading&hellip;</span>
 </div>
-<div class="wrap">
-  <div class="card now">
-    <div class="now-label"><span class="dot" id="nowDot"></span><span id="nowTitle">Current request</span></div>
-    <div class="now-grid">
-      <div><div class="k">Model</div><div class="v model" id="nowModel">—</div></div>
-      <div><div class="k" id="nowTpsLabel">Current gen tok/s</div><div class="v" id="nowTps">—</div></div>
-      <div id="nowTokBox"><div class="k">Tokens so far</div><div class="v small" id="nowTok">—</div></div>
-      <div id="nowTimeBox"><div class="k">Elapsed</div><div class="v" id="nowTime">—</div></div>
-    </div>
-    <div class="sysload" id="nowLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
-    <div class="countdown" id="countdown">&nbsp;</div>
-  </div>
-
-  <div class="blockhead">Loaded in memory <span class="hint" id="lLoadedHint"></span></div>
-  <div class="card">
-    <table>
-      <thead><tr><th>Model</th><th>Params</th><th>Size</th><th>Context</th><th>Flash attention</th><th>KV cache</th><th>Parallel</th><th>Auto-unload</th></tr></thead>
-      <tbody id="lLoaded"></tbody>
-    </table>
-    <div class="hintbox" id="lLoadedEmpty" hidden></div>
-  </div>
-
-  <div class="blockhead">Requests <span class="hint">— from LM Studio&#39;s server logs</span></div>
-  <div class="card">
-    <table>
-      <thead><tr>
-        <th>Timestamp</th><th>Model</th>
-        <th>Gen tok/s</th><th>Gen tokens</th>
-        <th>Prompt tok/s</th><th>Prompt tokens</th>
-        <th>Time to first token</th><th>Total time</th><th>Peak load</th>
-      </tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <div class="err" id="err" hidden></div>
-  </div>
-  <div class="pager" id="lPager" hidden></div>
-
-  <div class="blockhead">Installed models <span class="hint" id="lInstHint"></span></div>
-  <div class="card">
-    <table>
-      <thead><tr><th>Model</th><th>Publisher</th><th>Arch</th><th>Params</th><th>Quant</th><th>Size</th><th>Features</th><th>VRAM fit</th><th>Max context</th><th>Modified</th></tr></thead>
-      <tbody id="lInst"></tbody>
-    </table>
-    <div class="hintbox" id="lInstEmpty" hidden></div>
-  </div>
-</div>
+<div class="wrap" data-lenses><!-- LM Studio lenses (web/js/lmstudio.js) --></div>
 </section>
 <script>window.AI_SCOPE_SCOPES = /*__SCOPES__*/[];</script>
 <!-- Client code, plain scripts in this order: shared helpers, one file per scope, then the shell (tabs, theme, gallery). -->
