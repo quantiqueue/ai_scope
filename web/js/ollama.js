@@ -4,6 +4,45 @@
 
 defineSource('ollama', '/api/ollama?limit=100');
 const ollamaProxyUrl = d => 'http://127.0.0.1:' + d.proxy.port;
+// Ollama answered requests that didn't go through the relay (seen by the server: a model loaded or its unload time
+// renewed while the relay was idle). Shown for 15 minutes, or until a request comes through the relay again.
+function ollamaDirectUse(d) {
+  const u = d.directUse;
+  if (!u || Date.now() - u.at > 15 * 60000) return null;
+  if (d.rows && d.rows[0] && d.rows[0].end > u.at) return null;
+  return u;
+}
+// Copy button for a command / address in the help ("Copy" -> "Copied").
+const copyBtn = text => '<button type="button" class="copybtn" data-copy="' + escH(text) + '" title="Copy to clipboard">Copy</button>';
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  const text = b.dataset.copy, done = ok => { b.textContent = ok ? 'Copied' : 'Copy failed'; b.classList.toggle('ok', ok); setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('ok'); }, 1500); };
+  const viaTextBox = () => {   // no clipboard API (opened over the LAN on http) or it refused: hidden text box
+    const t = document.createElement('textarea'); t.value = text; t.style.position = 'fixed'; t.style.opacity = '0';
+    document.body.appendChild(t); t.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (err) {}
+    t.remove(); done(ok);
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(() => done(true), viaTextBox);
+  else viaTextBox();
+});
+// The relay setup help (the "?" in the page header and by Requests): why only some requests show, and how to
+// point apps at the AI_SCOPE relay.
+function ollamaHelpHtml(d) {
+  const px = d.proxy, proxyUrl = ollamaProxyUrl(d);
+  return (
+    '<p>Ollama sends token stats (speed, token counts, load time) only back to the app that made the request, so AI_SCOPE can&#39;t see them. ' +
+    'AI_SCOPE runs a relay at <code>' + proxyUrl + '</code> that forwards everything to Ollama (<code>' + escH(d.url) + '</code>) and records the stats on the way. ' +
+    'Apps that talk to Ollama directly still work normally; they just don&#39;t appear in the Requests table.</p>' +
+    '<ul>' +
+    '<li><b>PowerShell</b>: <code>$env:OLLAMA_HOST=&quot;127.0.0.1:' + px.port + '&quot;</code>' + copyBtn('$env:OLLAMA_HOST="127.0.0.1:' + px.port + '"') + ' then <code>ollama run qwen3.5:4b</code> (applies to that window only)</li>' +
+    '<li><b>cmd</b>: <code>set OLLAMA_HOST=127.0.0.1:' + px.port + '</code>' + copyBtn('set OLLAMA_HOST=127.0.0.1:' + px.port) + ' then <code>ollama run qwen3.5:4b</code> (applies to that window only)</li>' +
+    '<li><b>Mac / Linux terminal</b>: <code>export OLLAMA_HOST=127.0.0.1:' + px.port + '</code>' + copyBtn('export OLLAMA_HOST=127.0.0.1:' + px.port) + ' then <code>ollama run qwen3.5:4b</code> (applies to that window only; add the line to <code>~/.zshrc</code> or <code>~/.bashrc</code> to make it permanent)</li>' +
+    '<li><b>VS Code</b> (Continue, Cline, Copilot, …): in the extension&#39;s Ollama settings, change the address / API base from <code>http://localhost:11434</code> to <code>' + proxyUrl + '</code>' + copyBtn(proxyUrl) + '</li>' +
+    '<li><b>Other apps and scripts</b>: set the Ollama URL to <code>' + proxyUrl + '</code>' + copyBtn(proxyUrl) + ', or <code>' + proxyUrl + '/v1</code>' + copyBtn(proxyUrl + '/v1') + ' for OpenAI-style clients (prompt speed and load time aren&#39;t available for those)</li>' +
+    '</ul>');
+}
 
 // ---------- Current request ----------
 defineLens({
@@ -23,6 +62,7 @@ defineLens({
       $('model').textContent = ONONE;
       show('tpsBox', false); show('tokBox', false); show('timeBox', false);
       $('foot').textContent = d.error || '';
+      $('foot').classList.remove('warn');
       setSysLoad($('load'), false);
     } else if (cur) {
       $('title').textContent = 'Current request' + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
@@ -34,6 +74,7 @@ defineLens({
       $('tok').textContent = fmtNum(cur.tokens) + (cur.thinkTokens ? ' (' + fmtNum(cur.thinkTokens) + ' thinking)' : '');
       $('time').textContent = fmtSec(cur.elapsedMs);
       $('foot').textContent = cur.endpoint + ' via AI_SCOPE proxy';
+      $('foot').classList.remove('warn');
       setSysLoad($('load'), true);
     } else {
       const a = d.average;
@@ -42,7 +83,10 @@ defineLens({
       show('tpsBox', !!a); show('tokBox', false); show('timeBox', false);
       $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
       $('tps').textContent = a ? fmtTps(a.genTps) : ONONE;
-      $('foot').textContent = 'Requests are recorded when apps talk to ' + ollamaProxyUrl(d) + ' (forwards to Ollama).';
+      const u = ollamaDirectUse(d);
+      $('foot').textContent = u ? '⚠ Ollama answered a request at ' + fmtWhen(u.at) + ' (' + u.model + ') that didn\'t go through the AI_SCOPE relay, so it isn\'t recorded. Point apps at ' + ollamaProxyUrl(d) + ' (see ? in Requests).'
+        : 'Requests are recorded when apps talk to ' + ollamaProxyUrl(d) + ' (forwards to Ollama).';
+      $('foot').classList.toggle('warn', !!u);
       setSysLoad($('load'), false);
     }
   },
@@ -82,30 +126,29 @@ defineLens({
   description: 'Finished requests sent through the AI_SCOPE relay: speeds, tokens, load time, first token, peak load.',
   markup: tableLensMarkup({ title:'Requests', pager:true,
     headExtra: '\n      <button class="helpbtn" data-k="helpBtn" type="button" title="Why only these requests? How to set it up" aria-expanded="false">?</button>',
-    before: '\n      <div class="helpcard" data-k="help" hidden></div>',
+    before: '\n      <div class="relaywarn" data-k="warn" hidden><span data-k="warnText"></span> <button type="button" class="linkbtn" data-k="warnHelp">How to set up the relay</button></div>' +
+      '\n      <div class="helpcard" data-k="help" hidden></div>',
     cols:['Timestamp', 'Model', 'Gen tok/s', 'Gen tokens', 'Prompt tok/s', 'Prompt tokens', 'Load time', 'Time to first token', 'Total time', 'Peak load'] }),
   init(L) {
-    L.$('helpBtn').addEventListener('click', () => {
+    const toggle = open => {
       const box = L.$('help');
-      box.hidden = !box.hidden;
+      box.hidden = open == null ? !box.hidden : !open;
       L.$('helpBtn').setAttribute('aria-expanded', String(!box.hidden));
-    });
+    };
+    L.$('helpBtn').addEventListener('click', () => toggle());
+    L.$('warnHelp').addEventListener('click', () => toggle(true));
   },
   render(L, d) {
     const $ = L.$, px = d.proxy, proxyUrl = ollamaProxyUrl(d);
     $('hint').textContent = '— only requests sent through ' + proxyUrl;
-    const helpHtml =
-      '<p>Ollama sends token stats (speed, token counts, load time) only back to the app that made the request, so AI_SCOPE can&#39;t see them. ' +
-      'AI_SCOPE runs a relay at <code>' + proxyUrl + '</code> that forwards everything to Ollama (<code>' + escH(d.url) + '</code>) and records the stats on the way. ' +
-      'Apps that talk to Ollama directly still work normally; they just don&#39;t appear in this table.</p>' +
-      '<ul>' +
-      '<li><b>PowerShell</b>: <code>$env:OLLAMA_HOST=&quot;127.0.0.1:' + px.port + '&quot;</code> then <code>ollama run qwen3.5:4b</code> (applies to that window only)</li>' +
-      '<li><b>cmd</b>: <code>set OLLAMA_HOST=127.0.0.1:' + px.port + '</code> then <code>ollama run qwen3.5:4b</code> (applies to that window only)</li>' +
-      '<li><b>Mac / Linux terminal</b>: <code>export OLLAMA_HOST=127.0.0.1:' + px.port + '</code> then <code>ollama run qwen3.5:4b</code> (applies to that window only; add the line to <code>~/.zshrc</code> or <code>~/.bashrc</code> to make it permanent)</li>' +
-      '<li><b>VS Code</b> (Continue, Cline, Copilot, …): in the extension&#39;s Ollama settings, change the address / API base from <code>http://localhost:11434</code> to <code>' + proxyUrl + '</code></li>' +
-      '<li><b>Other apps and scripts</b>: set the Ollama URL to <code>' + proxyUrl + '</code>, or <code>' + proxyUrl + '/v1</code> for OpenAI-style clients (prompt speed and load time aren&#39;t available for those)</li>' +
-      '</ul>';
+    const helpHtml = ollamaHelpHtml(d);
     if ($('help').innerHTML !== helpHtml) $('help').innerHTML = helpHtml;
+    const u = ollamaDirectUse(d);
+    $('warn').hidden = !u;
+    if (u) {
+      const t = '⚠ Ollama answered a request at ' + fmtWhen(u.at) + ' (' + u.model + ') that didn\'t go through the AI_SCOPE relay, so it isn\'t in this table.';
+      if ($('warnText').textContent !== t) $('warnText').textContent = t;
+    }
     $('empty').hidden = d.rows.length > 0;
     $('empty').innerHTML = px.listening
       ? 'No requests captured yet. Click <b>?</b> above to see how to send requests through AI_SCOPE.'
@@ -156,12 +199,21 @@ defineLens({
 });
 
 // ---------- The Ollama scope page: header line + its lenses ----------
+// Header line, with a "?" right after the proxy status that opens the relay setup help under the header.
 subscribeSource('ollama', (d, err) => {
-  const meta = document.getElementById('oMeta');
-  if (err) { meta.textContent = 'Could not reach AI_SCOPE server: ' + err.message; return; }
+  const a = document.getElementById('oMetaA'), b = document.getElementById('oMetaB'), btn = document.getElementById('oHeadHelpBtn');
+  if (err) { a.textContent = 'Could not reach AI_SCOPE server: ' + err.message; b.textContent = ''; btn.hidden = true; return; }
   const px = d.proxy;
-  meta.textContent = (d.online ? 'connected to ' + d.url + (d.version ? ' · v' + d.version : '') : 'Ollama offline') +
-    ' · proxy ' + (px.listening ? 'on :' + px.port : 'not running' + (px.error ? ' (' + px.error + ')' : '')) +
-    ' · ' + d.totalRequests + ' requests saved · updates every 2 s';
+  a.textContent = (d.online ? 'connected to ' + d.url + (d.version ? ' · v' + d.version : '') : 'Ollama offline') +
+    ' · proxy ' + (px.listening ? 'on :' + px.port : 'not running' + (px.error ? ' (' + px.error + ')' : ''));
+  b.textContent = ' · ' + d.totalRequests + ' requests saved · updates every 2 s';
+  btn.hidden = false;
+  const box = document.getElementById('oHeadHelp'), html = ollamaHelpHtml(d);
+  if (box.innerHTML !== html) box.innerHTML = html;
+});
+document.getElementById('oHeadHelpBtn').addEventListener('click', e => {
+  const box = document.getElementById('oHeadHelp');
+  box.hidden = !box.hidden;
+  e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
 });
 mountScopePage('ollama', ['ollama.current', 'ollama.loaded', 'ollama.requests', 'ollama.installed']);

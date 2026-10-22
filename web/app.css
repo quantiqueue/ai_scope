@@ -351,3 +351,15 @@
            font-size:.72rem; font-weight:600; color:var(--text); text-decoration:none; white-space:nowrap; }
   .lchip img, .lchip svg { width:14px; height:14px; object-fit:contain; color:var(--accent); }
   .lchip:hover, .lchip:focus-visible { border-color:var(--accent); color:var(--accent); outline:none; }
+  /* Ollama page header: "?" after the proxy status, and the relay help box it opens */
+  .meta .helpbtn { margin:0 2px 0 6px; vertical-align:middle; }
+  .meta .helpbtn[hidden] { display:none; }
+  #oHeadHelp { margin:4px 0 0; }
+  .wrap:has(> #oHeadHelp[hidden]) { display:none; }
+  /* Ollama: requests that didn't go through the relay (AI_SCOPE-018); copy buttons in the relay help */
+  .countdown.warn { color:var(--mid); }
+  .relaywarn { padding:10px 16px; font-size:.84rem; color:var(--text); background:color-mix(in srgb, var(--mid) 14%, transparent); border-bottom:1px solid var(--line); }
+  .relaywarn[hidden] { display:none; }
+  .copybtn { font:inherit; font-size:.7rem; font-weight:600; margin-left:4px; padding:1px 7px; border-radius:5px; border:1px solid var(--line); background:var(--card); color:var(--muted); cursor:pointer; vertical-align:middle; }
+  .copybtn:hover { color:var(--accent); border-color:var(--accent); }
+  .copybtn.ok { color:var(--good); border-color:var(--good); }
