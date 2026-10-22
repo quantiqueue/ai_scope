@@ -10,6 +10,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const hwstats = require('./hwstats');
+const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
 const StringDecoder = require('string_decoder').StringDecoder;
 
 let OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -32,6 +34,11 @@ let proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null 
 let requests = [];          // newest last
 const inflight = {};
 let nextId = 1;
+// Ollama used without the relay (AI_SCOPE-018): a model gets loaded, or its unload time moves forward (Ollama resets
+// it on every request), while no request was going through the relay -> those requests aren't recorded.
+let prevLoaded = null;      // name -> expiresAt at the previous poll (null until the first poll after (re)connecting)
+let lastRelayAt = 0;        // last time a request was going through the relay
+let directUse = null;       // { at, model, count } - the latest use seen without the relay
 
 // ---------- helpers ----------
 function getJson(p, cb) {
@@ -57,11 +64,16 @@ function loadRequests() {
   try { text = fs.readFileSync(REQ_FILE, 'utf8'); } catch (e) { return; }
   text.split(/\r?\n/).forEach(function (l) {
     if (!l.trim()) return;
-    try { requests.push(JSON.parse(l)); } catch (e) { /* skip bad line */ }
+    try { const r = JSON.parse(l); if (!isEmptyCall(r)) requests.push(r); } catch (e) { /* skip bad line */ }
   });
   requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
   if (requests.length > MAX_IN_MEMORY) requests = requests.slice(-MAX_IN_MEMORY);
   requests.forEach(function (r) { if (r.id >= nextId) nextId = r.id + 1; });
+}
+// Ollama load/unload calls (e.g. the empty /api/generate that `ollama run` sends to load a model)
+// finish OK with no prompt and no output - not a real request, so they are not recorded.
+function isEmptyCall(r) {
+  return r.status === 'ok' && !r.genTokens && !r.promptTokens && !r.thinkTokens;
 }
 function saveRequest(r) {
   requests.push(r);
@@ -73,7 +85,7 @@ function saveRequest(r) {
 function poll() {
   getJson('/api/ps', function (err, d) {
     if (err) {
-      online = false; loaded = []; lastError = 'Ollama not reachable at ' + OLLAMA_URL + ' (' + err.message + ')';
+      online = false; loaded = []; prevLoaded = null; lastError = 'Ollama not reachable at ' + OLLAMA_URL + ' (' + err.message + ')';
       return;
     }
     const wasOffline = !online;
@@ -89,7 +101,20 @@ function poll() {
       };
     });
     if (wasOffline || Date.now() - tagsAt > 30000) refreshTags();
+    detectDirectUse();
   });
+}
+function detectDirectUse() {
+  const now = Date.now(), prev = prevLoaded;
+  prevLoaded = {};
+  loaded.forEach(function (m) { prevLoaded[m.name] = m.expiresAt; });
+  if (!prev) return;                                                           // first look: nothing to compare with
+  if (Object.keys(inflight).length || now - lastRelayAt < 8000) return;        // the relay was busy: that explains it
+  const used = loaded.filter(function (m) {
+    if (!(m.name in prev)) return true;                                        // newly loaded
+    return m.expiresAt != null && prev[m.name] != null && m.expiresAt - prev[m.name] > 1500;   // unload time renewed
+  });
+  if (used.length) directUse = { at: now, model: used[0].name, count: (directUse ? directUse.count : 0) + 1 };
 }
 // Where a model comes from: Ollama library page + original model on Hugging Face (from the GGUF metadata via /api/show).
 const showCache = {};   // name|modified -> { org, baseName, repoUrl }
@@ -207,6 +232,7 @@ function onResponseData(rec, chunk) {
 function finish(rec, aborted) {
   if (rec.done) return;
   rec.done = true;
+  lastRelayAt = Date.now();
   delete inflight[rec.id];
   rec.buf += rec.decoder.end();
   if (rec.buf) { handleLine(rec, rec.buf); rec.buf = ''; }
@@ -231,7 +257,8 @@ function finish(rec, aborted) {
   }
   r.genTps = r.genTokens && r.genMs ? r.genTokens / (r.genMs / 1000) : null;
   r.promptTps = r.promptTokens && r.promptMs ? r.promptTokens / (r.promptMs / 1000) : null;
-  if (r.status === 'ok' || rec.tokens || r.error) saveRequest(r);
+  r.peak = hwstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
+  if ((r.status === 'ok' || rec.tokens || r.error) && !isEmptyCall(r)) saveRequest(r);
   if (r.model !== 'unknown' && !installed.some(function (m) { return m.name === r.model; })) tagsAt = 0;
 }
 
@@ -240,6 +267,7 @@ function startProxy() {
   const srv = proxySrv = http.createServer(function (req, res) {
     const ep = req.url.split('?')[0];
     let rec = null;
+    if (req.method === 'POST') { lastRelayAt = Date.now(); res.on('close', function () { lastRelayAt = Date.now(); }); }   // any model call (also embeddings)
     if (req.method === 'POST' && TRACKED.test(ep)) {
       rec = { id: nextId++, endpoint: ep, openai: ep.indexOf('/v1/') === 0, start: Date.now(), model: null,
               body: [], bodyLen: 0, firstAt: null, lastAt: null, tokens: 0, think: 0, times: [], phase: 'prompt',
@@ -303,19 +331,19 @@ function average() {
   rs.forEach(function (r) { tok += r.genTokens; ms += r.genMs; });
   return { model: model, requests: rs.length, genTps: ms ? tok / (ms / 1000) : null };
 }
-function getState(limit, vramTotal) {
+// vram: hwstats.vramInfo() (card sizes); Ollama can split a model across cards.
+function getState(limit, vram) {
   return {
-    online: online, url: OLLAMA_URL, version: version, error: lastError, proxy: proxy, vramTotal: vramTotal || null,
+    online: online, url: OLLAMA_URL, version: version, error: lastError, proxy: proxy, vramTotal: vram ? vram.largest : null, vramCards: vram ? vram.cards.length : 0,
     loaded: loaded.map(function (l) {
       const inst = installed.filter(function (m) { return m.name === l.name; })[0];
       return Object.assign({ maxContext: inst ? sourceOf(inst).maxContext : null }, l);
     }),
     installed: installed.map(function (m) {
-      let fit = null;
-      if (vramTotal && m.size) fit = m.size <= vramTotal * 0.8 ? 'fits' : m.size <= vramTotal ? 'tight' : 'spills';
-      return Object.assign({ fit: fit, loaded: loaded.some(function (l) { return l.name === m.name; }) }, m, sourceOf(m));
+      const f = vramFit(m.size, vram, true);
+      return Object.assign({ fit: f ? f.fit : null, fitGpus: f ? f.gpus || null : null, loaded: loaded.some(function (l) { return l.name === m.name; }) }, m, sourceOf(m));
     }).sort(function (a, b) { return (b.loaded - a.loaded) || ((b.size || 0) - (a.size || 0)); }),
-    current: currentRequest(), average: average(),
+    current: currentRequest(), average: average(), directUse: directUse,
     totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),
   };
 }

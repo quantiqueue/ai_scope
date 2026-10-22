@@ -1,6 +1,6 @@
 {
   "name": "ai-scope",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI_SCOPE: local dashboard for monitoring AI tools (LM Studio, Ollama, ComfyUI, CPU/GPU/VRAM)",
   "keywords": [
     "ai",
@@ -30,15 +30,19 @@
   },
   "files": [
     "bin/",
+    "assets/",
+    "web/",
     "server.js",
     "scopes.js",
     "scopes.json",
+    "customscopes.js",
     "paths.js",
-    "sysstats.js",
+    "hwstats.js",
     "lmstats.js",
     "lmapi.js",
     "comfystats.js",
     "ollamastats.js",
+    "stratastats.js",
     "logos.js",
     "README.md",
     "LICENSE"

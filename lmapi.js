@@ -5,6 +5,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const vramFit = require('./hwstats').vramFit;  // VRAM fit vs the largest card
 const os = require('os');
 
 // ---------- where each model came from (Hugging Face repo / LM Studio hub) ----------
@@ -162,7 +163,8 @@ function poll() {
   });
 }
 
-function getState(vramTotal) {
+// vram: hwstats.vramInfo() (card sizes); LM Studio (llama.cpp) can split a model across cards.
+function getState(vram) {
   const loaded = [];
   models.forEach(function (m) {
     m.instances.forEach(function (ins) {
@@ -172,14 +174,13 @@ function getState(vramTotal) {
     });
   });
   return {
-    online: online, url: base, apiVersion: apiVersion, error: lastError, vramTotal: vramTotal || null,
+    online: online, url: base, apiVersion: apiVersion, error: lastError, vramTotal: vram ? vram.largest : null, vramCards: vram ? vram.cards.length : 0,
     loaded: loaded,
     installed: models.map(function (m) {
-      let fit = null;
-      if (vramTotal && m.size) fit = m.size <= vramTotal * 0.8 ? 'fits' : m.size <= vramTotal ? 'tight' : 'spills';
+      const f = vramFit(m.size, vram, true);
       return { key: m.key, name: m.name, publisher: m.publisher, modelUrl: m.modelUrl, publisherUrl: m.publisherUrl, source: m.source, modified: m.modified, type: m.type, arch: m.arch, params: m.params,
                quant: m.quant, size: m.size, maxContext: m.maxContext, vision: m.vision, tools: m.tools,
-               reasoning: m.reasoning, loaded: m.instances.length > 0, fit: fit };
+               reasoning: m.reasoning, loaded: m.instances.length > 0, fit: f ? f.fit : null, fitGpus: f ? f.gpus || null : null };
     }).sort(function (a, b) { return (b.loaded - a.loaded) || ((b.size || 0) - (a.size || 0)); }),
   };
 }

@@ -5,6 +5,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const hwstats = require('./hwstats');
+const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
 
 const AUTO_URLS = ['http://127.0.0.1:8188', 'http://127.0.0.1:8000'];
 let CANDIDATES = AUTO_URLS;   // set from the scope's install settings in start()
@@ -49,6 +51,8 @@ function loadRuns() {
 
 function saveRun(r) {
   known[r.id] = true;
+  // Whole-PC peak GPU/VRAM/CPU/RAM while it ran (only if AI_SCOPE was sampling then).
+  if (r.peak === undefined) r.peak = hwstats.peakBetween(r.start, r.end ? r.end + 2000 : null);
   runs.push(r);
   if (runs.length > MAX_RUNS_IN_MEMORY) runs.shift();
   try { fs.appendFileSync(RUNS_FILE, JSON.stringify(r) + '\n'); } catch (e) { lastError = 'save failed: ' + e.message; }
@@ -289,7 +293,8 @@ function fetchModels() {
   });
 }
 
-function getModels(vramTotal) {
+// vram: hwstats.vramInfo() (card sizes). ComfyUI keeps a model on one card, so no 'fits across N GPUs'.
+function getModels(vram) {
   // How often each model / LoRA was used in the saved runs.
   const use = {};
   runs.forEach(function (r) {
@@ -302,11 +307,11 @@ function getModels(vramTotal) {
     });
   });
   return {
-    online: online, refreshedAt: modelsAt || null, vramTotal: vramTotal || null,
+    online: online, refreshedAt: modelsAt || null, vramTotal: vram ? vram.largest : null, vramCards: vram ? vram.cards.length : 0,
     models: models.map(function (m) {
       const u = use[m.name];
-      let fit = null;
-      if (vramTotal && m.size && FIT_FOLDERS[m.folder]) fit = m.size <= vramTotal * 0.8 ? 'fits' : m.size <= vramTotal ? 'tight' : 'spills';
+      const f = FIT_FOLDERS[m.folder] ? vramFit(m.size, vram, false) : null;
+      const fit = f ? f.fit : null;
       return { file: m.file, name: m.name, folder: m.folder, publisher: m.publisher, size: m.size, modified: m.modified, fit: fit,
                runs: u ? u.runs : 0, lastUsed: u ? u.last : null, avgMs: u && u.okN ? u.okMs / u.okN : null };
     }),

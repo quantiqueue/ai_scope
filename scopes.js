@@ -20,7 +20,7 @@ function loadCatalog() {
     catalog = (d.scopes || []).filter(function (s) { return s && s.id && s.name; });
   } catch (e) {
     console.log('[scopes] could not read scopes.json: ' + e.message);
-    catalog = [{ id: 'system', name: 'SYSTEM', desc: 'Live CPU, RAM, GPU and VRAM usage', builtin: true, modules: [], settings: [] }];
+    catalog = [{ id: 'hardware', name: 'Hardware', desc: 'Live CPU, RAM, GPU and VRAM usage', builtin: true, modules: [], settings: [] }];
   }
 }
 function loadState() {

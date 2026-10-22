@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI_SCOPE</title>
+<link rel="icon" href="/favicon.ico">
+<script>try { var t = JSON.parse(localStorage.getItem('aiscope.theme')); if (t === 'dark' || t === 'magenta' || t === 'neo' || t === 'eva') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;800&display=swap">
+</head>
+<body>
+<nav class="topbar">
+  <a class="brand" href="#home">AI<span>_</span>SCOPE</a>
+  <div class="tabs" id="tabs"><!-- rendered from SCOPES in the script below --></div>
+  <div class="addwrap">
+    <a class="addbtn" id="addBtn" href="#scopes" title="Scopes">+</a>
+  </div>
+  <div class="themewrap">
+    <button class="themebtn" id="themeBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="Theme: Default" aria-label="Theme: Default">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r="1.2"/><circle cx="17.5" cy="10.5" r="1.2"/><circle cx="8.5" cy="7.5" r="1.2"/><circle cx="6.5" cy="12.5" r="1.2"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16c3.1 0 5.6-2.5 5.6-5.6C21.6 6 17.3 2 12 2z"/></svg>
+    </button>
+    <div class="thememenu" id="themeMenu" role="menu" hidden>
+      <button type="button" role="menuitemradio" data-theme-opt="default" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#f6f6f7 48%,#18181b 52%)"></span>Default<span class="ck">&#10003;</span></button>
+      <button type="button" role="menuitemradio" data-theme-opt="dark" aria-checked="false"><span class="sw" style="background:#18181b"></span>Dark<span class="ck">&#10003;</span></button>
+      <button type="button" role="menuitemradio" data-theme-opt="magenta" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#1f0d19 48%,#ff3fa4 52%)"></span>Magenta<span class="ck">&#10003;</span></button>
+      <button type="button" role="menuitemradio" data-theme-opt="neo" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#09130b 48%,#2bff88 52%)"></span>Neo<span class="ck">&#10003;</span></button>
+      <button type="button" role="menuitemradio" data-theme-opt="eva" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#5b2d86 48%,#9be33c 52%)"></span>EVA<span class="ck">&#10003;</span></button>
+    </div>
+  </div>
+</nav>
+<div class="empty" id="noTabs" hidden>No scopes open. Click <b>+</b> to open one.</div>
+
+<section class="panel home" data-panel="home" hidden>
+  <canvas id="homeBg" aria-hidden="true"></canvas>
+  <div class="vignette"></div>
+  <div class="hero">
+    <h1 class="mark">AI<span>_</span>SCOPE</h1>
+    <p class="sub">Local AI monitor</p>
+    <a class="go" id="homeGo" href="#scopes">Open dashboard &rarr;</a>
+  </div>
+</section>
+
+<section class="panel" data-panel="scopes">
+  <div class="section-head">
+    <h1>Scopes</h1>
+    <span class="meta">Click a scope to open it</span>
+    <button type="button" class="stopbtn" id="stopBtn" hidden title="Stops the AI_SCOPE server on this computer (Ollama relay and ComfyUI run history stop recording too)">Stop AI_SCOPE</button>
+  </div>
+  <div class="wrap"><div id="gallery"></div></div>
+</section>
+<dialog class="modal" id="scopeDlg"><form method="dialog" id="scopeForm" novalidate></form></dialog>
+
+<section class="panel" data-panel="comfyui">
+  <div class="section-head">
+    <h1>ComfyUI &mdash; Workflow Runs</h1>
+    <span class="meta" id="cMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap" data-lenses><!-- ComfyUI lenses (web/js/comfyui.js) --></div>
+</section>
+
+<section class="panel" data-panel="ollama">
+  <div class="section-head">
+    <h1>Ollama &mdash; Models &amp; Requests</h1>
+    <span class="meta" id="oMeta"><span id="oMetaA">Loading&hellip;</span><button class="helpbtn" id="oHeadHelpBtn" type="button" title="How to send requests through the AI_SCOPE relay" aria-expanded="false" hidden>?</button><span id="oMetaB"></span></span>
+  </div>
+  <div class="wrap"><div class="card helpcard" id="oHeadHelp" hidden></div></div>
+  <div class="wrap" data-lenses><!-- Ollama lenses (web/js/ollama.js) --></div>
+</section>
+
+<section class="panel" data-panel="strata">
+  <div class="section-head">
+    <h1>Strata &mdash; Model &amp; Requests</h1>
+    <span class="meta" id="sMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap" data-lenses><!-- Strata lenses (web/js/strata.js) --></div>
+</section>
+
+<section class="panel" data-panel="hardware">
+  <div class="section-head">
+    <h1>Hardware</h1>
+    <span class="meta" id="hwMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap">
+    <div class="tiles" data-lenses><!-- Hardware lenses (web/js/hardware.js) --></div>
+  </div>
+</section>
+
+<section class="panel" data-panel="lmstudio">
+<div class="section-head">
+  <h1>LM Studio &mdash; Models &amp; Requests</h1>
+  <span class="meta" id="meta">Loading&hellip;</span>
+</div>
+<div class="wrap" data-lenses><!-- LM Studio lenses (web/js/lmstudio.js) --></div>
+</section>
+<script>window.AI_SCOPE_SCOPES = /*__SCOPES__*/[]; window.AI_SCOPE_CUSTOM = /*__CUSTOM__*/[];</script>
+<!-- Client code, plain scripts in this order: shared helpers, one file per scope, then the shell (tabs, theme, gallery). -->
+<script src="/js/core.js"></script>
+<script src="/js/lens.js"></script>
+<script src="/js/hardware.js"></script>
+<script src="/js/comfyui.js"></script>
+<script src="/js/ollama.js"></script>
+<script src="/js/lmstudio.js"></script>
+<script src="/js/strata.js"></script>
+<script src="/js/shell.js"></script>
+<script src="/js/custom.js"></script>
+</body>
+</html>

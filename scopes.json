@@ -1,9 +1,9 @@
 {
-  "_readme": "Scope catalog. Every entry shows up on the Scopes page (+). 'builtin' scopes are always installed. 'modules' are the server-side files (without .js) that collect the data; each exports start(settings) and stop(). 'settings' are asked for when the scope is installed; values are saved in data/installed.json. Field types: text, url, folder, number. In defaults, ~ is the user's home folder and %NAME% an environment variable. The scope's page is the <section data-panel=\"id\"> in server.js; a scope without one gets a placeholder page.",
+  "_readme": "Scope catalog. Every entry shows up on the Scopes page (+). 'builtin' scopes are always installed. 'modules' are the server-side files (without .js) that collect the data; each exports start(settings) and stop(). 'settings' are asked for when the scope is installed; values are saved in data/installed.json. Field types: text, url, folder, number. In defaults, ~ is the user's home folder and %NAME% an environment variable. The scope's page is the <section data-panel=\"id\"> in web/index.html, its code web/js/<id>.js; a scope without a section gets a placeholder page.",
   "scopes": [
     {
-      "id": "system",
-      "name": "SYSTEM",
+      "id": "hardware",
+      "name": "Hardware",
       "desc": "Live CPU, RAM, GPU and VRAM usage",
       "builtin": true,
       "modules": [],
@@ -50,6 +50,18 @@
           "help": "Where Ollama is running." },
         { "key": "proxyPort", "label": "Relay port", "type": "number", "default": 11435, "min": 1024, "max": 65535, "required": true,
           "help": "AI_SCOPE relays requests on 127.0.0.1:<port> to record token stats. Point apps here instead of 11434." }
+      ]
+    },
+    {
+      "id": "strata",
+      "name": "Strata",
+      "desc": "Live request progress, expert cache and token performance from the Strata desktop app",
+      "logo": true,
+      "modules": ["stratastats"],
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 7h16M4 12h16M4 17h16\"/></svg>",
+      "settings": [
+        { "key": "url", "label": "Strata app URL", "type": "url", "default": "", "placeholder": "Default: http://127.0.0.1:47831",
+          "help": "The Strata desktop app's local address (shown in Strata under Connect an app, without /v1). Leave empty for the default." }
       ]
     }
   ]

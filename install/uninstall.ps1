@@ -1,5 +1,6 @@
 # AI_SCOPE uninstaller for Windows (run with: ai-scope --uninstall).
-# Removes %LOCALAPPDATA%\ai-scope, the Start Menu shortcut, the login item and the PATH entry.
+# Stops AI_SCOPE (and its app window), then removes %LOCALAPPDATA%\ai-scope, the Start Menu and desktop
+# shortcuts, the login item and the PATH entry.
 # Asks before deleting your settings and history in %USERPROFILE%\.ai_scope.
 $ErrorActionPreference = 'Continue'
 $Root    = Join-Path $env:LOCALAPPDATA 'ai-scope'
@@ -15,6 +16,10 @@ try {
   Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  # the app window (Edge/Chrome using AI_SCOPE's own profile in $Root\window*), so its files can be removed
+  Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe' OR Name = 'chrome.exe'" |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$Root\window*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Milliseconds 800
 } catch {}
 
@@ -22,6 +27,8 @@ $startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'ai-scope.cmd'
 if (Test-Path $startup) { Remove-Item $startup -Force; Write-Host '  Removed the login item' }
 $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'AI_SCOPE.lnk'
 if (Test-Path $lnk) { Remove-Item $lnk -Force; Write-Host '  Removed the Start Menu shortcut' }
+$desk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'AI_SCOPE.lnk'
+if (Test-Path $desk) { Remove-Item $desk -Force; Write-Host '  Removed the desktop shortcut' }
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath -and (($userPath -split ';') -contains $BinDir)) {

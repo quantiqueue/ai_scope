@@ -5,13 +5,16 @@
 # Installs to %LOCALAPPDATA%\ai-scope (no admin rights needed, nothing system-wide):
 #   app\    the app (from the latest GitHub release)
 #   node\   a private node.exe - only if this PC has no Node.js 18+
-#   bin\    ai-scope.cmd, added to your user PATH
-# plus a Start Menu shortcut "AI_SCOPE". Settings and history live in %USERPROFILE%\.ai_scope.
+#   bin\    ai-scope.cmd (added to your user PATH) and ai-scope.vbs (starts it without a console window)
+# plus a Start Menu shortcut "AI_SCOPE" (and, if you want, one on the desktop). The shortcuts run
+# "ai-scope --app": AI_SCOPE starts in the background and opens in its own window. Settings and
+# history live in %USERPROFILE%\.ai_scope.
 # Run the same line again to update. Uninstall: ai-scope --uninstall
 #
 # Options (set before running):
 #   $env:AI_SCOPE_STARTUP = "1"        also start AI_SCOPE when you log in
 #   $env:AI_SCOPE_NO_START = "1"       don't start it after installing
+#   $env:AI_SCOPE_DESKTOP = "1" / "0"  desktop shortcut yes / no, without asking
 #   $env:AI_SCOPE_VERSION = "v1.2.0"   install a specific release instead of the latest
 #   $env:AI_SCOPE_ZIP = "C:\path.zip"  install from a local zip (testing)
 #   $env:AI_SCOPE_PRIVATE_NODE = "1"  always use a private Node.js, even if this PC has one
@@ -130,18 +133,49 @@ if (($userPath -split ';') -notcontains $BinDir) {
 }
 if (($env:Path -split ';') -notcontains $BinDir) { $env:Path = $env:Path + ';' + $BinDir }
 
-# --- 4. Start Menu shortcut ---
-Step 'Adding a Start Menu shortcut'
-$lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'AI_SCOPE.lnk'
+# --- 4. shortcuts: open AI_SCOPE in its own window (ai-scope --app), with no console window ---
+# The shortcuts run wscript.exe with ai-scope.vbs, which starts "ai-scope.cmd --app" hidden.
+$vbs = Join-Path $BinDir 'ai-scope.vbs'
+$vbsText = @'
+' AI_SCOPE app launcher (created by install.ps1): runs "ai-scope --app" without a console window.
+' --app starts AI_SCOPE in the background if it isn't running, then opens it in its own window.
+Set fso = CreateObject("Scripting.FileSystemObject")
+dir = fso.GetParentFolderName(WScript.ScriptFullName)
+args = ""
+For Each a In WScript.Arguments
+  args = args & " """ & a & """"
+Next
+CreateObject("WScript.Shell").Run """" & dir & "\ai-scope.cmd"" --app" & args, 0, False
+'@
+Set-Content -Path $vbs -Value $vbsText -Encoding ASCII
+
+$ico = Join-Path $AppDir 'assets\ai-scope.ico'
 $sh = New-Object -ComObject WScript.Shell
-$s = $sh.CreateShortcut($lnk)
-$s.TargetPath = Join-Path $BinDir 'ai-scope.cmd'
-$s.Arguments = '--open'
-$s.WorkingDirectory = $Root
-$s.Description = 'AI_SCOPE - local AI monitor'
-$s.WindowStyle = 7   # minimized console; close it to stop AI_SCOPE
-$s.Save()
-Say $lnk
+function New-AppShortcut($lnk) {
+  $s = $sh.CreateShortcut($lnk)
+  $s.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
+  $s.Arguments = '"' + $vbs + '"'
+  $s.WorkingDirectory = $Root
+  $s.Description = 'AI_SCOPE - local AI monitor'
+  if (Test-Path $ico) { $s.IconLocation = $ico + ',0' }
+  $s.Save()
+  Say $lnk
+}
+
+Step 'Adding a Start Menu shortcut'
+New-AppShortcut (Join-Path ([Environment]::GetFolderPath('Programs')) 'AI_SCOPE.lnk')
+
+$desk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'AI_SCOPE.lnk'
+$wantDesk = $env:AI_SCOPE_DESKTOP
+if (-not $wantDesk) {
+  if (Test-Path $desk) { $wantDesk = '1' }   # updating: keep (and refresh) the existing one
+  else {
+    $a = ''
+    try { $a = Read-Host '  Create a desktop shortcut? [Y/n]' } catch {}
+    $wantDesk = if ($a -match '^(n|no)$') { '0' } else { '1' }
+  }
+}
+if ($wantDesk -eq '1') { Step 'Adding a desktop shortcut'; New-AppShortcut $desk }
 
 # --- 5. optional: start at login ---
 if ($env:AI_SCOPE_STARTUP -eq '1') {
@@ -153,13 +187,15 @@ Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
 Write-Host "AI_SCOPE $version is installed." -ForegroundColor Green
-Say 'Start it from the Start Menu (AI_SCOPE), or run:  ai-scope --open'
+Say 'Start it from the Start Menu (AI_SCOPE) or the desktop shortcut - it opens in its own window.'
+Say 'Closing the window keeps AI_SCOPE running in the background. Stop it with:  ai-scope --stop'
+Say 'From a terminal:  ai-scope  (runs there, Ctrl+C to stop)   ai-scope --open  (in your browser)'
 Say 'Options:  ai-scope --help      Uninstall:  ai-scope --uninstall'
 Write-Host ''
 
 # --- 6. start it ---
 if ($env:AI_SCOPE_NO_START -ne '1') {
-  Start-Process -FilePath (Join-Path $BinDir 'ai-scope.cmd') -ArgumentList '--open' -WorkingDirectory $Root -WindowStyle Minimized
-  Say 'AI_SCOPE is starting in a minimized window and will open http://localhost:9000'
+  Start-Process -FilePath (Join-Path $env:WINDIR 'System32\wscript.exe') -ArgumentList ('"' + $vbs + '"') -WorkingDirectory $Root
+  Say 'AI_SCOPE is starting in the background and will open in its own window (http://localhost:9000)'
   Write-Host ''
 }

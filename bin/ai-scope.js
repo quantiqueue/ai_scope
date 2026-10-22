@@ -21,6 +21,9 @@ const HELP = [
   '      --host <addr>       127.0.0.1 = this computer only (default)',
   '                          0.0.0.0   = also phones/PCs on your network',
   '  -o, --open              Open the dashboard in your browser',
+  '      --app               Run in the background (no console window) and open the',
+  '                          dashboard in its own window; if already running, just open it',
+  '      --stop              Stop AI_SCOPE running in the background',
   '      --data-dir <path>   Where settings and history are kept (default ~/.ai_scope)',
   '      --install-startup   Start AI_SCOPE when you log in (uses the other flags you pass)',
   '      --uninstall-startup Stop starting AI_SCOPE at login',
@@ -30,6 +33,8 @@ const HELP = [
   '',
   'Examples:',
   '  ai-scope --open',
+  '  ai-scope --app',
+  '  ai-scope --stop',
   '  ai-scope --host 0.0.0.0 --port 9100',
   '  ai-scope --host 0.0.0.0 --install-startup'
 ].join('\n');
@@ -37,7 +42,7 @@ const HELP = [
 function fail(msg) { console.log('ai-scope: ' + msg + '\n\nRun "ai-scope --help" for the options.'); process.exit(1); }
 
 const argv = process.argv.slice(2);
-const opts = { port: null, host: null, open: false, dataDir: null, install: false, uninstall: false };
+const opts = { port: null, host: null, open: false, app: false, stop: false, dataDir: null, install: false, uninstall: false };
 const passOn = []; // flags written into the login item
 for (let i = 0; i < argv.length; i++) {
   let a = argv[i], val = null;
@@ -56,6 +61,8 @@ for (let i = 0; i < argv.length; i++) {
     }
     case '--host': opts.host = next(); passOn.push('--host', opts.host); break;
     case '-o': case '--open': opts.open = true; break;
+    case '--app': opts.app = true; break;
+    case '--stop': opts.stop = true; break;
     case '--data-dir': opts.dataDir = path.resolve(next()); passOn.push('--data-dir', opts.dataDir); break;
     case '--install-startup': opts.install = true; break;
     case '--uninstall-startup': opts.uninstall = true; break;
@@ -77,11 +84,18 @@ if (opts.install || opts.uninstall) {
   process.exit(0);
 }
 
+if (opts.stop) require('./app').stop(opts.port || 9000);
+else if (opts.app) {
+  if (opts.dataDir) process.env.AI_SCOPE_DATA = opts.dataDir;
+  require('./app').app({ port: opts.port || 9000, flags: passOn, logFile: require('../paths').file('ai-scope.log') });
+} else {
+
 if (opts.port) process.env.AI_SCOPE_PORT = String(opts.port);
 process.env.AI_SCOPE_HOST = opts.host || process.env.AI_SCOPE_HOST || '127.0.0.1'; // this PC only unless asked
 if (opts.dataDir) process.env.AI_SCOPE_DATA = opts.dataDir;
 if (opts.open) process.env.AI_SCOPE_OPEN = '1';
 if (process.stdout.isTTY) process.title = 'AI_SCOPE';
 
-console.log('AI_SCOPE ' + pkg.version + '  (Ctrl+C to stop)');
+console.log('AI_SCOPE ' + pkg.version + (process.env.AI_SCOPE_BACKGROUND ? '  (background, started ' + new Date().toLocaleString() + ')' : '  (Ctrl+C to stop)'));
 require('../server.js');
+}
