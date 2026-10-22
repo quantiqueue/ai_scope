@@ -33,6 +33,7 @@ defineLens({
       $('time').textContent = fmtSec(cur.elapsedMs);
       $('tokBox').hidden = !(cur.phase === 'gen' && cur.genTokens);
       $('tok').textContent = fmtNum(cur.genTokens);
+      $('foot').textContent = ' ';
       setSysLoad($('load'), true);
     } else {
       $('title').textContent = 'Idle — no request running';
@@ -41,6 +42,9 @@ defineLens({
       $('tps').textContent = avg ? fmtTps(avg.genTps) : '—';
       $('timeBox').hidden = true;
       $('tokBox').hidden = true;
+      // like Strata's card: a hint while no model is loaded (loaded models come from LM Studio's API, the other source)
+      const models = SOURCES['lmstudio.models'].data;
+      $('foot').textContent = models && models.loaded && !models.loaded.length ? 'Load a model in LM Studio to see live stats.' : ' ';
       setSysLoad($('load'), false);
     }
   },
@@ -81,7 +85,7 @@ defineLens({
   name: 'Requests',
   description: 'Finished requests from LM Studio\'s server logs: speeds, tokens, first token, total time, peak load.',
   markup: tableLensMarkup({ title:'Requests', pager:true,
-    hint: '<span class="hint">— from LM Studio&#39;s server logs</span>',
+    hint: '',
     foot: '\n      <div class="err" data-k="err" hidden></div>',
     cols:['Timestamp', 'Model', 'Gen tok/s', 'Gen tokens', 'Prompt tok/s', 'Prompt tokens', 'Time to first token', 'Total time', 'Peak load'] }),
   render(L, data) {

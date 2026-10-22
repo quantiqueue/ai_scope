@@ -51,7 +51,7 @@ defineLens({
       show('progBox', false); show('rateBox', false); show('timeBox', !!a);
       $('timeLabel').textContent = a ? 'Avg run time (last ' + a.runs + ' runs)' : 'Avg run time';
       $('time').textContent = a ? fmtDur(a.avgMs) : '—';
-      $('foot').textContent = ' ';
+      $('foot').textContent = 'Run a workflow in ComfyUI to see live stats.';
       setSysLoad($('load'), false);
     }
   },
