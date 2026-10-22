@@ -1,4 +1,4 @@
-// Live system stats: CPU %, RAM, and GPU % + VRAM per graphics card. Samples in the background
+// Live hardware stats (the Hardware scope): CPU %, RAM, and GPU % + VRAM per graphics card. Samples in the background
 // every 2 s and keeps ~5 minutes of history. Conservative JS for older Node versions.
 //
 // GPU sources:
@@ -322,7 +322,7 @@ function start() {
   cpuPercent();
   detectGpu(function () {
     const cards = allCards();
-    console.log('[system] GPU stats source: ' + gpuMode + (cards.length ? ' (' + cards.map(function (c) { return c.name; }).join(', ') + ')' : ''));
+    console.log('[hardware] GPU stats source: ' + gpuMode + (cards.length ? ' (' + cards.map(function (c) { return c.name; }).join(', ') + ')' : ''));
   });
   setInterval(sample, INTERVAL_MS);
 }

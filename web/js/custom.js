@@ -1,4 +1,4 @@
-// AI_SCOPE dashboard - custom scopes (AI_SCOPE-003): user-named pages built from lenses of the app scopes and SYSTEM.
+// AI_SCOPE dashboard - custom scopes (AI_SCOPE-003): user-named pages built from lenses of the app scopes and Hardware.
 // Edit mode (pencil): add lenses (Add lens dialog), drag to reorder, remove, change lens settings (gear); save or cancel.
 // Unsaved edits stay while switching tabs (kept in memory, lost on reload). Loaded last: uses shell.js (tabs, dialogs).
 
@@ -21,12 +21,12 @@ function lensSize(def, saved) {
   return typeof def.size === 'function' ? def.size(lensSettings(def, saved)) : def.size;
 }
 function scopeName(id) { const sc = scopeById(id); return sc ? sc.name : id; }
-// What a lens copy is, for the edit toolbar: "Strata · Requests", "SYSTEM · GPU 2 (VRAM)".
+// What a lens copy is, for the edit toolbar: "Strata · Requests", "Hardware · GPU 2 (VRAM)".
 function lensLabel(item) {
   const def = LENSES[item.lens], sid = item.lens.split('.')[0];
   if (!def) return scopeName(sid) + ' · ' + item.lens.split('.').slice(1).join('.');
   let txt = scopeName(sid) + ' · ' + def.name;
-  if (item.lens === 'system.gpu') {
+  if (item.lens === 'hardware.gpu') {
     const st = lensSettings(def, item.settings);
     txt += ' ' + (st.card + 1) + (st.show === 'gpu' ? ' (usage)' : st.show === 'vram' ? ' (VRAM)' : '');
   }
@@ -285,7 +285,7 @@ function addLens(id, item) {
   lensDlg.close();
   renderCustom(id);
 }
-// Grouped by scope, in the Scopes page order: installed app scopes, then SYSTEM. One lens per click.
+// Grouped by scope, in the Scopes page order: installed app scopes, then Hardware. One lens per click.
 function openAddLens(id, pos) {
   const cs = customById(id), st = CS[id];
   const where = pos <= 0 ? 'It goes first on the page.'
@@ -326,7 +326,7 @@ function openLensSettings(id, lensId, index) {
   const field = f => {
     let opts = f.options;
     if (f.type === 'gpu') {
-      const gpus = (SOURCES.system.data && SOURCES.system.data.info.gpus) || [];
+      const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
       const n = Math.max(1, gpus.length, (cur[f.id] || 0) + 1);
       opts = [];
       for (let i = 0; i < n; i++) opts.push([String(i), 'GPU ' + (i + 1) + (gpus[i] ? ' · ' + gpus[i].name : '')]);

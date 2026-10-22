@@ -45,7 +45,7 @@ jobs:
           node bin/ai-scope.js --port 9123 &
           for i in $(seq 1 20); do curl -sf -o /dev/null http://127.0.0.1:9123/ && break; sleep 1; done
           curl -sf -o /dev/null http://127.0.0.1:9123/
-          curl -sf http://127.0.0.1:9123/api/scopes | grep -q '"system"'
+          curl -sf http://127.0.0.1:9123/api/scopes | grep -q '"hardware"'
           curl -sf -o /dev/null http://127.0.0.1:9123/js/core.js
           curl -sf -o /dev/null http://127.0.0.1:9123/js/shell.js
           curl -sf -o /dev/null http://127.0.0.1:9123/app.css

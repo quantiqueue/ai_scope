@@ -5,8 +5,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const sysstats = require('./sysstats');
-const vramFit = sysstats.vramFit;  // VRAM fit vs the largest card
+const hwstats = require('./hwstats');
+const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
 
 const AUTO_URLS = ['http://127.0.0.1:8188', 'http://127.0.0.1:8000'];
 let CANDIDATES = AUTO_URLS;   // set from the scope's install settings in start()
@@ -52,7 +52,7 @@ function loadRuns() {
 function saveRun(r) {
   known[r.id] = true;
   // Whole-PC peak GPU/VRAM/CPU/RAM while it ran (only if AI_SCOPE was sampling then).
-  if (r.peak === undefined) r.peak = sysstats.peakBetween(r.start, r.end ? r.end + 2000 : null);
+  if (r.peak === undefined) r.peak = hwstats.peakBetween(r.start, r.end ? r.end + 2000 : null);
   runs.push(r);
   if (runs.length > MAX_RUNS_IN_MEMORY) runs.shift();
   try { fs.appendFileSync(RUNS_FILE, JSON.stringify(r) + '\n'); } catch (e) { lastError = 'save failed: ' + e.message; }
@@ -293,7 +293,7 @@ function fetchModels() {
   });
 }
 
-// vram: sysstats.vramInfo() (card sizes). ComfyUI keeps a model on one card, so no 'fits across N GPUs'.
+// vram: hwstats.vramInfo() (card sizes). ComfyUI keeps a model on one card, so no 'fits across N GPUs'.
 function getModels(vram) {
   // How often each model / LoRA was used in the saved runs.
   const use = {};

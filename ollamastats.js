@@ -10,8 +10,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const sysstats = require('./sysstats');
-const vramFit = sysstats.vramFit;  // VRAM fit vs the largest card
+const hwstats = require('./hwstats');
+const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
 const StringDecoder = require('string_decoder').StringDecoder;
 
 let OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -238,7 +238,7 @@ function finish(rec, aborted) {
   }
   r.genTps = r.genTokens && r.genMs ? r.genTokens / (r.genMs / 1000) : null;
   r.promptTps = r.promptTokens && r.promptMs ? r.promptTokens / (r.promptMs / 1000) : null;
-  r.peak = sysstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
+  r.peak = hwstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
   if ((r.status === 'ok' || rec.tokens || r.error) && !isEmptyCall(r)) saveRequest(r);
   if (r.model !== 'unknown' && !installed.some(function (m) { return m.name === r.model; })) tagsAt = 0;
 }
@@ -311,7 +311,7 @@ function average() {
   rs.forEach(function (r) { tok += r.genTokens; ms += r.genMs; });
   return { model: model, requests: rs.length, genTps: ms ? tok / (ms / 1000) : null };
 }
-// vram: sysstats.vramInfo() (card sizes); Ollama can split a model across cards.
+// vram: hwstats.vramInfo() (card sizes); Ollama can split a model across cards.
 function getState(limit, vram) {
   return {
     online: online, url: OLLAMA_URL, version: version, error: lastError, proxy: proxy, vramTotal: vram ? vram.largest : null, vramCards: vram ? vram.cards.length : 0,

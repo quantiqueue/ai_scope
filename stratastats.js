@@ -11,7 +11,7 @@
 'use strict';
 const http = require('http');
 const fs = require('fs');
-const sysstats = require('./sysstats');
+const hwstats = require('./hwstats');
 const paths = require('./paths');                       // data folder: ~/.ai_scope
 
 const DEFAULT_URL = 'http://127.0.0.1:47831';
@@ -101,7 +101,7 @@ function collectRequests(instances) {
       // Wait a few seconds after it ended so the 2 s system samples covering its end exist (peak load).
       if (row.end != null && now < row.end + 3000) { waiting[key] = true; return; }
       delete waiting[key];
-      row.peak = row.start != null ? sysstats.peakBetween(row.start, row.end + 2000) : null;
+      row.peak = row.start != null ? hwstats.peakBetween(row.start, row.end + 2000) : null;
       saveRequest(row);
     });
   });

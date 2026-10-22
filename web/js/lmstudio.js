@@ -71,7 +71,7 @@ defineLens({
       : 'LM Studio server is not reachable' + (d.error ? ' (' + d.error + ')' : '') + '. Start the server in LM Studio (Developer tab) to see models.';
     const vt = d.vramTotal;
     const big = vt ? d.loaded.filter(m => m.size && m.size > vt) : [];
-    $('hint').textContent = big.length ? (d.vramCards > 1 ? '— larger than one card (' + fmtBytes(vt) + ' VRAM), so it is split across GPUs or partly in system RAM' : '— larger than ' + fmtBytes(vt) + ' VRAM, so part of it runs from system RAM') : (d.loaded.length ? '— LM Studio does not report GPU offload; compare VRAM on the SYSTEM tab' : '');
+    $('hint').textContent = big.length ? (d.vramCards > 1 ? '— larger than one card (' + fmtBytes(vt) + ' VRAM), so it is split across GPUs or partly in system RAM' : '— larger than ' + fmtBytes(vt) + ' VRAM, so part of it runs from system RAM') : (d.loaded.length ? '— LM Studio does not report GPU offload; compare VRAM on the Hardware tab' : '');
   },
 });
 

@@ -4,7 +4,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const lmstats = require('./lmstats');
-const sysstats = require('./sysstats');
+const hwstats = require('./hwstats');
 const logos = require('./logos');
 const comfystats = require('./comfystats');
 const ollamastats = require('./ollamastats');
@@ -12,7 +12,7 @@ const stratastats = require('./stratastats');
 const lmapi = require('./lmapi');
 const scopes = require('./scopes');
 const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
-sysstats.start();   // SYSTEM is built in (its VRAM total is also used by the other scopes)
+hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
 scopes.init();      // starts the modules of every installed scope (scopes.json + data/installed.json)
 
 // Port/host come from the command line (bin/ai-scope.js sets these) or the environment.
@@ -47,9 +47,9 @@ function lmPeak(r) {
   if (lmPeaks.has(key)) return lmPeaks.get(key);
   const end = lmstats.tsToMs(r.timestamp);
   if (end == null || r.totalMs == null) return null;
-  const oldest = sysstats.oldestSample();
+  const oldest = hwstats.oldestSample();
   if (Date.now() - end < 4000) return null;          // let the samples after the end come in first
-  const p = sysstats.peakBetween(end - r.totalMs - 1000, end + 2000);
+  const p = hwstats.peakBetween(end - r.totalMs - 1000, end + 2000);
   if (p || oldest == null || end < oldest) {          // final: found, or too old to ever find
     lmPeaks.set(key, p);
     if (lmPeaks.size > 5000) lmPeaks.delete(lmPeaks.keys().next().value);
@@ -136,7 +136,7 @@ http.createServer((req, res) => {
   }
   if (url.pathname === '/api/comfy/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(comfystats.getModels(sysstats.vramInfo())));
+    return res.end(JSON.stringify(comfystats.getModels(hwstats.vramInfo())));
   }
   if (url.pathname === '/api/comfy/view') {
     return comfystats.proxyImage(url.searchParams, res);
@@ -144,7 +144,7 @@ http.createServer((req, res) => {
   if (url.pathname === '/api/ollama') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(ollamastats.getState(limit, sysstats.vramInfo())));
+    return res.end(JSON.stringify(ollamastats.getState(limit, hwstats.vramInfo())));
   }
   if (url.pathname === '/api/strata') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
@@ -153,7 +153,7 @@ http.createServer((req, res) => {
   }
   if (url.pathname === '/api/lmstudio/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(lmapi.getState(sysstats.vramInfo())));
+    return res.end(JSON.stringify(lmapi.getState(hwstats.vramInfo())));
   }
   if (url.pathname === '/api/lmstudio/raw') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -168,9 +168,9 @@ http.createServer((req, res) => {
   if (url.pathname.indexOf('/api/logo/') === 0) {
     return logos.serve(url.pathname.slice('/api/logo/'.length), res);
   }
-  if (url.pathname === '/api/system') {
+  if (url.pathname === '/api/hardware') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(sysstats.getStats()));
+    return res.end(JSON.stringify(hwstats.getStats()));
   }
   if (url.pathname === '/api/requests') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);

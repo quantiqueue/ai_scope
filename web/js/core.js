@@ -1,5 +1,5 @@
 // AI_SCOPE dashboard - shared code: installed scopes, table paging, formatting helpers.
-// Loaded first; the scope files (system, comfyui, ollama, lmstudio) and shell.js build on it.
+// Loaded first; the scope files (hardware, comfyui, ollama, lmstudio, strata) and shell.js build on it.
 
 // ---------- Scopes (catalog: scopes.json; install state: data/installed.json) ----------
 // Filled in by the server when it sends the page; refreshed from /api/scopes.

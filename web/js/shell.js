@@ -32,6 +32,9 @@ SCOPES.forEach(ensurePanel);
 
 const DEFAULT_SCOPE = 'lmstudio';
 const installedIds = () => SCOPES.filter(x => x.installed).map(x => x.id).concat(CUSTOM.map(c => c.id));   // + custom scopes
+// AI_SCOPE-022: the SYSTEM scope is now "hardware" - rename it in this browser's saved tabs, and follow old #system links.
+['aiscope.openTabs', 'aiscope.seenScopes'].forEach(k => { const v = store.get(k, null); if (Array.isArray(v) && v.includes('system')) store.set(k, v.map(x => x === 'system' ? 'hardware' : x)); });
+if (location.hash === '#system') history.replaceState(null, '', '#hardware');
 // Which tabs are open, in what order (per browser). Default: all installed scopes (and custom scopes).
 let openTabs = store.get('aiscope.openTabs', installedIds()).filter(canOpen);
 // Drop tabs of removed scopes; scopes installed since this browser last looked (e.g. from another device) open once.
@@ -177,7 +180,7 @@ if (window.matchMedia) {   // Default theme follows the OS: redraw the logos whe
   });
   document.addEventListener('click', e => { if (!menu.hidden && !e.target.closest('.themewrap')) setOpen(false); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { setOpen(false); btn.focus(); } });
-  // Default theme follows the OS; re-tint the SYSTEM tab icon when the OS switches.
+  // Default theme follows the OS; re-tint the Hardware tab icon when the OS switches.
   if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => renderTabs());
   applyTheme(store.get('aiscope.theme', 'default'));
 })();

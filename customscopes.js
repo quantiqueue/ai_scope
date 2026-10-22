@@ -1,4 +1,4 @@
-// Custom scopes (AI_SCOPE-003): user-named pages built from lenses of the app scopes and SYSTEM.
+// Custom scopes (AI_SCOPE-003): user-named pages built from lenses of the app scopes and Hardware.
 // Saved in the data folder as custom-scopes.json, so every browser and the app window see the same ones.
 // Only the layout is stored: [{ id, name, createdAt, lenses: [{ lens: 'strata.requests', settings: {}, row: true? }] }].
 // No dependencies; conservative JS for older Node versions.
@@ -20,6 +20,10 @@ function load() {
     const d = JSON.parse(text);
     if (!d || !Array.isArray(d.scopes)) throw new Error('no "scopes" list');
     scopes = d.scopes.filter(function (s) { return s && /^c-[a-z0-9]+$/.test(s.id) && typeof s.name === 'string' && Array.isArray(s.lenses); });
+    // AI_SCOPE-022: the built-in SYSTEM scope is now "hardware"; move saved lenses over (system.cpu -> hardware.cpu, ...)
+    let moved = 0;
+    scopes.forEach(function (s) { s.lenses.forEach(function (l) { if (l && /^system\./.test(l.lens)) { l.lens = 'hardware.' + l.lens.slice(7); moved++; } }); });
+    if (moved) { save(); console.log('[custom] renamed ' + moved + ' SYSTEM lens(es) to Hardware'); }
   } catch (e) {
     scopes = [];
     const bad = FILE + '.bad-' + new Date().toISOString().replace(/[:.]/g, '-');

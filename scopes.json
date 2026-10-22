@@ -2,8 +2,8 @@
   "_readme": "Scope catalog. Every entry shows up on the Scopes page (+). 'builtin' scopes are always installed. 'modules' are the server-side files (without .js) that collect the data; each exports start(settings) and stop(). 'settings' are asked for when the scope is installed; values are saved in data/installed.json. Field types: text, url, folder, number. In defaults, ~ is the user's home folder and %NAME% an environment variable. The scope's page is the <section data-panel=\"id\"> in web/index.html, its code web/js/<id>.js; a scope without a section gets a placeholder page.",
   "scopes": [
     {
-      "id": "system",
-      "name": "SYSTEM",
+      "id": "hardware",
+      "name": "Hardware",
       "desc": "Live CPU, RAM, GPU and VRAM usage",
       "builtin": true,
       "modules": [],

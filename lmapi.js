@@ -5,7 +5,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const vramFit = require('./sysstats').vramFit;  // VRAM fit vs the largest card
+const vramFit = require('./hwstats').vramFit;  // VRAM fit vs the largest card
 const os = require('os');
 
 // ---------- where each model came from (Hugging Face repo / LM Studio hub) ----------
@@ -163,7 +163,7 @@ function poll() {
   });
 }
 
-// vram: sysstats.vramInfo() (card sizes); LM Studio (llama.cpp) can split a model across cards.
+// vram: hwstats.vramInfo() (card sizes); LM Studio (llama.cpp) can split a model across cards.
 function getState(vram) {
   const loaded = [];
   models.forEach(function (m) {

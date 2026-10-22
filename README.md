@@ -57,12 +57,12 @@ By default only this computer can open the dashboard (`127.0.0.1`). With `--host
 
 | Scope | What it shows |
 |---|---|
-| **SYSTEM** | CPU, RAM, GPU and VRAM usage with 5-minute sparklines |
+| **Hardware** | CPU, RAM, GPU and VRAM usage with 5-minute sparklines |
 | **LM Studio** | Current request (live tok/s), loaded models, request history, installed models |
 | **Ollama** | Current request, loaded models (GPU/CPU split), request history, installed models |
 | **ComfyUI** | Current workflow progress, run history with thumbnails, installed models |
 
-- Click **+** to open the Scopes page. Only **SYSTEM** is installed at first; click **Install** on a scope, check its settings (e.g. the LM Studio folder) and its tab is added. **Remove** takes the tab away and stops that scope; **Settings** changes an installed scope's settings. Click an installed scope to reopen a closed tab.
+- Click **+** to open the Scopes page. Only **Hardware** is installed at first; click **Install** on a scope, check its settings (e.g. the LM Studio folder) and its tab is added. **Remove** takes the tab away and stops that scope; **Settings** changes an installed scope's settings. Click an installed scope to reopen a closed tab.
 - Scopes are listed in **`scopes.json`** (name, description, icon, the server modules that collect its data, and the settings asked at install). Installed scopes and their settings are saved in `~/.ai_scope/installed.json`.
 - Drag tabs to reorder them; close a tab with its **×**. Each browser remembers its own tabs and order.
 - Model and publisher names link to their Hugging Face / Ollama / LM Studio pages (opens a new tab).
@@ -75,7 +75,7 @@ By default only this computer can open the dashboard (`127.0.0.1`). With `--host
 | LM Studio | API at `http://127.0.0.1:1235` (or 1234) + its server logs in `%USERPROFILE%\.lmstudio\apps\bionic\server-logs` | The LM Studio server must be running (Developer tab). Every app using LM Studio is recorded. LM Studio doesn't report GPU offload. |
 | Ollama | API at `http://127.0.0.1:11434` | Request stats only for apps that go through the AI_SCOPE relay — see below. |
 | ComfyUI | API at `http://127.0.0.1:8188` (or 8000) | Runs are saved to `~/.ai_scope/comfy-runs.jsonl`. |
-| System | Node `os` + `nvidia-smi` (or Windows GPU counters) | |
+| Hardware | Node `os` + `nvidia-smi` (or Windows GPU counters) | |
 
 ### Ollama request stats (relay on port 11435)
 
