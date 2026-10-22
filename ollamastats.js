@@ -59,11 +59,16 @@ function loadRequests() {
   try { text = fs.readFileSync(REQ_FILE, 'utf8'); } catch (e) { return; }
   text.split(/\r?\n/).forEach(function (l) {
     if (!l.trim()) return;
-    try { requests.push(JSON.parse(l)); } catch (e) { /* skip bad line */ }
+    try { const r = JSON.parse(l); if (!isEmptyCall(r)) requests.push(r); } catch (e) { /* skip bad line */ }
   });
   requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
   if (requests.length > MAX_IN_MEMORY) requests = requests.slice(-MAX_IN_MEMORY);
   requests.forEach(function (r) { if (r.id >= nextId) nextId = r.id + 1; });
+}
+// Ollama load/unload calls (e.g. the empty /api/generate that `ollama run` sends to load a model)
+// finish OK with no prompt and no output - not a real request, so they are not recorded.
+function isEmptyCall(r) {
+  return r.status === 'ok' && !r.genTokens && !r.promptTokens && !r.thinkTokens;
 }
 function saveRequest(r) {
   requests.push(r);
@@ -234,7 +239,7 @@ function finish(rec, aborted) {
   r.genTps = r.genTokens && r.genMs ? r.genTokens / (r.genMs / 1000) : null;
   r.promptTps = r.promptTokens && r.promptMs ? r.promptTokens / (r.promptMs / 1000) : null;
   r.peak = sysstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
-  if (r.status === 'ok' || rec.tokens || r.error) saveRequest(r);
+  if ((r.status === 'ok' || rec.tokens || r.error) && !isEmptyCall(r)) saveRequest(r);
   if (r.model !== 'unknown' && !installed.some(function (m) { return m.name === r.model; })) tagsAt = 0;
 }
 
