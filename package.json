@@ -1,6 +1,6 @@
 {
   "name": "ai-scope",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "AI_SCOPE: local dashboard for monitoring AI tools (LM Studio, Ollama, ComfyUI, CPU/GPU/VRAM)",
   "keywords": [
     "ai",
