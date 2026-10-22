@@ -28,22 +28,28 @@ defineLens({
       $('model').textContent = '—';
       show('progBox', false); show('rateBox', false); show('timeBox', false);
       $('foot').textContent = d.error || '';
+      $('detail').textContent = '';
       setSysLoad($('load'), false);
     } else if (cur) {
-      $('title').textContent = 'Current job' + (d.pending ? ' (+' + d.pending + ' queued)' : '');
+      // state line: what the workflow is doing (the step count is in the Steps box below, so not repeated here):
+      // "starting" until ComfyUI reports a progress bar, then "sampling", or the node's own label (e.g. "Remesh DC")
+      const pr = cur.progress, doing = !pr ? 'starting' : pr.label && pr.label !== 'Steps' ? pr.label : 'sampling';
+      $('title').textContent = 'Running — ' + doing + (d.pending ? ' (+' + d.pending + ' queued)' : '');
       $('model').textContent = cur.summary.models.join(' + ') || 'unknown';
       const p = cur.progress;
       show('progBox', true); show('rateBox', true); show('timeBox', true);
       $('progLabel').textContent = p && p.label ? p.label : 'Steps';
-      $('prog').textContent = p ? p.value + ' / ' + p.max : 'starting…';
+      $('prog').textContent = p ? p.value + ' / ' + p.max : '…';   // "starting" is on the state line
       $('bar').style.width = p && p.max ? (100 * p.value / p.max) + '%' : '0';
       $('rate').textContent = p && p.itPerSec ? (p.itPerSec >= 1 ? p.itPerSec.toFixed(2) + ' it/s' : (1 / p.itPerSec).toFixed(2) + ' s/it') + (p.remaining ? ' · ~' + p.remaining + ' left' : '') : '—';
       $('timeLabel').textContent = 'Elapsed';
       $('time').textContent = fmtDur(cur.elapsedMs);
       const sm = cur.summary;
       setSysLoad($('load'), true);
-      $('foot').textContent = [sm.width ? sm.width + '×' + sm.height + (sm.batch > 1 ? ' ×' + sm.batch : '') : null,
-        sm.steps ? sm.steps + ' steps' : null, sm.sampler, sm.loras.length ? 'LoRA: ' + sm.loras.join(', ') : null].filter(Boolean).join(' · ') || ' ';
+      // workflow details next to the state on the top line (the step count is already in the Steps box)
+      $('detail').textContent = [sm.width ? sm.width + '×' + sm.height + (sm.batch > 1 ? ' ×' + sm.batch : '') : null,
+        sm.sampler, sm.loras.length ? 'LoRA: ' + sm.loras.join(', ') : null].filter(Boolean).join(' · ');
+      $('foot').textContent = '';
     } else {
       const a = d.average;
       $('title').textContent = 'Idle — no workflow running' + (d.pending ? ' (' + d.pending + ' queued)' : '');
@@ -52,6 +58,7 @@ defineLens({
       $('timeLabel').textContent = a ? 'Avg run time (last ' + a.runs + ' runs)' : 'Avg run time';
       $('time').textContent = a ? fmtDur(a.avgMs) : '—';
       $('foot').textContent = 'Run a workflow in ComfyUI to see live stats.';
+      $('detail').textContent = '';
       setSysLoad($('load'), false);
     }
   },

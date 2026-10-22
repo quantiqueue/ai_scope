@@ -99,7 +99,7 @@ function nowCardMarkup(boxes, title) {
   return `
     ` + lensHeadMarkup(title || 'Current request') + `
     <div class="card now">
-      <div class="now-label"><span class="dot" data-k="dot"></span><span data-k="title">` + (title || 'Current request') + `</span></div>
+      <div class="now-label"><span class="dot" data-k="dot"></span><span data-k="title">` + (title || 'Current request') + `</span><span class="now-detail" data-k="detail"></span></div>
       <div class="now-grid">
         <div><div class="k">Model</div><div class="v model" data-k="model">—</div></div>` + boxes.map(box).join('') + `
       </div>

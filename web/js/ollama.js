@@ -62,18 +62,21 @@ defineLens({
       $('model').textContent = ONONE;
       show('tpsBox', false); show('tokBox', false); show('timeBox', false);
       $('foot').textContent = d.error || '';
+      $('detail').textContent = '';
       $('foot').classList.remove('warn');
       setSysLoad($('load'), false);
     } else if (cur) {
-      $('title').textContent = 'Current request' + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
+      // state line: what the request is doing (the lens title is in the header tab)
+      const doing = { loading:'loading model', prompt:'reading prompt', thinking:'thinking', gen:'generating' }[cur.phase] || 'working';
+      $('title').textContent = 'Running — ' + doing + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
       $('model').textContent = cur.model;
       show('tpsBox', true); show('tokBox', true); show('timeBox', true);
-      const labels = { loading:'Loading model', prompt:'Reading prompt', thinking:'Thinking · tok/s', gen:'Current gen tok/s' };
-      $('tpsLabel').textContent = labels[cur.phase] || 'Current gen tok/s';
+      $('tpsLabel').textContent = 'Current gen tok/s';   // the phase (loading / reading prompt / thinking) is on the state line
       $('tps').textContent = (cur.phase === 'gen' || cur.phase === 'thinking') && cur.liveTps != null ? fmtTps(cur.liveTps) : '…';
       $('tok').textContent = fmtNum(cur.tokens) + (cur.thinkTokens ? ' (' + fmtNum(cur.thinkTokens) + ' thinking)' : '');
       $('time').textContent = fmtSec(cur.elapsedMs);
-      $('foot').textContent = cur.endpoint + ' via AI_SCOPE proxy';
+      $('detail').textContent = cur.endpoint + ' via AI_SCOPE relay';   // details next to the state on the top line
+      $('foot').textContent = '';
       $('foot').classList.remove('warn');
       setSysLoad($('load'), true);
     } else {
@@ -85,8 +88,9 @@ defineLens({
       $('tps').textContent = a ? fmtTps(a.genTps) : ONONE;
       const u = ollamaDirectUse(d);
       $('foot').textContent = u ? '⚠ Ollama answered a request at ' + fmtWhen(u.at) + ' (' + u.model + ') that didn\'t go through the AI_SCOPE relay, so it isn\'t recorded. Point apps at ' + ollamaProxyUrl(d) + ' (see ? in Requests).'
-        : 'Requests are recorded when apps talk to ' + ollamaProxyUrl(d) + ' (forwards to Ollama).';
+        : 'Send a request through the AI_SCOPE relay (' + ollamaProxyUrl(d) + ') to see live stats.';
       $('foot').classList.toggle('warn', !!u);
+      $('detail').textContent = '';
       setSysLoad($('load'), false);
     }
   },

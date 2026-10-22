@@ -32,7 +32,11 @@ defineLens({
       $('foot').textContent = d.error || '';
       setSysLoad($('load'), false);
     } else if (cur) {
-      $('title').textContent = 'Current request' + (cur.queued ? ' (+' + cur.queued + ' queued)' : '');
+      // state line: what the request is doing (the lens title is in the header tab)
+      // Strata's own wording when it has one ("reading the prompt", "writing a tool call: glob"), else from the phase
+      const doing = cur.phaseText ? cur.phaseText.charAt(0).toLowerCase() + cur.phaseText.slice(1)
+        : { loading:'loading model', reading:'reading prompt', thinking:'thinking', generating:'generating' }[cur.phase] || 'working';
+      $('title').textContent = 'Running — ' + doing + (cur.queued ? ' (+' + cur.queued + ' queued)' : '');
       $('model').textContent = cur.model;
       boxes.forEach(b => show(b, true));
       const reading = cur.phase === 'reading' || cur.phase === 'loading';
@@ -47,7 +51,7 @@ defineLens({
       $('ctx').textContent = cur.contextUsed != null ? fmtK(cur.contextUsed) + (cur.contextMax ? ' / ' + fmtCtx(cur.contextMax) : '') : ONONE;
       $('ctxBar').style.width = cur.contextUsed != null && cur.contextMax ? Math.min(100, 100 * cur.contextUsed / cur.contextMax) + '%' : '0';
       $('time').textContent = fmtSec(cur.elapsedMs);
-      $('foot').textContent = cur.phaseText ? cur.phaseText.charAt(0).toUpperCase() + cur.phaseText.slice(1) : ' ';
+      $('foot').textContent = '';   // the state is on the top line (an empty foot line is hidden)
       setSysLoad($('load'), true);
     } else {
       const a = d.average, l = d.loaded;
@@ -57,7 +61,10 @@ defineLens({
       show('tpsBox', !!a);
       $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
       $('tps').textContent = a ? fmtTps(a.genTps) : ONONE;
-      $('foot').textContent = l ? ' ' : 'Load a model in Strata to see live stats.';
+      // what to do to see live stats: load a model, then send a message
+      $('foot').textContent = !l ? 'Load a model in Strata to see live stats.'
+        : l.phase === 'unavailable' ? 'Strata\'s engine isn\'t answering. Check the Strata app.'
+        : 'Send a message in Strata (or a request to its API) to see live stats.';
       setSysLoad($('load'), false);
     }
   },

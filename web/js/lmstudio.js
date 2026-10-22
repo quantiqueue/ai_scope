@@ -19,21 +19,23 @@ defineLens({
     const $ = L.$, cur = data.current, avg = data.average;
     $('dot').className = 'dot' + (cur ? ' live' : '');
     if (cur) {
-      $('title').textContent = 'Current request' + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
+      // state line from LM Studio's server log: starting -> reading prompt (n%) -> generating (no "thinking" or model loading in the log)
+      const doing = cur.phase === 'gen' ? 'generating' : cur.progress > 0 && cur.progress < 1 ? 'reading prompt' : 'starting';   // the % is in the box below
+      $('title').textContent = 'Running — ' + doing + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
       $('model').textContent = cur.model;
       if (cur.phase === 'gen' && cur.genTps != null) {
         $('tpsLabel').textContent = 'Current gen tok/s';
         $('tps').textContent = fmtTps(cur.genTps);
       } else {
         const reading = cur.phase === 'prompt' && cur.progress < 1;
-        $('tpsLabel').textContent = reading ? 'Reading prompt' : 'Current gen tok/s';
-        $('tps').textContent = reading ? Math.round(cur.progress * 100) + '%' : 'starting…';
+        $('tpsLabel').textContent = reading ? 'Prompt read' : 'Current gen tok/s';
+        $('tps').textContent = reading ? Math.round(cur.progress * 100) + '%' : '…';   // the state ("starting") is on the state line
       }
       $('timeBox').hidden = false;
       $('time').textContent = fmtSec(cur.elapsedMs);
       $('tokBox').hidden = !(cur.phase === 'gen' && cur.genTokens);
       $('tok').textContent = fmtNum(cur.genTokens);
-      $('foot').textContent = ' ';
+      $('foot').textContent = '';   // the state is on the top line (an empty foot line is hidden)
       setSysLoad($('load'), true);
     } else {
       $('title').textContent = 'Idle — no request running';
@@ -44,7 +46,11 @@ defineLens({
       $('tokBox').hidden = true;
       // like Strata's card: a hint while no model is loaded (loaded models come from LM Studio's API, the other source)
       const models = SOURCES['lmstudio.models'].data;
-      $('foot').textContent = models && models.loaded && !models.loaded.length ? 'Load a model in LM Studio to see live stats.' : ' ';
+      // what to do to see live stats: start the server, load a model, then send a request
+      $('foot').textContent = !models || !models.loaded ? ' '
+        : !models.online ? 'Start the LM Studio server to see live stats.'
+        : !models.loaded.length ? 'Load a model in LM Studio to see live stats.'
+        : 'Send a request to the LM Studio server to see live stats.';
       setSysLoad($('load'), false);
     }
   },

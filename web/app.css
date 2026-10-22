@@ -376,3 +376,14 @@
   .copybtn { font:inherit; font-size:.7rem; font-weight:600; margin-left:4px; padding:1px 7px; border-radius:5px; border:1px solid var(--line); background:var(--card); color:var(--muted); cursor:pointer; vertical-align:middle; }
   .copybtn:hover { color:var(--accent); border-color:var(--accent); }
   .copybtn.ok { color:var(--good); border-color:var(--good); }
+  /* custom scopes: lenses side by side in a row get the same height (cards stretch to the tallest in the row) */
+  .cgrid { align-items:stretch; }
+  .lframe { display:flex; flex-direction:column; }
+  .lframe > .lbody, .lframe .lens, .lframe .tilebox { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .lframe .lens > .card.now, .lframe .tilebox > .tile { flex:1; }
+  .lframe .lens > .tgroup { flex:1; }
+  .countdown:empty { display:none; }   /* running-request cards: no bottom line when there's nothing to say */
+  /* running-request cards: details after the state on the top line (ComfyUI: size · sampler · LoRA) */
+  .now-detail { text-transform:none; letter-spacing:0; font-weight:400; color:var(--muted); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .now-detail:empty { display:none; }
+  .now-detail::before { content:'·'; margin-right:8px; }
