@@ -92,7 +92,6 @@
   [data-theme="eva"] .home .sub { color:#ff9f2e; }
   [data-theme="eva"] .home .go { color:#efe6fb; border-color:rgba(169,147,196,.3); background:rgba(8,4,13,.5); }
   [data-theme="eva"] .home .go:hover, [data-theme="eva"] .home .go:focus-visible { border-color:#9be33c; background:rgba(60,30,90,.55); }
-  [data-theme="eva"] .brand span { color:#ff9f2e; }
   [data-theme="eva"] .brand, [data-theme="eva"] h1 { text-shadow:0 0 12px rgba(140,80,200,.35); }
   .gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows:1fr; gap:16px; } /* every card the same size */
   .square { min-height:200px; /* height comes from the grid row (tallest card), so all match */ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px;
