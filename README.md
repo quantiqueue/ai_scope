@@ -52,4 +52,4 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 
 [MIT](LICENSE)
 
-The app logos shown in AI_SCOPE (and the fallback copies in `assets/logos`) belong to their projects and are used only to show which app a scope watches.
+The app logos shown in AI_SCOPE (and the fallback copies in `assets/logos`) belong to their projects and are used only to show which app a scope watches. AI_SCOPE is not affiliated with or endorsed by these projects.
