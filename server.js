@@ -159,8 +159,9 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(lmapi.getRaw(), null, 2));
   }
-  if (url.pathname === '/api/logo/strata') {   // Strata's mark, served by the running Strata app (SVG)
-    const svg = stratastats.getLogo(url.searchParams.get('theme'));
+  if (url.pathname === '/api/logo/strata') {   // Strata's mark (SVG): its install folder, else the running app, else our copy
+    const theme = url.searchParams.get('theme');
+    const svg = logos.getSvg('strata', theme) || stratastats.getLogo(theme) || logos.fallbackSvg('strata', theme);
     if (!svg) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no logo'); }
     res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=3600' });
     return res.end(svg);

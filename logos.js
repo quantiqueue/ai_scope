@@ -1,6 +1,7 @@
-// App logos for the tabs and Scopes page, read at runtime from the apps' own install folders
-// (nothing is copied into AI_SCOPE). Missing app or unknown format -> 404, and the UI falls back to its SVG icon.
-// Override paths with OLLAMA_ICON / LMSTUDIO_ICON / COMFY_ASAR. No dependencies; conservative JS.
+// App logos for the tabs and Scopes page, read at runtime from the apps' own install folders. When an app's logo
+// can't be read (app not installed here, moved, new format), a copy kept in assets/logos/ is used instead (see the
+// README there); only if that is missing too -> 404, and the UI falls back to the scope's SVG icon.
+// Override paths with OLLAMA_ICON / LMSTUDIO_ICON / COMFY_ASAR / STRATA_BRAND (folder). No dependencies; conservative JS.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -12,8 +13,18 @@ const SOURCES = {
   lmstudio: { type: 'ico',  file: process.env.LMSTUDIO_ICON || path.join(PROGRAMS, 'Bionic', 'resources', 'icon.ico') },
   comfyui:  { type: 'asar', file: process.env.COMFY_ASAR    || path.join(PROGRAMS, 'Comfy Desktop', 'resources', 'app.asar'),
               entry: ['assets', 'Comfy_Logo_x256.png'] },
+  // Strata ships its mark as SVG in two versions: dark bars for light backgrounds, light bars for dark backgrounds.
+  strata:   { type: 'svg', dir: process.env.STRATA_BRAND || path.join(PROGRAMS, 'Strata', 'host', 'dist', 'brand'),
+              files: { light: 'strata-mark-light.svg', dark: 'strata-mark-dark.svg' } },
 };
 const cache = {};   // id -> { mtime, png } (png null = not available)
+const FALLBACK_DIR = path.join(__dirname, 'assets', 'logos');   // bundled copies: <id>.png, strata-light/dark.svg
+function fallback(name) { try { return fs.readFileSync(path.join(FALLBACK_DIR, name)); } catch (e) { return null; } }
+function fallbackPng(id) { const b = fallback(id + '.png'); return b && b.length > 8 && b.readUInt32BE(0) === 0x89504e47 ? b : null; }
+function fallbackSvg(id, theme) {
+  const b = fallback(id + '-' + (theme === 'dark' ? 'dark' : 'light') + '.svg') || fallback(id + '-' + (theme === 'dark' ? 'light' : 'dark') + '.svg');
+  return b && /<svg[\s>]/.test(String(b)) ? String(b) : null;
+}
 
 // Largest PNG image inside a .ico file (modern .ico files store the big sizes as PNG).
 function pngFromIco(buf) {
@@ -48,9 +59,33 @@ function fileFromAsar(file, entry) {
   } finally { fs.closeSync(fd); }
 }
 
-function getLogo(id) {
+// SVG logo for a light or dark background (theme 'dark' = the version for dark backgrounds). Embedded metadata is
+// dropped (Strata's files carry a large signed-provenance block). Returns a string or null.
+function getSvg(id, theme) {
   const src = SOURCES[id];
-  if (!src) return null;
+  if (!src || src.type !== 'svg') return null;
+  const want = theme === 'dark' ? ['dark', 'light'] : ['light', 'dark'];   // fall back to the other version
+  for (let i = 0; i < want.length; i++) {
+    const file = path.join(src.dir, src.files[want[i]]), key = id + ':' + want[i];
+    let st;
+    try { st = fs.statSync(file); } catch (e) { continue; }
+    const c = cache[key];
+    if (c && c.mtime === st.mtimeMs) { if (c.svg) return c.svg; continue; }
+    let svg = null;
+    try {
+      const text = fs.readFileSync(file, 'utf8');
+      if (/<svg[\s>]/.test(text) && text.length < 500000) svg = text.replace(/<metadata>[\s\S]*?<\/metadata>/g, '');
+    } catch (e) { svg = null; }
+    cache[key] = { mtime: st.mtimeMs, svg: svg };
+    if (svg) return svg;
+  }
+  return null;
+}
+
+function getLogo(id) { return liveLogo(id) || fallbackPng(id); }   // PNG: the app's own, else the bundled copy
+function liveLogo(id) {
+  const src = SOURCES[id];
+  if (!src || src.type === 'svg') return null;
   let st;
   try { st = fs.statSync(src.file); } catch (e) { return null; }
   const c = cache[id];
@@ -65,11 +100,18 @@ function getLogo(id) {
   return png;
 }
 
-function serve(id, res) {
+function serve(id, res, theme) {
+  const src = SOURCES[id];
+  if (src && src.type === 'svg') {
+    const svg = getSvg(id, theme) || fallbackSvg(id, theme);
+    if (!svg) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no logo'); }
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=3600' });
+    return res.end(svg);
+  }
   const png = getLogo(id);
   if (!png) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no logo'); }
   res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'max-age=3600' });
   res.end(png);
 }
 
-module.exports = { serve: serve, getLogo: getLogo };
+module.exports = { serve: serve, getLogo: getLogo, getSvg: getSvg, fallbackSvg: fallbackSvg };

@@ -47,6 +47,7 @@ function scopeTag(box, sid) {
     if (sc.logo) {   // the app's logo once it loads (Strata's only exists while Strata runs); the scope icon until then
       const img = new Image();
       img.alt = '';
+      img.dataset.logo = sid;
       img.onload = () => { const ic = chip.querySelector('svg'); if (ic) ic.replaceWith(img); else chip.prepend(img); };
       img.src = logoUrl(sid);
     }
@@ -355,6 +356,11 @@ function openLensSettings(id, lensId, index) {
   if (!lensDlg.open) lensDlg.showModal();
   lensForm.querySelector('[type=submit]').focus();
 }
+
+// Theme switch: chips switch to the logo version for the new background (Strata has one per light/dark).
+function refreshChipLogos() { document.querySelectorAll('.lchip img[data-logo]').forEach(img => { const u = logoUrl(img.dataset.logo); if (img.getAttribute('src') !== u) img.src = u; }); }
+new MutationObserver(refreshChipLogos).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', refreshChipLogos);
 
 CUSTOM_HOOKS.push(syncCustom);
 syncCustom();
