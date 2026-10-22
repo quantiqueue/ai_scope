@@ -31,15 +31,15 @@ function ensurePanel(sc) {
 SCOPES.forEach(ensurePanel);
 
 const DEFAULT_SCOPE = 'lmstudio';
-const installedIds = () => SCOPES.filter(x => x.installed).map(x => x.id);
-// Which tabs are open, in what order (per browser). Default: all installed scopes.
-let openTabs = store.get('aiscope.openTabs', installedIds()).filter(isInstalled);
+const installedIds = () => SCOPES.filter(x => x.installed).map(x => x.id).concat(CUSTOM.map(c => c.id));   // + custom scopes
+// Which tabs are open, in what order (per browser). Default: all installed scopes (and custom scopes).
+let openTabs = store.get('aiscope.openTabs', installedIds()).filter(canOpen);
 // Drop tabs of removed scopes; scopes installed since this browser last looked (e.g. from another device) open once.
 function syncOpenTabs() {
   const ids = installedIds();
   const seen = store.get('aiscope.seenScopes', null);
   if (seen) ids.filter(id => !seen.includes(id) && !openTabs.includes(id)).forEach(id => openTabs.push(id));
-  openTabs = openTabs.filter(isInstalled);
+  openTabs = openTabs.filter(canOpen);
   store.set('aiscope.seenScopes', ids);
   store.set('aiscope.openTabs', openTabs);
 }
@@ -184,12 +184,13 @@ if (window.matchMedia) {   // Default theme follows the OS: redraw the logos whe
 
 function renderTabs() {
   document.getElementById('tabs').innerHTML = openTabs.map(id => {
-    const sc = scopeById(id);
+    const cs = customById(id);
+    const sc = cs ? { name: cs.name, icon: CUSTOM_ICON } : scopeById(id);
     if (!sc) return '';
     // app logo, or the scope's own SVG icon (accent colored) when the app has none
     const bg = LOGO_OK[id] ? 'url(' + logoUrl(id) + ')' : sc.icon ? svgUri(sc.icon) : '';
     const logo = bg ? ' has-logo" style="--logo:' + bg : '';
-    return '<a class="tab" href="#' + id + '" data-tab="' + id + '" draggable="true" title="Drag to reorder"><span class="tname' + logo + '">' + escH(sc.name) + '</span>' +
+    return '<a class="tab' + (cs ? ' custom' : '') + '" href="#' + id + '" data-tab="' + id + '" draggable="true" title="' + (cs ? 'Custom scope · ' : '') + 'Drag to reorder"><span class="tname' + logo + '">' + escH(sc.name) + '</span>' +
            '<span class="x" data-close="' + id + '" title="Close tab">&times;</span></a>';
   }).join('');
   showTab();
@@ -209,6 +210,7 @@ function showTab() {
   document.getElementById('addBtn').classList.toggle('active', gallery);
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.panel').forEach(p => { p.hidden = p.dataset.panel !== name; });
+  if (gallery) equalizeSquares();   // needs the page shown to measure the cards
   document.getElementById('noTabs').hidden = gallery || home || openTabs.length > 0;
   // "Open dashboard" goes to the first open tab (or the Scopes gallery when none are open)
   document.getElementById('homeGo').setAttribute('href', '#' + (openTabs[0] || 'scopes'));
@@ -216,7 +218,7 @@ function showTab() {
 }
 
 function openScope(id) {
-  if (!isInstalled(id)) return openInstall(id);
+  if (!canOpen(id)) return openInstall(id);
   if (!openTabs.includes(id)) {
     openTabs.push(id);   // new tabs go on the right; the order is whatever the user dragged it to
     store.set('aiscope.openTabs', openTabs);
@@ -277,30 +279,72 @@ function scopeIcon(sc, cls) {
   return (sc.logo && LOGO_OK[sc.id]) ? '<div class="' + cls + ' logo"><img src="' + logoUrl(sc.id) + '" alt=""></div>'
                                      : '<div class="' + cls + '">' + (sc.icon || '') + '</div>';
 }
+// Three sections: installable scopes (installed first), built-in scopes, custom scopes (+ "Create Custom Scope").
+function scopeSquare(sc) {
+  let foot;
+  if (sc.builtin) foot = '<span class="badge builtin">Built in</span>';
+  else if (sc.installed) foot = '<span class="badge">Installed</span><div class="row"><button class="removebtn" data-remove="' + sc.id + '">Remove</button>' +
+    (sc.settings.length ? '<button class="linkbtn" data-settings="' + sc.id + '">Settings</button>' : '') + '</div>';
+  else foot = '<span class="badge avail">Available</span><button class="installbtn" data-install="' + sc.id + '">Install</button>';
+  if (sc.error) foot = '<span class="scerr" title="' + escH(sc.error) + '">Failed to start: ' + escH(sc.error) + '</span>' + foot;
+  return '<div class="square' + (sc.installed ? '' : ' off') + '" data-scope="' + sc.id + '" title="' + (sc.installed ? 'Open ' : 'Install ') + escH(sc.name) + '">' +
+    scopeIcon(sc, 'icon') +
+    '<div class="name">' + escH(sc.name) + '</div>' +
+    '<div class="desc" title="' + escH(sc.desc) + '">' + escH(sc.desc) + '</div>' +
+    '<div class="foot">' + foot + '</div></div>';
+}
+// "3 lenses from Strata, Ollama" — names of the scopes a custom scope borrows from.
+function customDesc(cs) {
+  if (!cs.lenses.length) return 'Empty. Open it to add lenses.';
+  const names = [];
+  cs.lenses.forEach(l => {
+    const sid = l.lens.split('.')[0], sc = scopeById(sid), n = sc ? sc.name : sid;
+    if (!names.includes(n)) names.push(n);
+  });
+  return cs.lenses.length + ' lens' + (cs.lenses.length > 1 ? 'es' : '') + ' from ' + names.join(', ');
+}
+function customSquare(cs) {
+  const desc = customDesc(cs);
+  return '<div class="square custom" data-scope="' + cs.id + '" title="Open ' + escH(cs.name) + '">' +
+    '<div class="icon">' + CUSTOM_ICON + '</div>' +
+    '<div class="name">' + escH(cs.name) + '</div>' +
+    '<div class="desc" title="' + escH(desc) + '">' + escH(desc) + '</div>' +
+    '<div class="foot"><span class="badge custom">Custom</span><div class="row"><button class="removebtn" data-cs-remove="' + cs.id + '">Remove</button>' +
+    '<button class="linkbtn" data-cs-settings="' + cs.id + '">Settings</button></div></div></div>';
+}
 function renderGallery() {
-  const html = SCOPES.map(sc => {
-    let foot;
-    if (sc.builtin) foot = '<span class="badge builtin">Built in</span>';
-    else if (sc.installed) foot = '<span class="badge">Installed</span><div class="row"><button class="removebtn" data-remove="' + sc.id + '">Remove</button>' +
-      (sc.settings.length ? '<button class="linkbtn" data-settings="' + sc.id + '">Settings</button>' : '') + '</div>';
-    else foot = '<button class="installbtn" data-install="' + sc.id + '">Install</button>';
-    if (sc.error) foot = '<span class="scerr" title="' + escH(sc.error) + '">Failed to start: ' + escH(sc.error) + '</span>' + foot;
-    return '<div class="square' + (sc.installed ? '' : ' off') + '" data-scope="' + sc.id + '" title="' + (sc.installed ? 'Open ' : 'Install ') + escH(sc.name) + '">' +
-      scopeIcon(sc, 'icon') +
-      '<div class="name">' + escH(sc.name) + '</div>' +
-      '<div class="desc" title="' + escH(sc.desc) + '">' + escH(sc.desc) + '</div>' +
-      '<div class="foot">' + foot + '</div></div>';
-  }).join('');
+  const apps = SCOPES.filter(sc => !sc.builtin);
+  const installable = apps.filter(sc => sc.installed).concat(apps.filter(sc => !sc.installed));
+  const sect = (title, hint, cards) => '<div class="gsec"><h2>' + title + (hint ? ' <span class="hint">' + hint + '</span>' : '') + '</h2>' +
+    '<div class="gallery">' + cards + '</div></div>';
+  const create = '<div class="square create" data-create title="Create a custom scope"><div class="icon">+</div>' +
+    '<div class="name">Create Custom Scope</div><div class="desc">Pick lenses from any scope and put them on one page.</div></div>';
+  const html = sect('Installable scopes', 'Install a scope to add its tab', installable.map(scopeSquare).join('')) +
+    sect('Built-in scopes', '', SCOPES.filter(sc => sc.builtin).map(scopeSquare).join('')) +
+    sect('Custom scopes', CUSTOM.length ? '' : 'Combine lenses from any scope on one page', create + CUSTOM.map(customSquare).join(''));
   const g = document.getElementById('gallery');
   if (g._html !== html) { g._html = html; g.innerHTML = html; }   // only redraw when it changes, so clicks aren't lost
+  equalizeSquares();
 }
+// Every card on the Scopes page as tall as the tallest one, across all three sections (each section is its own grid).
+function equalizeSquares() {
+  const sq = [...document.querySelectorAll('#gallery .square')];
+  if (!sq.length || !sq[0].offsetParent) return;   // page not shown
+  sq.forEach(x => { x.style.height = ''; });
+  const h = Math.max(...sq.map(x => x.offsetHeight));
+  sq.forEach(x => { x.style.height = h + 'px'; });
+}
+window.addEventListener('resize', equalizeSquares);
 document.getElementById('gallery').addEventListener('click', e => {
-  const b = e.target.closest('[data-install],[data-remove],[data-settings]');
+  const b = e.target.closest('[data-install],[data-remove],[data-settings],[data-cs-remove],[data-cs-settings],[data-create]');
   if (b) {
     e.stopPropagation();
     if (b.dataset.install) openInstall(b.dataset.install);
     else if (b.dataset.remove) openRemove(b.dataset.remove);
-    else openInstall(b.dataset.settings, true);
+    else if (b.dataset.settings) openInstall(b.dataset.settings, true);
+    else if (b.dataset.csRemove) openCustomRemove(b.dataset.csRemove);
+    else if (b.dataset.csSettings) openCustomName(b.dataset.csSettings);
+    else openCustomName(null);
     return;
   }
   const sq = e.target.closest('[data-scope]');
@@ -314,11 +358,19 @@ function applyScopes(list) {
   syncOpenTabs();
   renderTabs();
 }
+// New custom scope list (after create/rename/remove/save, or changed from another browser).
+function applyCustom(list) {
+  setCustom(list);
+  syncOpenTabs();
+  renderTabs();
+}
 setInterval(async () => {
   if (dlg.open) return;
   try {
     const list = await (await fetch('/api/scopes', { cache: 'no-store' })).json();
     if (JSON.stringify(list) !== JSON.stringify(SCOPES)) applyScopes(list);
+    const custom = await (await fetch('/api/custom-scopes', { cache: 'no-store' })).json();
+    if (JSON.stringify(custom) !== JSON.stringify(CUSTOM)) applyCustom(custom);
   } catch (e) {}
 }, 5000);
 
@@ -400,6 +452,71 @@ function openRemove(id) {
     try { r = await postScope('remove', { id: id }); }
     catch (e) { r = { ok: false, error: 'Could not reach AI_SCOPE: ' + e.message }; }
     if (r.ok) { dlg.close(); applyScopes(r.scopes); return; }
+    const b = dlgForm.querySelector('[type=submit]');
+    b.disabled = false; b.textContent = 'Remove';
+    const fe = dlgForm.querySelector('.formerr'); fe.textContent = r.error || 'Failed'; fe.hidden = false;
+  };
+  dlg.showModal();
+  dlgForm.querySelector('[data-cancel]').focus();
+}
+
+// ---- Custom scopes: create / settings (name) / remove, in the same dialog ----
+async function postCustom(action, body) {
+  const r = await fetch('/api/custom-scopes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return r.json();
+}
+// id = null: create a new custom scope (then open it, in edit mode since it's empty); else rename it.
+function openCustomName(id) {
+  const cs = id ? customById(id) : null;
+  if (id && !cs) return;
+  const title = cs ? cs.name + ' settings' : 'Create Custom Scope';
+  dlgForm.innerHTML = dlgTitle({ icon: CUSTOM_ICON }, title) +
+    '<p class="lead">' + (cs ? 'The name shows on its tab and on the Scopes page.'
+      : 'Name your scope, then add lenses from any installed scope to it. It opens as a new tab.') + '</p>' +
+    fieldHtml({ key: 'name', label: 'Name', type: 'text', required: true, placeholder: 'e.g. My LLMs', value: cs ? cs.name : '', default: '' }, !!cs) +
+    '<div class="formerr" hidden></div>' +
+    '<div class="actions"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">' + (cs ? 'Save' : 'Create') + '</button></div>';
+  dlgSubmit = async () => {
+    const name = dlgForm.querySelector('[name=name]').value;
+    dlgForm.querySelectorAll('.ferr, .formerr').forEach(x => { x.hidden = true; });
+    dlgForm.querySelectorAll('input').forEach(i => i.classList.remove('bad'));
+    dlgBusy(cs ? 'Saving…' : 'Creating…');
+    let r;
+    try { r = await postCustom(cs ? 'update' : 'create', cs ? { id: id, name: name } : { name: name }); }
+    catch (e) { r = { ok: false, error: 'Could not reach AI_SCOPE: ' + e.message }; }
+    if (r.ok) {
+      dlg.close();
+      applyCustom(r.custom);
+      if (!cs) openScope(r.id);   // add the tab and switch to it
+      else renderGallery();
+      return;
+    }
+    const b = dlgForm.querySelector('[type=submit]');
+    b.disabled = false; b.textContent = cs ? 'Save' : 'Create';
+    if (r.errors && r.errors.name) {
+      const el = dlgForm.querySelector('[data-err="name"]');
+      el.textContent = r.errors.name; el.hidden = false;
+      dlgForm.querySelector('[name=name]').classList.add('bad');
+    }
+    if (r.error) { const fe = dlgForm.querySelector('.formerr'); fe.textContent = r.error; fe.hidden = false; }
+  };
+  dlg.showModal();
+  const inp = dlgForm.querySelector('[name=name]');
+  inp.focus(); inp.select();
+}
+function openCustomRemove(id) {
+  const cs = customById(id);
+  if (!cs) return;
+  dlgForm.innerHTML = dlgTitle({ icon: CUSTOM_ICON }, 'Remove ' + cs.name + '?') +
+    '<p class="lead">Its tab closes and its layout is deleted. The scopes it borrows lenses from aren&#39;t affected.</p>' +
+    '<div class="formerr" hidden></div>' +
+    '<div class="actions"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn danger">Remove</button></div>';
+  dlgSubmit = async () => {
+    dlgBusy('Removing…');
+    let r;
+    try { r = await postCustom('remove', { id: id }); }
+    catch (e) { r = { ok: false, error: 'Could not reach AI_SCOPE: ' + e.message }; }
+    if (r.ok) { dlg.close(); applyCustom(r.custom); renderGallery(); return; }
     const b = dlgForm.querySelector('[type=submit]');
     b.disabled = false; b.textContent = 'Remove';
     const fe = dlgForm.querySelector('.formerr'); fe.textContent = r.error || 'Failed'; fe.hidden = false;

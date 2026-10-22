@@ -83,13 +83,21 @@ function mountScopePage(scope, ids) {
 // The LLM scopes (Strata, Ollama, LM Studio, later llama.cpp) and ComfyUI draw the same kinds of cards;
 // these build their markup so every lens looks alike. Parts are marked data-k for lens.$().
 
-// "Current request" card (wide; ComfyUI: title "Current job"). boxes after "Model": { box, label, labelK, k, small, bar }
+// Lens header (every lens): a tab docked to the top edge of the lens card with the lens title; on custom scopes
+// custom.js adds the scope chip (logo + name) to the tab. extra = HTML on the same line after the tab (hints, buttons).
+function lensHeadMarkup(title, extra) {
+  return '<div class="lhead"><span class="ltab"><span class="ltitle">' + title + '</span></span>' + (extra || '') + '</div>';
+}
+
+// "Current request" card (wide; ComfyUI: title "Current job"). The header tab always shows the title; the card's
+// first line shows the state (dot + "Idle — no request running" / "Strata is not running" / …). boxes after "Model": { box, label, labelK, k, small, bar }
 //   box = data-k of the whole box (to hide it), labelK = data-k of the label (when it changes), bar = data-k of a progress bar.
 function nowCardMarkup(boxes, title) {
   const box = b => '\n        <div' + (b.box ? ' data-k="' + b.box + '"' : '') + '><div class="k"' + (b.labelK ? ' data-k="' + b.labelK + '"' : '') + '>' + b.label + '</div>' +
     '<div class="v' + (b.small ? ' small' : '') + '" data-k="' + b.k + '">—</div>' +
     (b.bar ? '\n          <div class="pbar"><div data-k="' + b.bar + '"></div></div>' : '') + '</div>';
   return `
+    ` + lensHeadMarkup(title || 'Current request') + `
     <div class="card now">
       <div class="now-label"><span class="dot" data-k="dot"></span><span data-k="title">` + (title || 'Current request') + `</span></div>
       <div class="now-grid">
@@ -101,12 +109,12 @@ function nowCardMarkup(boxes, title) {
 }
 // Table lens (full width): heading + card with a table (+ empty-state box) (+ pager).
 //   o = { title, hint (static HTML; '' = none; default an empty data-k="hint"), headExtra (HTML after the hint, e.g. a ? button),
-//         before (HTML between heading and card), cols ([header HTML]), foot (HTML under the table;
+//         before (HTML at the top of the card, above the table: filter chips, help box), cols ([header HTML]), foot (HTML under the table;
 //         default an empty-state box data-k="empty"), pager (bool) }
 function tableLensMarkup(o) {
   return `
-    <div class="blockhead">` + o.title + (o.hint === '' ? '' : ' ' + (o.hint != null ? o.hint : '<span class="hint" data-k="hint"></span>')) + (o.headExtra || '') + `</div>` + (o.before || '') + `
-    <div class="card">
+    ` + lensHeadMarkup(o.title, (o.hint === '' ? '' : o.hint != null ? o.hint : '<span class="hint" data-k="hint"></span>') + (o.headExtra || '')) + `
+    <div class="card">` + (o.before || '') + `
       <table>
         <thead><tr>` + o.cols.map(c => '<th>' + c + '</th>').join('') + `</tr></thead>
         <tbody data-k="rows"></tbody>

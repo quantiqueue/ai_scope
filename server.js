@@ -11,6 +11,7 @@ const ollamastats = require('./ollamastats');
 const stratastats = require('./stratastats');
 const lmapi = require('./lmapi');
 const scopes = require('./scopes');
+const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
 sysstats.start();   // SYSTEM is built in (its VRAM total is also used by the other scopes)
 scopes.init();      // starts the modules of every installed scope (scopes.json + data/installed.json)
 
@@ -81,7 +82,8 @@ function readJson(req, cb) {
 // The installed scopes go into the page itself, so the first render already shows the right tabs.
 function pageHtml() {
   const html = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8');
-  return html.split('/*__SCOPES__*/[]').join(JSON.stringify(scopes.list()).replace(/</g, '\\u003c'));
+  const js = v => JSON.stringify(v).replace(/</g, '\\u003c');
+  return html.split('/*__SCOPES__*/[]').join(js(scopes.list())).split('/*__CUSTOM__*/[]').join(js(customscopes.list()));
 }
 
 http.createServer((req, res) => {
@@ -111,6 +113,17 @@ http.createServer((req, res) => {
       if (!body || !body.id) return sendJson(res, 400, { ok: false, error: 'Bad request' });
       const r = url.pathname.slice(-7) === 'install' ? scopes.install(String(body.id), body.settings || {}) : scopes.remove(String(body.id));
       r.scopes = scopes.list();
+      sendJson(res, r.ok ? 200 : 400, r);
+    });
+  }
+  // Custom scopes: list, create { name }, update { id, name?, lenses? }, remove { id }. Answers carry the new list.
+  if (url.pathname === '/api/custom-scopes' && req.method === 'GET') return sendJson(res, 200, customscopes.list());
+  const cAction = /^\/api\/custom-scopes\/(create|update|remove)$/.exec(url.pathname);
+  if (cAction && req.method === 'POST') {
+    return readJson(req, body => {
+      if (!body) return sendJson(res, 400, { ok: false, error: 'Bad request' });
+      const r = customscopes[cAction[1]](body);
+      r.custom = customscopes.list();
       sendJson(res, r.ok ? 200 : 400, r);
     });
   }

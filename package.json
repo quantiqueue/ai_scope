@@ -35,6 +35,7 @@
     "server.js",
     "scopes.js",
     "scopes.json",
+    "customscopes.js",
     "paths.js",
     "sysstats.js",
     "lmstats.js",

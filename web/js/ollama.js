@@ -82,7 +82,7 @@ defineLens({
   description: 'Finished requests sent through the AI_SCOPE relay: speeds, tokens, load time, first token, peak load.',
   markup: tableLensMarkup({ title:'Requests', pager:true,
     headExtra: '\n      <button class="helpbtn" data-k="helpBtn" type="button" title="Why only these requests? How to set it up" aria-expanded="false">?</button>',
-    before: '\n    <div class="card helpcard" data-k="help" hidden></div>',
+    before: '\n      <div class="helpcard" data-k="help" hidden></div>',
     cols:['Timestamp', 'Model', 'Gen tok/s', 'Gen tokens', 'Prompt tok/s', 'Prompt tokens', 'Load time', 'Time to first token', 'Total time', 'Peak load'] }),
   init(L) {
     L.$('helpBtn').addEventListener('click', () => {

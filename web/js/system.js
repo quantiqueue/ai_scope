@@ -2,11 +2,12 @@
 // and "Peak load" cells that the other scopes use.
 
 // ---------- Tiles ----------
-// A tile: label, big value, sub line, meter and a 5-minute sparkline. data-tile = its key in tileValues().
+// A tile: header tab (label; GPU temperature on the right), big value, sub line, meter and a 5-minute sparkline.
+// data-tile = its key in tileValues().
 function tileHtml(t) {
   return `
-  <div class="tile" data-tile="${t.id}">
-    <div class="k">${t.label}</div>
+  <div class="tilebox" data-tile="${t.id}">` + lensHeadMarkup(t.label, '<span class="temp" title="GPU temperature" hidden></span>') + `
+  <div class="tile">
     <div class="v">—</div>
     <div class="sub">&nbsp;</div>
     <div class="meter"><div></div></div>
@@ -14,7 +15,7 @@ function tileHtml(t) {
       <path class="area"></path><path class="line"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
       <div class="tip" hidden></div></div>
     <div class="spark-axis"><span>5 min ago</span><span>now</span></div>
-  </div>`;
+  </div></div>`;
 }
 
 let sysHist = [];   // latest 5 minutes of samples; also used by the "System load" row of the other scopes
@@ -39,12 +40,12 @@ function setTile(el, value, big, sub, series) {
   el.querySelector('.area').setAttribute('d', valid.length ? d + ` L${valid[valid.length-1][0]} 100 L${valid[0][0]} 100 Z` : '');
 }
 
-// GPU temperature badge on the GPU tile (top right). Amber from 80 °C, red from 90 °C. Hidden when unknown.
+// GPU temperature on the GPU tile's header (right). Amber from 80 °C, red from 90 °C. Hidden when unknown.
 function setTemp(el, temp) {
   if (!el) return;
-  let b = el.querySelector('.temp');
-  if (temp == null) { if (b) b.hidden = true; return; }
-  if (!b) { b = document.createElement('span'); b.className = 'temp'; b.title = 'GPU temperature'; el.querySelector('.k').appendChild(b); }
+  const b = el.querySelector('.temp');
+  if (!b) return;
+  if (temp == null) { b.hidden = true; return; }
   b.hidden = false;
   b.textContent = Math.round(temp) + ' °C';
   b.className = 'temp' + (temp >= 90 ? ' hot' : temp >= 80 ? ' warm' : '');
@@ -98,8 +99,8 @@ defineLens({
     const num = gpus.length > 1 ? ' ' + (i + 1) : '';
     const gEl = L.el.querySelector('[data-tile="gpu' + i + '"]'), vEl = L.el.querySelector('[data-tile="vram' + i + '"]');
     // labels: "GPU 2" with several cards, plain "GPU" with one (keep the temperature badge)
-    if (gEl && gEl.querySelector('.k').firstChild.nodeValue !== 'GPU' + num) gEl.querySelector('.k').firstChild.nodeValue = 'GPU' + num;
-    if (vEl && vEl.querySelector('.k').firstChild.nodeValue !== 'VRAM' + num) vEl.querySelector('.k').firstChild.nodeValue = 'VRAM' + num;
+    if (gEl && gEl.querySelector('.ltitle').textContent !== 'GPU' + num) gEl.querySelector('.ltitle').textContent = 'GPU' + num;
+    if (vEl && vEl.querySelector('.ltitle').textContent !== 'VRAM' + num) vEl.querySelector('.ltitle').textContent = 'VRAM' + num;
     const s = sysLatest(d); if (!s) return;
     const v = tileValues(s);
     const g = (s.gpus && s.gpus[i]) || (i === 0 ? { util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal } : {});
@@ -164,8 +165,8 @@ function peakCell(p) {
 
 // Hover on a sparkline (any tile, on any page): show the value at that point in time.
 document.addEventListener('mousemove', e => {
-  const spark = e.target.closest && e.target.closest('.tile[data-tile] .spark'); if (!spark || !sysHist.length) return;
-  const id = spark.closest('.tile').dataset.tile;
+  const spark = e.target.closest && e.target.closest('[data-tile] .spark'); if (!spark || !sysHist.length) return;
+  const id = spark.closest('[data-tile]').dataset.tile;
   const r = spark.getBoundingClientRect();
   const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
   const i = Math.round(f * (sysHist.length - 1));

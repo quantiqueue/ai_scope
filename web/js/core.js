@@ -7,6 +7,14 @@ let SCOPES = window.AI_SCOPE_SCOPES || [];   // installed scopes, inlined into i
 function scopeById(id) { return SCOPES.find(x => x.id === id); }
 function isInstalled(id) { const sc = scopeById(id); return !!(sc && sc.installed); }
 
+// ---------- Custom scopes (AI_SCOPE-003): user-made pages of lenses, saved by the server (custom-scopes.json) ----------
+let CUSTOM = window.AI_SCOPE_CUSTOM || [];   // [{ id: 'c-...', name, lenses: [{ lens, settings }] }], inlined into index.html
+const CUSTOM_HOOKS = [];                     // called after the list changes (custom.js rebuilds the pages)
+function customById(id) { return CUSTOM.find(x => x.id === id); }
+function setCustom(list) { CUSTOM = list || []; CUSTOM_HOOKS.forEach(f => f()); }
+// A tab can show an installed scope or a custom scope.
+function canOpen(id) { return isInstalled(id) || !!customById(id); }
+
 // ---------- Paging for request tables ----------
 const PAGE_SIZE = 15;
 const pages = {};      // table key -> current page (0-based)
@@ -95,3 +103,8 @@ const fmtSec = ms => ms == null ? '—' : (ms / 1000).toFixed(ms < 10000 ? 2 : 1
 const fmtNum = n => n == null ? '—' : n.toLocaleString();
 const fmtTps = n => n == null ? '—' : n.toFixed(1);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// Icon of custom scopes (tabs, Scopes page, dialogs): four tiles.
+const CUSTOM_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>' +
+  '<rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';

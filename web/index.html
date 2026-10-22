@@ -44,10 +44,10 @@
 <section class="panel" data-panel="scopes">
   <div class="section-head">
     <h1>Scopes</h1>
-    <span class="meta">Install a scope to add its tab &middot; click an installed scope to open it</span>
+    <span class="meta">Click a scope to open it</span>
     <button type="button" class="stopbtn" id="stopBtn" hidden title="Stops the AI_SCOPE server on this computer (Ollama relay and ComfyUI run history stop recording too)">Stop AI_SCOPE</button>
   </div>
-  <div class="wrap"><div class="gallery" id="gallery"></div></div>
+  <div class="wrap"><div id="gallery"></div></div>
 </section>
 <dialog class="modal" id="scopeDlg"><form method="dialog" id="scopeForm" novalidate></form></dialog>
 
@@ -92,7 +92,7 @@
 </div>
 <div class="wrap" data-lenses><!-- LM Studio lenses (web/js/lmstudio.js) --></div>
 </section>
-<script>window.AI_SCOPE_SCOPES = /*__SCOPES__*/[];</script>
+<script>window.AI_SCOPE_SCOPES = /*__SCOPES__*/[]; window.AI_SCOPE_CUSTOM = /*__CUSTOM__*/[];</script>
 <!-- Client code, plain scripts in this order: shared helpers, one file per scope, then the shell (tabs, theme, gallery). -->
 <script src="/js/core.js"></script>
 <script src="/js/lens.js"></script>
@@ -102,5 +102,6 @@
 <script src="/js/lmstudio.js"></script>
 <script src="/js/strata.js"></script>
 <script src="/js/shell.js"></script>
+<script src="/js/custom.js"></script>
 </body>
 </html>

@@ -178,14 +178,9 @@
   .tgroup { display:grid; grid-template-columns: 1fr 1fr; gap:16px; min-width:0; } /* CPU+RAM, then GPU n + VRAM n side by side */
   .tiles > .lens, .tgroup > .lens { min-width:0; display:grid; } /* a lens wrapper behaves like the tile/group inside it */
   @media (max-width: 560px) { .tgroup { grid-template-columns: 1fr; } }
-  .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px 12px; min-width:0; }
-  .tile .k { font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 18px 12px; min-width:0; }
   .tile .v { font-size:2rem; font-weight:650; font-variant-numeric:tabular-nums; margin-top:4px; }
   .tile .v small { font-size:1rem; color:var(--muted); font-weight:500; }
-  .tile .temp { float:right; text-transform:none; letter-spacing:0; font-variant-numeric:tabular-nums; color:var(--muted); font-weight:600; }
-  .tile .temp.warm { color:var(--mid); }
-  .tile .temp.hot { color:var(--bad); }
-  .tile .temp[hidden] { display:none; }
   .tile .sub { font-size:.8rem; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .meter { height:6px; background:var(--line); border-radius:3px; margin-top:10px; overflow:hidden; }
   .meter > div { height:100%; width:0; background:var(--accent); border-radius:3px; transition:width .4s; }
@@ -258,3 +253,101 @@
   a.tag { text-decoration:none; }
   a.tag:hover { filter:brightness(1.15); }
   .tag { font-size:.68rem; font-weight:600; color:var(--accent); background:color-mix(in srgb, var(--accent) 10%, transparent); padding:1px 6px; border-radius:999px; margin-left:6px; }
+
+  /* ---------- Scopes page sections (AI_SCOPE-003) ---------- */
+  .gsec h2 { font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; margin:26px 2px 12px; display:flex; flex-wrap:wrap; gap:10px; align-items:baseline; }
+  .gsec:first-child h2 { margin-top:6px; }
+  .gsec h2 .hint { text-transform:none; letter-spacing:0; font-weight:400; }
+  .badge.avail { color:var(--muted); background:var(--line); }
+  .badge.custom { color:var(--accent); background:var(--line); }
+  .square.create { border-style:dashed; background:none; }
+  .square.create .icon { font-size:1.7rem; font-weight:500; }
+
+  /* ---------- Custom scopes: header tools, lens grid, edit mode ---------- */
+  .cs-tools { margin-left:auto; align-self:center; display:flex; gap:8px; align-items:center; }
+  .cs-tools [hidden] { display:none; }
+  .iconbtn { display:inline-grid; place-items:center; width:32px; height:32px; border-radius:7px; border:1px solid var(--line); background:var(--card); color:var(--muted); cursor:pointer; }
+  .iconbtn svg { width:17px; height:17px; }
+  .iconbtn:hover, .iconbtn:focus-visible { color:var(--accent); border-color:var(--accent); }
+  .iconbtn.primary { color:#fff; background:var(--accent); border-color:var(--accent); }
+  .iconbtn.primary:hover { filter:brightness(1.1); color:#fff; }
+  .iconbtn:disabled { opacity:.6; cursor:default; }
+  .cs-cancel { font:inherit; font-size:.82rem; font-weight:600; color:var(--text); background:var(--card); border:1px solid var(--line); border-radius:7px; padding:6px 12px; cursor:pointer; }
+  .cs-cancel:hover { border-color:var(--accent); }
+  .section-head .meta.bad { color:var(--bad); }
+  .cgrid { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:16px; align-items:start; }
+  .lframe { min-width:0; }
+  .lf-tile { grid-column:span 1; }
+  .lf-wide { grid-column:span 2; }
+  .lf-full { grid-column:1 / -1; }
+  @media (max-width: 1100px) { .cgrid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 640px) { .cgrid { grid-template-columns:minmax(0, 1fr); } .lf-wide { grid-column:auto; } }
+  .cgrid .blockhead { margin-top:0; }
+  .cgrid .now { margin-bottom:0; }
+  .cgrid .lens-wide > .tgroup, .cgrid .lens { min-width:0; }
+  .panel.editing .lframe { outline:1px dashed var(--line); outline-offset:6px; border-radius:10px; }
+  .lframe.dragging { opacity:.35; }
+  .ltools { display:flex; align-items:center; gap:8px; margin:0 0 8px; font-size:.75rem; color:var(--muted); }
+  .ltools .lname { font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lgrip { cursor:grab; letter-spacing:-3px; padding:2px 4px; user-select:none; }
+  .lbtn { display:inline-grid; place-items:center; width:24px; height:24px; border-radius:5px; border:1px solid var(--line); background:var(--card); color:var(--muted); cursor:pointer; font-size:1rem; line-height:1; padding:0; }
+  .lbtn svg { width:14px; height:14px; }
+  .lbtn:hover { color:var(--accent); border-color:var(--accent); }
+  .lbtn[data-lremove]:hover { color:var(--bad); border-color:var(--bad); }
+  .addlens { grid-column:1 / -1; min-height:56px; display:flex; flex-direction:row; align-items:center; justify-content:center; gap:8px;   /* its own row, so it doesn't break the lens layout */
+             font:inherit; font-size:.85rem; font-weight:600; color:var(--muted); background:none; border:1px dashed var(--line); border-radius:10px; cursor:pointer; }
+  .addlens span { font-size:1.5rem; font-weight:400; line-height:1; }
+  .addlens:hover { color:var(--accent); border-color:var(--accent); }
+
+  /* Add lens dialog */
+  dialog.modal.wide { width:min(760px, calc(100vw - 32px)); }
+  .lgroup { margin-bottom:16px; }
+  .lghead { display:flex; align-items:center; gap:8px; font-weight:650; font-size:.9rem; margin-bottom:8px; }
+  .licon { width:22px; height:22px; display:grid; place-items:center; color:var(--accent); }
+  .licon svg, .licon img { width:20px; height:20px; object-fit:contain; }
+  .lghead .offline { font-size:.72rem; font-weight:600; color:var(--muted); background:var(--line); padding:1px 7px; border-radius:999px; }
+  .lpick { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:8px; }
+  .lcard { text-align:left; font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:9px 11px; cursor:pointer; display:flex; flex-direction:column; gap:3px; }
+  .lcard b { font-size:.85rem; }
+  .lcard span { font-size:.76rem; color:var(--muted); line-height:1.35; }
+  .lcard:hover, .lcard:focus-visible { border-color:var(--accent); outline:none; }
+  .modal select { width:100%; font:inherit; font-size:.88rem; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:7px 10px; }
+  .modal select:focus { outline:none; border-color:var(--accent); }
+  /* edit mode: + on each side of a lens adds a lens right there (sits in the gap between lenses) */
+  .lframe { position:relative; }
+  .lplus { position:absolute; top:50%; z-index:2; width:22px; height:22px; margin-top:-11px; border-radius:50%; padding:0; display:grid; place-items:center;
+           font:inherit; font-size:.95rem; font-weight:600; line-height:1; color:var(--muted); background:var(--card); border:1px solid var(--line); cursor:pointer; }
+  .lplus.left { left:-19px; }
+  .lplus.right { right:-19px; }
+  .lplus:hover, .lplus:focus-visible { color:#fff; background:var(--accent); border-color:var(--accent); z-index:3; }
+  /* a lens that starts a new row (item.row) */
+  .lf-tile.lf-break { grid-column:1 / span 1; }
+  .lf-wide.lf-break { grid-column:1 / span 2; }
+  @media (max-width: 640px) { .lf-tile.lf-break, .lf-wide.lf-break { grid-column:auto; } }
+  /* drag: where the lens will land (horizontal = new row, vertical = joins the row) */
+  .cgrid { position:relative; }
+  .panel.editing .cgrid { padding-bottom:40px; }   /* room to drop below the last row */
+  .ldropline { position:absolute; z-index:5; background:var(--accent); pointer-events:none; }
+  .ldropline[hidden] { display:none; }
+
+  /* ---------- Lens header: a tab docked to the top of the lens card (AI_SCOPE-003) ---------- */
+  .lhead { display:flex; align-items:flex-end; flex-wrap:wrap; gap:4px 10px; margin-top:22px; min-width:0; }
+  .ltab { position:relative; z-index:1; display:inline-flex; align-items:center; gap:8px; max-width:100%; margin-bottom:-1px; padding:6px 12px;
+          background:var(--card); border:1px solid var(--line); border-bottom:none; border-radius:8px 8px 0 0; }
+  .ltitle { font-size:.72rem; font-weight:650; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); white-space:nowrap; }
+  .lhead > .hint { font-size:.78rem; color:var(--muted); padding-bottom:6px; }
+  .lhead > .helpbtn { margin-bottom:5px; }
+  .lhead + .card, .lhead + .tile { border-top-left-radius:0; }
+  .wrap > .lens:first-child > .lhead:first-child, .tilebox > .lhead, .cgrid .lhead { margin-top:0; }
+  .tilebox { min-width:0; }
+  .lhead .temp { margin-left:auto; padding-bottom:6px; font-size:.75rem; font-weight:600; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .lhead .temp.warm { color:var(--mid); }
+  .lhead .temp.hot { color:var(--bad); }
+  .lhead .temp[hidden] { display:none; }
+  .card > .chips { margin:0; padding:10px 12px; border-bottom:1px solid var(--line); }
+  .card > .helpcard { margin:0; border-bottom:1px solid var(--line); }
+  /* custom scopes: scope chip (logo + name) in the tab; opens that scope */
+  .lchip { display:inline-flex; align-items:center; gap:5px; padding:1px 8px 1px 4px; border:1px solid var(--line); border-radius:999px; background:var(--bg);
+           font-size:.72rem; font-weight:600; color:var(--text); text-decoration:none; white-space:nowrap; }
+  .lchip img, .lchip svg { width:14px; height:14px; object-fit:contain; color:var(--accent); }
+  .lchip:hover, .lchip:focus-visible { border-color:var(--accent); color:var(--accent); outline:none; }
