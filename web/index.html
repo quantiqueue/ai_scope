@@ -56,43 +56,7 @@
     <h1>ComfyUI &mdash; Workflow Runs</h1>
     <span class="meta" id="cMeta">Loading&hellip;</span>
   </div>
-  <div class="wrap">
-    <div class="card now">
-      <div class="now-label"><span class="dot" id="cDot"></span><span id="cTitle">Current job</span></div>
-      <div class="now-grid">
-        <div><div class="k">Model</div><div class="v model" id="cModel">—</div></div>
-        <div id="cProgBox"><div class="k" id="cProgLabel">Progress</div><div class="v" id="cProg">—</div>
-          <div class="pbar"><div id="cBar"></div></div></div>
-        <div id="cRateBox"><div class="k">Speed</div><div class="v small" id="cRate">—</div></div>
-        <div id="cTimeBox"><div class="k" id="cTimeLabel">Elapsed</div><div class="v" id="cTime">—</div></div>
-      </div>
-      <div class="sysload" id="cLoad" hidden><span class="sl-label" title="Whole-computer totals (all apps together), not only this request">System load</span><span class="sl-items"></span></div>
-      <div class="countdown" id="cFoot">&nbsp;</div>
-    </div>
-    <div class="blockhead">Runs</div>
-    <div class="card">
-      <table>
-        <thead><tr>
-          <th>Finished</th><th>Model</th><th>Size</th><th>Steps</th><th>Sampler</th>
-          <th>Run time</th><th>Peak load</th><th>Status</th><th>Images</th>
-        </tr></thead>
-        <tbody id="cRows"></tbody>
-      </table>
-      <div class="err" id="cErr" hidden></div>
-    </div>
-    <div class="pager" id="cPager" hidden></div>
-
-    <div class="blockhead">Installed models <span class="hint" id="cmHint"></span></div>
-    <div class="chips" id="cmChips"></div>
-    <div class="card">
-      <table>
-        <thead><tr><th>Model</th><th>Publisher</th><th>Type</th><th>Size</th><th>VRAM fit</th><th>Runs</th><th>Last used</th><th>Avg run time</th><th>Added</th></tr></thead>
-        <tbody id="cmRows"></tbody>
-      </table>
-      <div class="hintbox" id="cmEmpty" hidden></div>
-    </div>
-    <div class="pager" id="cmPager" hidden></div>
-  </div>
+  <div class="wrap" data-lenses><!-- ComfyUI lenses (web/js/comfyui.js) --></div>
 </section>
 
 <section class="panel" data-panel="ollama">
