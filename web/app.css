@@ -6,6 +6,9 @@
     --good:#34d399; --mid:#fbbf24; --bad:#f43f5e; color-scheme:dark; }
   :root[data-theme="neo"] { --bg:#040905; --card:#09130b; --text:#d4f7dc; --muted:#79a985; --line:#15321c; --accent:#2bff88;
     --good:#7dffb0; --mid:#f5d742; --bad:#ff5a5a; color-scheme:dark; }
+  /* EVA: deep purple surfaces, lime-green accent, orange for warnings / "tight" */
+  :root[data-theme="eva"] { --bg:#120a1d; --card:#1d1230; --text:#f1e9fc; --muted:#b49dd6; --line:#3b2860; --accent:#9be33c;
+    --good:#7fdc5a; --mid:#ff9f2e; --bad:#ff4f6d; color-scheme:dark; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
   .topbar { position:sticky; top:0; z-index:10; display:flex; align-items:stretch; gap:28px; padding:0 24px;
@@ -51,7 +54,7 @@
   .addbtn:hover, .addbtn[aria-expanded="true"] { background:var(--bg); border-color:var(--line); color:var(--text); }
   .addbtn.active { background:var(--bg); border-color:var(--line); color:var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
   .themewrap { position:relative; display:flex; align-items:center; margin-left:auto; }
-  .themebtn { display:flex; align-items:center; gap:7px; height:30px; padding:0 10px; border-radius:6px; border:1px solid transparent;
+  .themebtn { display:flex; align-items:center; justify-content:center; gap:7px; width:30px; height:30px; padding:0; border-radius:6px; border:1px solid transparent;
               background:none; color:var(--muted); font:inherit; font-size:.82rem; cursor:pointer; }
   .themebtn:hover, .themebtn[aria-expanded="true"] { background:var(--bg); border-color:var(--line); color:var(--text); }
   .themebtn svg { width:16px; height:16px; }
@@ -61,7 +64,7 @@
   .thememenu button { display:flex; align-items:center; gap:10px; width:100%; padding:7px 9px; border:none; border-radius:5px;
                       background:none; color:var(--text); font:inherit; font-size:.85rem; text-align:left; cursor:pointer; }
   .thememenu button:hover, .thememenu button:focus-visible { background:var(--bg); outline:none; }
-  .thememenu .sw { width:16px; height:16px; border-radius:50%; border:1px solid rgba(128,128,128,.35); flex:none; }
+  .thememenu .sw { width:16px; height:16px; border-radius:50%; flex:none; box-shadow:0 0 0 1px var(--line); }   /* thin ring outside the swatch, so dark swatches still show */
   .thememenu .ck { margin-left:auto; color:var(--accent); visibility:hidden; }
   .thememenu button[aria-checked="true"] .ck { visibility:visible; }
   /* Magenta theme: landing page wordmark/button follow the theme */
@@ -81,6 +84,16 @@
   [data-theme="neo"] .home .go { color:#d4f7dc; border-color:rgba(121,169,133,.3); background:rgba(1,5,2,.5); }
   [data-theme="neo"] .home .go:hover, [data-theme="neo"] .home .go:focus-visible { border-color:#2bff88; background:rgba(8,60,26,.55); }
   [data-theme="neo"] .brand, [data-theme="neo"] h1 { text-shadow:0 0 12px rgba(43,255,136,.18); }
+  /* EVA theme: purple with lime and orange */
+  [data-theme="eva"] .home { background:#08040d; color:#efe6fb; }
+  [data-theme="eva"] .home .vignette { background: radial-gradient(ellipse at 50% 50%, rgba(8,4,13,0) 35%, rgba(8,4,13,.6) 100%); }
+  [data-theme="eva"] .home .mark { color:#efe6fb; text-shadow:0 0 40px rgba(140,80,200,.45), 0 2px 18px rgba(0,0,0,.6); }
+  [data-theme="eva"] .home .mark span { color:#9be33c; }
+  [data-theme="eva"] .home .sub { color:#ff9f2e; }
+  [data-theme="eva"] .home .go { color:#efe6fb; border-color:rgba(169,147,196,.3); background:rgba(8,4,13,.5); }
+  [data-theme="eva"] .home .go:hover, [data-theme="eva"] .home .go:focus-visible { border-color:#9be33c; background:rgba(60,30,90,.55); }
+  [data-theme="eva"] .brand span { color:#ff9f2e; }
+  [data-theme="eva"] .brand, [data-theme="eva"] h1 { text-shadow:0 0 12px rgba(140,80,200,.35); }
   .gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows:1fr; gap:16px; } /* every card the same size */
   .square { min-height:200px; /* height comes from the grid row (tallest card), so all match */ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px;
             display:flex; flex-direction:column; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; min-width:0; }

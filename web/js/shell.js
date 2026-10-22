@@ -64,6 +64,7 @@ const homeAnim = (function () {
     blue: [[2,4,10],[4,12,32],[8,34,84],[18,88,180],[60,160,255]],
     magenta: [[10,2,8],[30,4,24],[84,8,62],[184,24,128],[255,84,190]],
     neo: [[1,5,2],[3,16,7],[6,48,20],[14,128,58],[60,255,140]],
+    eva: [[6,3,10],[24,10,40],[62,28,98],[118,70,168],[155,227,60]],
   };
   let STOPS = STOPS_BY_THEME.blue;
   let W = 0, H = 0, pts = [], tris = [], running = false;
@@ -147,12 +148,12 @@ const homeAnim = (function () {
 })();
 
 // Theme picker (top-right). Saved per browser; 'default' follows the OS light/dark setting.
-const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo' };
+const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo', eva: 'EVA' };
 // Some apps ship a logo for light and one for dark backgrounds (Strata): ask for the one matching the theme.
 let logosReady = false;   // set once the logo checks below have started (renderTabs needs LOGO_OK)
 function darkTheme() {
   const t = document.documentElement.dataset.theme;
-  if (t) return t !== 'default';   // Dark, Magenta and Neo are all dark
+  if (t) return t !== 'default';   // Dark, Magenta, Neo and EVA are all dark
   return !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
 }
 function logoUrl(id) { return '/api/logo/' + id + (darkTheme() ? '?theme=dark' : ''); }
@@ -160,9 +161,10 @@ function applyTheme(t) {
   if (!THEMES[t]) t = 'default';
   if (t === 'default') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
   store.set('aiscope.theme', t);
-  document.getElementById('themeName').textContent = THEMES[t];
+  const tb = document.getElementById('themeBtn');   // icon only; the current theme is in the tooltip and the menu
+  tb.title = 'Theme: ' + THEMES[t]; tb.setAttribute('aria-label', 'Theme: ' + THEMES[t]);
   document.querySelectorAll('[data-theme-opt]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.themeOpt === t)));
-  homeAnim.setPalette(t === 'magenta' || t === 'neo' ? t : 'blue');
+  homeAnim.setPalette(t === 'magenta' || t === 'neo' || t === 'eva' ? t : 'blue');
   if (logosReady) renderTabs();   // logos that differ for light/dark backgrounds
 }
 if (window.matchMedia) {   // Default theme follows the OS: redraw the logos when it switches light/dark
