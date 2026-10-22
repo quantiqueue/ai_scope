@@ -12,11 +12,12 @@ const PAGE_SIZE = 15;
 const pages = {};      // table key -> current page (0-based)
 const pagerReload = {}; // table key -> function that re-renders the table
 // Returns the slice of row HTML for the current page and updates the pager below the table.
+// key = which table (each lens copy has its own key, so its own page); pagerId = the pager's id or element.
 function paginate(key, rowsHtml, pagerId) {
   const n = Math.max(1, Math.ceil(rowsHtml.length / PAGE_SIZE));
   let p = Math.min(pages[key] || 0, n - 1);
   pages[key] = p;
-  const el = document.getElementById(pagerId);
+  const el = typeof pagerId === 'string' ? document.getElementById(pagerId) : pagerId;   // id or element (lenses pass their own)
   el.hidden = rowsHtml.length <= PAGE_SIZE;
   if (!el.hidden) {
     const from = p * PAGE_SIZE + 1, to = Math.min(rowsHtml.length, (p + 1) * PAGE_SIZE);

@@ -105,8 +105,8 @@ async function loadSystem() {
 // ---- "System load" row on the Current request / Current job cards ----
 // Whole-computer totals from the latest SYSTEM sample (all apps together, not this request alone).
 // Shown only while something is running.
-function setSysLoad(id, on) {
-  const el = document.getElementById(id);
+function setSysLoad(id, on) {   // id or element (lenses pass their own)
+  const el = typeof id === 'string' ? document.getElementById(id) : id;
   if (!el) return;
   const s = on ? sysHist[sysHist.length - 1] : null;
   el.hidden = !s;
