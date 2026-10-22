@@ -1,12 +1,11 @@
-// AI_SCOPE dashboard - SYSTEM tab: CPU/RAM/GPU/VRAM tiles, plus the "System load" row and "Peak load" cells
-// that the other scopes use.
+// AI_SCOPE dashboard - SYSTEM scope: CPU, RAM and per-card GPU/VRAM tiles (as lenses), plus the "System load" row
+// and "Peak load" cells that the other scopes use.
 
-// ---------- System tab ----------
-// One CPU and one RAM tile, then a GPU and a VRAM tile per graphics card (built once the card list is known).
-let tileKey = null;
+// ---------- Tiles ----------
+// A tile: label, big value, sub line, meter and a 5-minute sparkline. data-tile = its key in tileValues().
 function tileHtml(t) {
   return `
-  <div class="tile" id="t-${t.id}">
+  <div class="tile" data-tile="${t.id}">
     <div class="k">${t.label}</div>
     <div class="v">—</div>
     <div class="sub">&nbsp;</div>
@@ -17,21 +16,8 @@ function tileHtml(t) {
     <div class="spark-axis"><span>5 min ago</span><span>now</span></div>
   </div>`;
 }
-function buildTiles(gpus) {
-  const n = Math.max(1, gpus.length);
-  const key = String(gpus.length) + '|' + gpus.map(g => g.id).join(',');
-  if (key === tileKey) return;
-  tileKey = key;
-  const groups = [[{ id:'cpu', label:'CPU' }, { id:'ram', label:'RAM' }]];
-  for (let i = 0; i < n; i++) {
-    const num = gpus.length > 1 ? ' ' + (i + 1) : '';
-    groups.push([{ id:'gpu' + i, label:'GPU' + num }, { id:'vram' + i, label:'VRAM' + num }]);
-  }
-  document.getElementById('tiles').innerHTML = groups.map(g => '<div class="tgroup">' + g.map(tileHtml).join('') + '</div>').join('');
-}
-buildTiles([]);
 
-let sysHist = [];
+let sysHist = [];   // latest 5 minutes of samples; also used by the "System load" row of the other scopes
 function tileValues(s) {
   const pct = (u, t) => (u != null && t) ? 100 * u / t : null;
   const v = { cpu: s.cpu, ram: pct(s.ramUsed, s.ramTotal) };
@@ -40,8 +26,7 @@ function tileValues(s) {
   cards.forEach((g, i) => { v['gpu' + i] = g.util; v['vram' + i] = pct(g.vramUsed, g.vramTotal); });
   return v;
 }
-function setTile(id, value, big, sub, series) {
-  const el = document.getElementById('t-' + id);
+function setTile(el, value, big, sub, series) {
   if (!el) return;
   el.querySelector('.v').innerHTML = big;
   el.querySelector('.sub').textContent = sub;
@@ -55,8 +40,7 @@ function setTile(id, value, big, sub, series) {
 }
 
 // GPU temperature badge on the GPU tile (top right). Amber from 80 °C, red from 90 °C. Hidden when unknown.
-function setTemp(id, temp) {
-  const el = document.getElementById('t-' + id);
+function setTemp(el, temp) {
   if (!el) return;
   let b = el.querySelector('.temp');
   if (temp == null) { if (b) b.hidden = true; return; }
@@ -66,41 +50,77 @@ function setTemp(id, temp) {
   b.className = 'temp' + (temp >= 90 ? ' hot' : temp >= 80 ? ' warm' : '');
 }
 
-async function loadSystem() {
-  try {
-    const data = await (await fetch('/api/system', { cache:'no-store' })).json();
-    sysHist = data.history;
-    const s = sysHist[sysHist.length - 1];
-    const info = data.info;
-    const gpus = info.gpus || [];
-    buildTiles(gpus);
-    document.getElementById('sysMeta').textContent = s ? 'updated ' + new Date(s.t).toLocaleTimeString() + ' · every 2 s' : 'warming up…';
-    if (!s) return;
-    const series = id => sysHist.map(h => tileValues(h)[id]);
+// ---------- Source + lenses ----------
+// /api/system: { info: { cpuModel, cores, gpus[], gpuSource }, history: [samples, oldest first] }.
+defineSource('system', '/api/system');
+subscribeSource('system', d => { if (d) sysHist = d.history; });   // always on: other scopes' "System load" rows need it
+const sysLatest = d => d.history[d.history.length - 1];
+const sysSeries = (d, id) => d.history.map(h => tileValues(h)[id]);
+const NA_HTML = '<span class="na">n/a</span>';
+
+defineLens({
+  id: 'system.cpu', scope: 'system', size: 'tile',
+  name: 'CPU', description: 'CPU usage with a 5-minute history.',
+  markup: tileHtml({ id:'cpu', label:'CPU' }),
+  render(L, d) {
+    const s = sysLatest(d); if (!s) return;
+    const v = tileValues(s), info = d.info;
+    setTile(L.el.querySelector('.tile'), v.cpu, v.cpu.toFixed(0) + '<small>%</small>', info.cpuModel + ' · ' + info.cores + ' threads', sysSeries(d, 'cpu'));
+  },
+});
+defineLens({
+  id: 'system.ram', scope: 'system', size: 'tile',
+  name: 'RAM', description: 'Memory in use with a 5-minute history.',
+  markup: tileHtml({ id:'ram', label:'RAM' }),
+  render(L, d) {
+    const s = sysLatest(d); if (!s) return;
     const v = tileValues(s);
-    const na = '<span class="na">n/a</span>';
-    setTile('cpu', v.cpu, v.cpu.toFixed(0) + '<small>%</small>', info.cpuModel + ' · ' + info.cores + ' threads', series('cpu'));
-    setTile('ram', v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', series('ram'));
-    const n = Math.max(1, gpus.length);
-    for (let i = 0; i < n; i++) {
-      const g = (s.gpus && s.gpus[i]) || (i === 0 ? { util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal } : {});
-      const name = gpus[i] ? gpus[i].name : (info.gpuSource === 'none' ? 'No GPU stats available' : 'detecting…');
-      const util = v['gpu' + i], vram = v['vram' + i];
-      // Sub line: card name, then power draw / limit when the card reports it (NVIDIA). Temperature is the badge.
-      const extra = [g.power != null ? Math.round(g.power) + (g.powerLimit ? ' / ' + Math.round(g.powerLimit) : '') + ' W' : null].filter(Boolean);
-      setTile('gpu' + i, util, util != null ? util.toFixed(0) + '<small>%</small>' : na, [name].concat(extra).join(' · '), series('gpu' + i));
-      setTemp('gpu' + i, g.temp);
-      let vramBig = na, vramSub = name;
+    setTile(L.el.querySelector('.tile'), v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', sysSeries(d, 'ram'));
+  },
+});
+// One graphics card: GPU usage (with temperature and power), VRAM, or both side by side.
+// Settings: card (0-based index into info.gpus), show ('both' | 'gpu' | 'vram').
+defineLens({
+  id: 'system.gpu', scope: 'system',
+  size: st => st.show === 'both' ? 'wide' : 'tile',
+  name: 'GPU', description: 'One graphics card: usage, temperature and power, and/or VRAM, with a 5-minute history.',
+  settings: [
+    { id:'card', label:'Graphics card', type:'gpu', default:0 },
+    { id:'show', label:'Show', type:'choice', default:'both', options:[['both', 'GPU usage and VRAM'], ['gpu', 'GPU usage'], ['vram', 'VRAM']] },
+  ],
+  markup: st => {
+    const i = st.card, num = i ? ' ' + (i + 1) : '';   // fixed up on render: "GPU 1" once there are several cards
+    const tiles = (st.show !== 'vram' ? tileHtml({ id:'gpu' + i, label:'GPU' + num }) : '') + (st.show !== 'gpu' ? tileHtml({ id:'vram' + i, label:'VRAM' + num }) : '');
+    return st.show === 'both' ? '<div class="tgroup">' + tiles + '</div>' : tiles;
+  },
+  render(L, d) {
+    const info = d.info, gpus = info.gpus || [], i = L.settings.card;
+    const num = gpus.length > 1 ? ' ' + (i + 1) : '';
+    const gEl = L.el.querySelector('[data-tile="gpu' + i + '"]'), vEl = L.el.querySelector('[data-tile="vram' + i + '"]');
+    // labels: "GPU 2" with several cards, plain "GPU" with one (keep the temperature badge)
+    if (gEl && gEl.querySelector('.k').firstChild.nodeValue !== 'GPU' + num) gEl.querySelector('.k').firstChild.nodeValue = 'GPU' + num;
+    if (vEl && vEl.querySelector('.k').firstChild.nodeValue !== 'VRAM' + num) vEl.querySelector('.k').firstChild.nodeValue = 'VRAM' + num;
+    const s = sysLatest(d); if (!s) return;
+    const v = tileValues(s);
+    const g = (s.gpus && s.gpus[i]) || (i === 0 ? { util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal } : {});
+    const name = gpus[i] ? gpus[i].name : (info.gpuSource === 'none' ? 'No GPU stats available' : gpus.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
+    const util = v['gpu' + i], vram = v['vram' + i];
+    // Sub line: card name, then power draw / limit when the card reports it (NVIDIA). Temperature is the badge.
+    const extra = [g.power != null ? Math.round(g.power) + (g.powerLimit ? ' / ' + Math.round(g.powerLimit) : '') + ' W' : null].filter(Boolean);
+    if (gEl) {
+      setTile(gEl, util, util != null ? util.toFixed(0) + '<small>%</small>' : NA_HTML, [name].concat(extra).join(' · '), sysSeries(d, 'gpu' + i));
+      setTemp(gEl, g.temp);
+    }
+    if (vEl) {
+      let vramBig = NA_HTML, vramSub = name;
       if (g.vramUsed != null) {
         vramBig = GB(g.vramUsed) + (g.vramTotal ? '<small> / ' + GB(g.vramTotal) + ' GB</small>' : '<small> GB</small>');
         vramSub = (vram != null ? vram.toFixed(0) + '% used' : 'total unknown') + (gpus.length > 1 ? ' · ' + name : '');
       }
-      setTile('vram' + i, vram, vramBig, vramSub, series('vram' + i));
+      setTile(vEl, vram, vramBig, vramSub, sysSeries(d, 'vram' + i));
     }
-  } catch (e) {
-    document.getElementById('sysMeta').textContent = 'Could not reach server: ' + e.message;
-  }
-}
+  },
+});
 
 // ---- "System load" row on the Current request / Current job cards ----
 // Whole-computer totals from the latest SYSTEM sample (all apps together, not this request alone).
@@ -142,10 +162,10 @@ function peakCell(p) {
   return '<td class="peak" title="' + tip + '">' + short + '</td>';
 }
 
-// Hover on a sparkline: show the value at that point in time.
-document.getElementById('tiles').addEventListener('mousemove', e => {
-  const spark = e.target.closest('.spark'); if (!spark || !sysHist.length) return;
-  const id = spark.closest('.tile').id.slice(2);
+// Hover on a sparkline (any tile, on any page): show the value at that point in time.
+document.addEventListener('mousemove', e => {
+  const spark = e.target.closest && e.target.closest('.tile[data-tile] .spark'); if (!spark || !sysHist.length) return;
+  const id = spark.closest('.tile').dataset.tile;
   const r = spark.getBoundingClientRect();
   const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
   const i = Math.round(f * (sysHist.length - 1));
@@ -156,13 +176,32 @@ document.getElementById('tiles').addEventListener('mousemove', e => {
   tip.hidden = false; tip.style.left = x + '%';
   tip.textContent = (v == null ? 'n/a' : v.toFixed(0) + '%') + ' · ' + new Date(h.t).toLocaleTimeString();
 });
-document.getElementById('tiles').addEventListener('mouseleave', () => {
-  document.querySelectorAll('.spark .tip').forEach(t => t.hidden = true);
-  document.querySelectorAll('.spark .guide').forEach(g => g.style.display = 'none');
-}, true);
-document.getElementById('tiles').addEventListener('mouseout', e => {
-  const spark = e.target.closest('.spark');
+document.addEventListener('mouseout', e => {
+  const spark = e.target.closest && e.target.closest('.spark');
   if (spark && !spark.contains(e.relatedTarget)) { spark.querySelector('.tip').hidden = true; spark.querySelector('.guide').style.display = 'none'; }
 });
-loadSystem();
-setInterval(loadSystem, 2000);
+
+// ---------- The SYSTEM scope page: CPU + RAM side by side, then one GPU lens (GPU + VRAM) per card ----------
+const sysBox = document.querySelector('[data-panel="system"] [data-lenses]');
+const sysPair = document.createElement('div');
+sysPair.className = 'tgroup';
+sysBox.appendChild(sysPair);
+let sysGpuKey = null, sysGpuLenses = [];
+function buildSystemPage(gpus) {   // (re)built once the card list is known or when it changes
+  const key = String(gpus.length) + '|' + gpus.map(g => g.id).join(',');
+  if (key === sysGpuKey) return;
+  sysGpuKey = key;
+  sysGpuLenses.forEach(unmountLens);
+  sysGpuLenses = [];
+  for (let i = 0; i < Math.max(1, gpus.length); i++) sysGpuLenses.push(mountLens('system.gpu', sysBox, { card: i, show: 'both' }));
+}
+subscribeSource('system', (d, err) => {
+  const meta = document.getElementById('sysMeta');
+  if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }
+  buildSystemPage(d.info.gpus || []);
+  const s = sysLatest(d);
+  meta.textContent = s ? 'updated ' + new Date(s.t).toLocaleTimeString() + ' · every 2 s' : 'warming up…';
+});
+mountLens('system.cpu', sysPair);
+mountLens('system.ram', sysPair);
+buildSystemPage([]);

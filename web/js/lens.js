@@ -33,8 +33,10 @@ function subscribeSource(id, fn) {
 }
 
 // ---------- Lens definitions ----------
-// def: { id ('strata.requests'), scope, source (default: the scope's own), name, description, size ('tile' | 'wide' | 'full'),
-//        settings (optional schema, for later), markup (HTML string, parts marked data-k="..."),
+// def: { id ('strata.requests'), scope, source (default: the scope's own), name, description,
+//        size ('tile' | 'wide' | 'full', or a function of the settings),
+//        settings (optional schema: [{ id, label, type, default, options }] — values per lens copy, e.g. which GPU),
+//        markup (HTML string, or a function of the settings; parts marked data-k="..."),
 //        init(lens) (optional, once after mounting), render(lens, data) (every poll with fresh data) }
 const LENSES = {};
 function defineLens(def) { LENSES[def.id] = def; }
@@ -45,13 +47,17 @@ let lensSeq = 0;
 function mountLens(id, container, settings) {
   const def = LENSES[id];
   if (!def) return null;
+  // settings: the lens's own values over the defaults of its settings schema
+  const st = {};
+  (def.settings || []).forEach(f => { st[f.id] = f.default; });
+  Object.assign(st, settings || {});
   const el = document.createElement('div');
-  el.className = 'lens lens-' + def.size;
+  el.className = 'lens lens-' + (typeof def.size === 'function' ? def.size(st) : def.size);
   el.dataset.lens = id;
-  el.innerHTML = def.markup;
+  el.innerHTML = typeof def.markup === 'function' ? def.markup(st) : def.markup;
   container.appendChild(el);
   const lens = {
-    def, el, settings: settings || {}, state: {}, data: null,
+    def, el, settings: st, state: {}, data: null,
     key: id + '#' + (++lensSeq),                         // pager key: every copy pages on its own
     $: k => el.querySelector('[data-k="' + k + '"]'),
   };

@@ -176,6 +176,7 @@
   .now-grid .v.model { font-size:1.05rem; font-family: ui-monospace, Consolas, monospace; font-weight:600; }
   .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 496px), 1fr)); gap:16px; }
   .tgroup { display:grid; grid-template-columns: 1fr 1fr; gap:16px; min-width:0; } /* CPU+RAM, then GPU n + VRAM n side by side */
+  .tiles > .lens, .tgroup > .lens { min-width:0; display:grid; } /* a lens wrapper behaves like the tile/group inside it */
   @media (max-width: 560px) { .tgroup { grid-template-columns: 1fr; } }
   .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px 12px; min-width:0; }
   .tile .k { font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:600; }
