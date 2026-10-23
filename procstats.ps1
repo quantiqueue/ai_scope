@@ -1,5 +1,6 @@
 # AI_SCOPE procstats loop (AI_SCOPE-038). Started by procstats.js with -EncodedCommand after filling in
-# __LUIDS__ (unused here, reserved), __FILE__ (watch file: one "key|port,port" line per app) and __PARENT__ (Node's PID).
+# __LUIDS__ (unused here, reserved), __FILE__ (watch file: one "key|port,port|name,name" line per app; the names are
+# optional - when given, only the app's processes with those exe names count, e.g. Bionic's llama-server.exe) and __PARENT__ (Node's PID).
 # Every 2 s prints, for each watched app:
 #   P|key|pid|name|workingSet|private|cpu100ns       one line per process of the app
 #   G|key|pid|luid|dedicated|shared|util              one line per process and graphics card it uses
@@ -119,9 +120,9 @@ public static class AiScopeProc {
 }
 '@
 $file = '__FILE__'
-$apps = @{}; $watched = ''; $stamp = $null; $last = 0
+$apps = @{}; $watched = ''; $stamp = $null; $last = 0; $missing = $false
 function Resolve-Apps {
-  $script:apps = @{}
+  $script:apps = @{}; $script:missing = $false
   $lines = @(); try { $lines = [IO.File]::ReadAllLines($file) } catch { }
   [AiScopeProc]::Snapshot()
   $listen = @{}   # port -> pid, from netstat (fast; Get-NetTCPConnection took 1.5 s)
@@ -130,7 +131,12 @@ function Resolve-Apps {
     $parts = $line.Split('|'); if ($parts.Count -lt 2) { continue }
     $root = $null
     foreach ($p in $parts[1].Split(',')) { if ($p -and $listen.ContainsKey([int]$p)) { $root = $listen[[int]$p]; break } }
-    if ($root) { $script:apps[$parts[0]] = [AiScopeProc]::Family($root) }
+    $fam = @(); if ($root) { $fam = @([AiScopeProc]::Family($root)) }
+    if ($parts.Count -ge 3 -and $parts[2]) {
+      $want = @($parts[2].Split(',') | Where-Object { $_ })
+      $fam = @($fam | Where-Object { $want -contains [AiScopeProc]::Names[$_] })
+    }
+    if ($fam.Count) { $script:apps[$parts[0]] = $fam } else { $script:missing = $true }
   }
   $all = @($script:apps.Values | ForEach-Object { $_ } | Sort-Object -Unique)
   $key = $all -join ','
@@ -140,7 +146,8 @@ while ($true) {
   if (-not [AiScopeProc]::Alive(__PARENT__)) { exit }
   $txt = $null; try { $txt = [IO.File]::ReadAllText($file) } catch { }
   $now = [Environment]::TickCount
-  if ($txt -ne $stamp -or [Math]::Abs($now - $last) -gt 10000) { Resolve-Apps; $stamp = $txt; $last = $now }
+  # look again every 10 s (PIDs change when an app restarts), every 4 s while a watched app has no processes yet
+  if ($txt -ne $stamp -or [Math]::Abs($now - $last) -gt $(if ($missing) { 4000 } else { 10000 })) { Resolve-Apps; $stamp = $txt; $last = $now }
   [AiScopeProc]::Collect()
   $out = New-Object Text.StringBuilder
   foreach ($k in $apps.Keys) {

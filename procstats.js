@@ -24,7 +24,7 @@ let ps = null, luidsKey = null, restartTimer = null;
 const PS_FILE = path.join(__dirname, 'procstats.ps1');
 
 function writeWatchFile() {
-  const text = Object.keys(watches).sort().map(function (k) { return k + '|' + watches[k].join(','); }).join('\n');
+  const text = Object.keys(watches).sort().map(function (k) { return k + '|' + watches[k].ports.join(',') + '|' + watches[k].names.join(','); }).join('\n');
   try { fs.writeFileSync(WATCH_FILE, text); } catch (e) { /* the loop just sees no apps */ }
 }
 
@@ -89,11 +89,15 @@ function startLoop() {
 function stopLoop() { if (ps) { try { ps.kill(); } catch (e) {} ps = null; } }
 process.on('exit', function () { stopLoop(); try { fs.unlinkSync(WATCH_FILE); } catch (e) {} });
 
-// Watch an app's processes: key (e.g. 'comfyui') and the port(s) it listens on. Call again when the port changes.
-function watch(key, ports) {
+// Watch an app's processes: key (e.g. 'comfyui'), the port(s) it listens on, and optionally the exe names to count
+// (e.g. ['llama-server.exe'] for Bionic, whose model runs in a child process; default: the port owner + all children).
+// Call again when the port changes.
+function watch(key, ports, names) {
   ports = (ports || []).map(Number).filter(function (n) { return n > 0 && n < 65536; });
-  if (watches[key] && watches[key].join(',') === ports.join(',')) return;
-  watches[key] = ports;
+  names = (names || []).map(String).filter(function (n) { return /^[\w .-]+$/.test(n); });
+  const w = watches[key];
+  if (w && w.ports.join(',') === ports.join(',') && w.names.join(',') === names.join(',')) return;
+  watches[key] = { ports: ports, names: names };
   writeWatchFile();
   startLoop();
 }
@@ -120,4 +124,6 @@ function get(key) {
   };
 }
 
-module.exports = { watch: watch, unwatch: unwatch, get: get, _test: { handleBlock: handleBlock, results: results } };
+// Whether per-process stats can work here at all (Windows only for now; AI_SCOPE-052 covers other systems).
+function supported() { return process.platform === 'win32'; }
+module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get, _test: { handleBlock: handleBlock, results: results } };

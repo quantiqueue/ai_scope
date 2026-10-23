@@ -10,6 +10,7 @@ const comfystats = require('./comfystats');
 const ollamastats = require('./ollamastats');
 const stratastats = require('./stratastats');
 const lmapi = require('./lmapi');
+const procstats = require('./procstats');   // per-app process stats (AI_SCOPE-038 / 049)
 const scopes = require('./scopes');
 const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
 hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
@@ -180,7 +181,12 @@ http.createServer((req, res) => {
       body = lmstats.getLatestRequests(limit);
       body.rows.forEach(r => { r.peak = lmPeak(r); });
       body.current = lmstats.getCurrentRequest();
+      // A model unloaded mid-request (or its llama-server ended) leaves no "stop processing" line in the log, so the
+      // request would look like it's running until the log has been silent for 2 min. Bionic's API knows better.
+      if (body.current && lmapi.loadedCount() === 0) body.current = null;
       body.average = lmstats.getAverage(body.rows);
+      body.process = procstats.get('bionic');   // Bionic's model process (AI_SCOPE-049)
+      body.processSupported = procstats.supported();
     }
     catch (e) { body = { rows: [], error: String(e && e.message || e) }; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

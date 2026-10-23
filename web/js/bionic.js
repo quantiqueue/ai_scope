@@ -9,7 +9,7 @@ defineSource('bionic.models', '/api/bionic/models', 'bionic');
 defineLens({
   id: 'bionic.current', scope: 'bionic', size: 'wide',
   name: 'Current request',
-  description: 'What Bionic\'s local server is answering right now: prompt progress, speed, tokens and system load.',
+  description: 'What Bionic\'s local server is answering right now: prompt progress, speed, tokens and the model process\'s GPU, VRAM, CPU and RAM use.',
   markup: nowCardMarkup([
     { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
     { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
@@ -36,7 +36,9 @@ defineLens({
       $('tokBox').hidden = !(cur.phase === 'gen' && cur.genTokens);
       $('tok').textContent = fmtNum(cur.genTokens);
       $('foot').textContent = '';   // the state is on the top line (an empty foot line is hidden)
-      setSysLoad($('load'), true);
+      // Bionic's model process when known (Windows). On Windows without one (the model was unloaded or its llama-server
+      // ended mid-request) the row is hidden rather than showing whole-computer load; other systems show System load.
+      setSysLoad($('load'), !(data.processSupported && !data.process), data.process, 'Bionic');
     } else {
       $('title').textContent = 'Idle — no request running';
       setName($('model'), avg ? avg.model : '—');
@@ -79,6 +81,17 @@ defineLens({
     $('empty').hidden = d.loaded.length > 0;
     $('empty').textContent = d.online ? 'No model loaded. Load one in Bionic, or it loads on the first request (JIT loading).'
       : 'Bionic\'s local server is not reachable' + (d.error ? ' (' + d.error + ')' : '') + '. Start it on Bionic\'s Local Server screen to see models.';
+    // Where the model actually sits: per-card VRAM of Bionic's model process(es) (Windows, AI_SCOPE-049) - Bionic's API doesn't say
+    const pr = d.process, cards = pr && pr.gpus ? pr.gpus.map((g, i) => ({ n: i + 1, g })).filter(x => x.g.vram >= 64 * 1048576) : [];
+    if (d.loaded.length && cards.length) {
+      const shared = pr.gpus.reduce((a, g) => a + (g.shared || 0), 0);
+      $('hint').textContent = '— in VRAM: ' + cards.map(x => (pr.gpus.length > 1 ? 'GPU ' + x.n : 'GPU') + ' ' + fmtBytes(x.g.vram)).join(' · ') +
+        (shared >= 64 * 1048576 ? ' · ' + fmtBytes(shared) + ' in shared (system) memory' : '') +
+        (pr.pids.length > 1 ? ' (' + pr.pids.length + ' model processes together)' : '');
+      return;
+    }
+    // Windows: no model process (yet) - e.g. a model being unloaded or loaded; the API lags behind by up to 10 s
+    if (d.processSupported) { $('hint').textContent = ''; return; }
     const vt = d.vramTotal;
     const big = vt ? d.loaded.filter(m => m.size && m.size > vt) : [];
     $('hint').textContent = big.length ? (d.vramCards > 1 ? '— larger than one card (' + fmtBytes(vt) + ' VRAM), so it is split across GPUs or partly in system RAM' : '— larger than ' + fmtBytes(vt) + ' VRAM, so part of it runs from system RAM') : (d.loaded.length ? '— Bionic does not report GPU offload; compare VRAM on the Hardware tab' : '');
