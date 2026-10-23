@@ -27,7 +27,7 @@ defineLens({
     $('dot').className = 'dot' + (cur ? ' live' : d.online ? '' : ' off');
     if (!d.online) {
       $('title').textContent = 'Strata is not running';
-      $('model').textContent = ONONE;
+      setName($('model'), ONONE);
       boxes.forEach(b => show(b, false));
       $('foot').textContent = d.error || '';
       setSysLoad($('load'), false);
@@ -37,7 +37,7 @@ defineLens({
       const doing = cur.phaseText ? cur.phaseText.charAt(0).toLowerCase() + cur.phaseText.slice(1)
         : { loading:'loading model', reading:'reading prompt', thinking:'thinking', generating:'generating' }[cur.phase] || 'working';
       $('title').textContent = 'Running — ' + doing + (cur.queued ? ' (+' + cur.queued + ' queued)' : '');
-      $('model').textContent = cur.model;
+      setName($('model'), cur.model);
       boxes.forEach(b => show(b, true));
       const reading = cur.phase === 'reading' || cur.phase === 'loading';
       $('tpsLabel').textContent = cur.phase === 'loading' ? 'Loading model' : reading ? 'Prompt tok/s' : cur.phase === 'thinking' ? 'Thinking · tok/s' : 'Current gen tok/s';
@@ -56,7 +56,7 @@ defineLens({
     } else {
       const a = d.average, l = d.loaded;
       $('title').textContent = l && l.phase === 'unavailable' ? 'Engine not answering' : l ? 'Idle — no request running' : 'No model loaded';
-      $('model').textContent = l ? l.label : a ? a.model : ONONE;
+      setName($('model'), l ? l.label : a ? a.model : ONONE);
       boxes.forEach(b => show(b, false));
       show('tpsBox', !!a);
       $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
@@ -79,7 +79,7 @@ defineLens({
     cols:['Model', 'Variant', 'Context', 'KV cache', 'GPUs', 'Experts in VRAM', 'Free VRAM', 'Speculation', 'Loaded'] }),
   render(L, d) {
     const $ = L.$, l = d.loaded;
-    $('rows').innerHTML = l ? '<tr><td class="model">' + escH(l.label) + '</td>' +
+    $('rows').innerHTML = l ? '<tr><td class="model">' + nameHtml(l.label) + '</td>' +
       '<td>' + escH(l.variant || ONONE) + '</td>' +
       '<td>' + (l.context ? fmtNum(l.context) : ONONE) + '</td>' +
       '<td>' + escH(l.kv ? l.kv.toUpperCase() : ONONE) + '</td>' +
@@ -117,7 +117,7 @@ defineLens({
       const status = r.finish && r.finish !== 'stop' && r.finish !== 'length' ? '<span class="status interrupted" title="finish: ' + escH(r.finish) + '">' + escH(r.finish) + '</span> ' : '';
       return '<tr' + (isNew ? ' class="new"' : '') + '>' +
         '<td>' + escH(fmtWhen(r.end)) + '</td>' +
-        '<td class="model">' + status + escH(r.model) + '</td>' +
+        '<td class="model">' + status + nameHtml(r.model) + '</td>' +
         '<td>' + fmtNum(r.promptTokens) + '</td>' +
         '<td title="Prompt tokens reused from the conversation cache (not read again)">' + fmtNum(r.reused) + '</td>' +
         '<td>' + fmtNum(r.outputTokens) + '</td>' +
@@ -144,7 +144,7 @@ defineLens({
     $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' model' + (d.installed.length > 1 ? 's' : '') + ' · ' +
       fmtNum(Math.round(d.installed.reduce((a, m) => a + (m.diskGb || 0), 0))) + ' GB on disk · fit as judged by Strata for this PC' : '';
     $('rows').innerHTML = d.installed.map(m =>
-      '<tr><td class="model">' + escH(m.name) + (m.loaded ? '<span class="tag">loaded</span>' : '') + (m.images ? '<span class="tag">images</span>' : '') + '</td>' +
+      '<tr><td class="model">' + nameHtml(m.name) + (m.loaded ? '<span class="tag">loaded</span>' : '') + (m.images ? '<span class="tag">images</span>' : '') + '</td>' +
       '<td>' + escH(m.variant) + '</td>' +
       '<td>' + (m.diskGb != null ? m.diskGb.toFixed(1) + ' GB' : ONONE) + '</td>' +
       '<td>' + (m.context ? fmtNum(m.context) : ONONE) + '</td>' +

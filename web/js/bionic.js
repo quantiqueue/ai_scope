@@ -22,7 +22,7 @@ defineLens({
       // state line from Bionic's server log: starting -> reading prompt (n%) -> generating (no "thinking" or model loading in the log)
       const doing = cur.phase === 'gen' ? 'generating' : cur.progress > 0 && cur.progress < 1 ? 'reading prompt' : 'starting';   // the % is in the box below
       $('title').textContent = 'Running — ' + doing + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
-      $('model').textContent = cur.model;
+      setName($('model'), cur.model);
       if (cur.phase === 'gen' && cur.genTps != null) {
         $('tpsLabel').textContent = 'Current gen tok/s';
         $('tps').textContent = fmtTps(cur.genTps);
@@ -39,7 +39,7 @@ defineLens({
       setSysLoad($('load'), true);
     } else {
       $('title').textContent = 'Idle — no request running';
-      $('model').textContent = avg ? avg.model : '—';
+      setName($('model'), avg ? avg.model : '—');
       $('tpsLabel').textContent = avg ? 'Avg gen tok/s (last ' + avg.requests + ' requests)' : 'Avg gen tok/s';
       $('tps').textContent = avg ? fmtTps(avg.genTps) : '—';
       $('timeBox').hidden = true;
@@ -67,7 +67,7 @@ defineLens({
     const $ = L.$;
     const onOff = v => v == null ? ONONE : v ? 'on' : 'off';
     $('rows').innerHTML = d.loaded.map(m => {
-      return '<tr><td class="model">' + extLink(m.id, m.modelUrl) + (m.quant ? '<span class="na"> · ' + escH(m.quant) + '</span>' : '') + '</td>' +
+      return '<tr><td class="model">' + nameLink(m.id, m.modelUrl) + (m.quant ? '<span class="na"> · ' + escH(m.quant) + '</span>' : '') + '</td>' +
         '<td>' + escH(m.params || ONONE) + '</td>' +
         '<td>' + fmtBytes(m.size) + '</td>' +
         '<td>' + (m.context ? fmtNum(m.context) + (m.maxContext ? '<span class="na"> / ' + fmtNum(m.maxContext) + '</span>' : '') : ONONE) + '</td>' +
@@ -101,7 +101,7 @@ defineLens({
       const isNew = isNewRow(L, r.timestamp + '|' + r.task);
       return '<tr' + (isNew ? ' class="new"' : '') + '>' +
         '<td title="' + esc(r.timestamp || '') + '">' + esc(lmTs(r.timestamp) ? fmtWhen(lmTs(r.timestamp)) : (r.timestamp || '—')) + '</td>' +
-        '<td class="model">' + esc(r.model) + '</td>' +
+        '<td class="model">' + nameHtml(r.model) + '</td>' +
         '<td class="tps">' + fmtTps(r.genTps) + '</td>' +
         '<td>' + fmtNum(r.genTokens) + '</td>' +
         '<td>' + fmtTps(r.promptTps) + '</td>' +
@@ -127,7 +127,7 @@ defineLens({
     $('rows').innerHTML = d.installed.map(m => {
       const feats = [m.vision ? 'vision' : null, m.tools ? 'tools' : null, m.reasoning ? 'reasoning' : null,
                      m.type && m.type.indexOf('embed') === 0 ? 'embedding' : null].filter(Boolean);
-      return '<tr><td class="model">' + extLink(m.name, m.modelUrl, (m.source ? m.source + ': ' : '') + (m.modelUrl || m.key)) + (m.loaded ? '<span class="tag">loaded</span>' : '') + '</td>' +
+      return '<tr><td class="model">' + nameLink(m.name, m.modelUrl, (m.source ? m.source + ': ' : '') + (m.modelUrl || m.key)) + (m.loaded ? '<span class="tag">loaded</span>' : '') + '</td>' +
         '<td>' + (m.publisher ? extLink(m.publisher, m.publisherUrl, 'Publisher on Hugging Face') : ONONE) + '</td><td>' + escH(m.arch || ONONE) + '</td><td>' + escH(m.params || ONONE) + '</td>' +
         '<td>' + escH(m.quant || ONONE) + '</td><td>' + fmtBytes(m.size) + '</td>' +
         '<td>' + featTags(feats) + '</td>' +

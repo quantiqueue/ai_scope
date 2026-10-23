@@ -25,7 +25,7 @@ defineLens({
     const show = (k, on) => { $(k).hidden = !on; };
     if (!d.online) {
       $('title').textContent = 'ComfyUI is not running';
-      $('model').textContent = '—';
+      setName($('model'), '—');
       show('progBox', false); show('rateBox', false); show('timeBox', false);
       $('foot').textContent = d.error || '';
       $('detail').textContent = '';
@@ -35,7 +35,7 @@ defineLens({
       // "starting" until ComfyUI reports a progress bar, then "sampling", or the node's own label (e.g. "Remesh DC")
       const pr = cur.progress, doing = !pr ? 'starting' : pr.label && pr.label !== 'Steps' ? pr.label : 'sampling';
       $('title').textContent = 'Running — ' + doing + (d.pending ? ' (+' + d.pending + ' queued)' : '');
-      $('model').textContent = cur.summary.models.join(' + ') || 'unknown';
+      setName($('model'), cur.summary.models.join(' + ') || 'unknown');
       const p = cur.progress;
       show('progBox', true); show('rateBox', true); show('timeBox', true);
       $('progLabel').textContent = p && p.label ? p.label : 'Steps';
@@ -53,7 +53,7 @@ defineLens({
     } else {
       const a = d.average;
       $('title').textContent = 'Idle — no workflow running' + (d.pending ? ' (' + d.pending + ' queued)' : '');
-      $('model').textContent = a ? a.model : '—';
+      setName($('model'), a ? a.model : '—');
       show('progBox', false); show('rateBox', false); show('timeBox', !!a);
       $('timeLabel').textContent = a ? 'Avg run time (last ' + a.runs + ' runs)' : 'Avg run time';
       $('time').textContent = a ? fmtDur(a.avgMs) : '—';
@@ -83,7 +83,7 @@ defineLens({
         (r.imageCount > 3 ? '<span class="more">+' + (r.imageCount - 3) + '</span>' : '');
       return '<tr' + (isNew ? ' class="new"' : '') + '>' +
         '<td>' + escH(fmtWhen(r.end)) + '</td>' +
-        '<td class="model" title="' + escH(s.loras.length ? 'LoRA: ' + s.loras.join(', ') : '') + '">' + escH(s.models.join(' + ') || '—') + '</td>' +
+        '<td class="model" title="' + escH(s.loras.length ? 'LoRA: ' + s.loras.join(', ') : '') + '">' + nameHtml(s.models.join(' + ') || '—') + '</td>' +
         '<td>' + (s.width ? s.width + '×' + s.height + (s.batch > 1 ? ' ×' + s.batch : '') : '—') + '</td>' +
         '<td>' + (s.steps != null ? s.steps : '—') + '</td>' +
         '<td>' + escH(s.sampler || '—') + '</td>' +
@@ -139,7 +139,7 @@ defineLens({
     $('empty').textContent = d.online ? 'Loading model list…' : 'ComfyUI is offline.';
     const fitText = { fits:'fits', tight:'tight', spills:'offloads' };
     const rows = list.map(m =>
-      '<tr><td class="model" title="' + escH(m.file) + '">' + escH(m.name) + '</td>' +
+      '<tr><td class="model" title="' + escH(m.file) + '">' + nameHtml(m.name, m.file) + '</td>' +
       '<td>' + escH(m.publisher || ONONE) + '</td>' +
       '<td>' + escH(cmType(m.folder)) + '</td>' +
       '<td>' + fmtBytes(m.size) + '</td>' +

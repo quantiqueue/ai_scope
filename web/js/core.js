@@ -93,6 +93,16 @@ const EXT_ICON = '<svg class="extico" viewBox="0 0 24 24" fill="none" stroke="cu
 function extLink(text, url, title) {
   return url ? '<a class="ext" href="' + escH(url) + '" target="_blank" rel="noopener" title="' + escH(title || url) + ' (opens in a new tab)">' + escH(text) + EXT_ICON + '</a>' : escH(text);
 }
+// Model names are shown at most NAME_MAX characters long (AI_SCOPE-053): longer ones end in "…" and show in full on hover.
+const NAME_MAX = 30;
+function cutName(s) { s = String(s == null ? '' : s); return s.length > NAME_MAX ? s.slice(0, NAME_MAX - 1) + '…' : s; }
+// HTML for a model name in a table cell (escaped; a span with the full name as its tooltip when cut).
+// tip: tooltip to use instead of the full name (e.g. ComfyUI's file name, which includes it).
+function nameHtml(s, tip) { s = String(s == null ? '' : s); const c = cutName(s); return c === s ? escH(s) : '<span title="' + escH(tip || s) + '">' + escH(c) + '</span>'; }
+// Same for an element filled with textContent (the cards' Model box).
+function setName(el, s) { s = String(s == null ? '' : s); const c = cutName(s); el.textContent = c; el.title = c === s ? '' : s; }
+// A model name that links somewhere (extLink with the name cut; the full name goes first in the link's tooltip).
+function nameLink(s, url, title) { s = String(s == null ? '' : s); const c = cutName(s); return c === s ? extLink(s, url, title) : extLink(c, url, s + ' — ' + (title || url)); }
 // Per-browser preferences (open tabs, theme, chosen filters).
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },

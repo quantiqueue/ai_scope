@@ -59,7 +59,7 @@ defineLens({
     $('dot').className = 'dot' + (cur ? ' live' : d.online ? '' : ' off');
     if (!d.online) {
       $('title').textContent = 'Ollama is not running';
-      $('model').textContent = ONONE;
+      setName($('model'), ONONE);
       show('tpsBox', false); show('tokBox', false); show('timeBox', false);
       $('foot').textContent = d.error || '';
       $('detail').textContent = '';
@@ -69,7 +69,7 @@ defineLens({
       // state line: what the request is doing (the lens title is in the header tab)
       const doing = { loading:'loading model', prompt:'reading prompt', thinking:'thinking', gen:'generating' }[cur.phase] || 'working';
       $('title').textContent = 'Running — ' + doing + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
-      $('model').textContent = cur.model;
+      setName($('model'), cur.model);
       show('tpsBox', true); show('tokBox', true); show('timeBox', true);
       $('tpsLabel').textContent = 'Current gen tok/s';   // the phase (loading / reading prompt / thinking) is on the state line
       $('tps').textContent = (cur.phase === 'gen' || cur.phase === 'thinking') && cur.liveTps != null ? fmtTps(cur.liveTps) : '…';
@@ -82,7 +82,7 @@ defineLens({
     } else {
       const a = d.average;
       $('title').textContent = 'Idle — no request running';
-      $('model').textContent = a ? a.model : ONONE;
+      setName($('model'), a ? a.model : ONONE);
       show('tpsBox', !!a); show('tokBox', false); show('timeBox', false);
       $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
       $('tps').textContent = a ? fmtTps(a.genTps) : ONONE;
@@ -109,7 +109,7 @@ defineLens({
       const g = m.gpuPct;
       const proc = g == null ? ONONE : g >= 100 ? '100% GPU' : g <= 0 ? '100% CPU' : (100 - g) + '% CPU / ' + g + '% GPU';
       const until = fmtUntil(m.expiresAt);
-      return '<tr><td class="model">' + escH(m.name) + (m.quant ? '<span class="na"> · ' + escH(m.quant) + '</span>' : '') + '</td>' +
+      return '<tr><td class="model">' + nameHtml(m.name) + (m.quant ? '<span class="na"> · ' + escH(m.quant) + '</span>' : '') + '</td>' +
         '<td>' + escH(m.params || ONONE) + '</td>' +
         '<td title="' + fmtBytes(m.sizeVram) + ' on GPU">' + fmtBytes(m.size) + '</td>' +
         '<td>' + (m.context ? fmtNum(m.context) + (m.maxContext ? '<span class="na"> / ' + fmtNum(m.maxContext) + '</span>' : '') : ONONE) + '</td>' +
@@ -163,7 +163,7 @@ defineLens({
       const statusTag = r.status === 'ok' ? '' : '<span class="status ' + (r.status === 'aborted' ? 'interrupted' : 'error') + '" title="' + escH(r.error || '') + '">' + escH(r.status) + '</span> ';
       return '<tr' + (isNew ? ' class="new"' : '') + '>' +
         '<td>' + escH(fmtWhen(r.start)) + '</td>' +
-        '<td class="model" title="' + escH(r.endpoint) + '">' + statusTag + escH(r.model) + '</td>' +
+        '<td class="model" title="' + escH(r.endpoint) + '">' + statusTag + nameHtml(r.model) + '</td>' +
         '<td class="tps"' + approx + '>' + fmtTps(r.genTps) + '</td>' +
         '<td title="' + (r.thinkTokens ? fmtNum(r.thinkTokens) + ' of these were thinking tokens' : '') + '">' + fmtNum(r.genTokens) + '</td>' +
         '<td>' + fmtTps(r.promptTps) + '</td>' +
@@ -189,7 +189,7 @@ defineLens({
       (vt ? ' · fit is weights vs ' + vramWord(d) + ' (context adds more)' : '') : '';
     const fitText = { fits:'fits', tight:'tight', spills:'partly CPU' };
     $('rows').innerHTML = d.installed.map(m =>
-      '<tr><td class="model">' + extLink(m.name, m.libraryUrl || m.modelUrl, m.libraryUrl ? 'Ollama library page' : 'Hugging Face repo') +
+      '<tr><td class="model">' + nameLink(m.name, m.libraryUrl || m.modelUrl, m.libraryUrl ? 'Ollama library page' : 'Hugging Face repo') +
         (m.libraryUrl && m.modelUrl ? '<a class="tag" href="' + escH(m.modelUrl) + '" target="_blank" rel="noopener" title="Original model on Hugging Face' + (m.baseName ? ': ' + escH(m.baseName) : '') + ' (opens in a new tab)">HF' + EXT_ICON + '</a>' : '') +
         (m.loaded ? '<span class="tag">loaded</span>' : '') + '</td>' +
       '<td>' + (m.publisher ? extLink(m.publisher, m.publisherUrl, 'Publisher on Hugging Face') : ONONE) + '</td>' +
