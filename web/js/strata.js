@@ -13,7 +13,7 @@ defineSource('strata', '/api/strata?limit=100');
 defineLens({
   id: 'strata.current', scope: 'strata', size: 'wide',
   name: 'Current request',
-  description: 'What Strata is answering right now: speed, tokens, prompt, context and system load.',
+  description: 'What Strata is answering right now: speed, tokens, prompt, context and the model process\'s GPU, VRAM, CPU and RAM use.',
   markup: nowCardMarkup([
     { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
     { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
@@ -52,7 +52,8 @@ defineLens({
       $('ctxBar').style.width = cur.contextUsed != null && cur.contextMax ? Math.min(100, 100 * cur.contextUsed / cur.contextMax) + '%' : '0';
       $('time').textContent = fmtSec(cur.elapsedMs);
       $('foot').textContent = '';   // the state is on the top line (an empty foot line is hidden)
-      setSysLoad($('load'), true);
+      // Strata's model process (strata.exe) when known (Windows); hidden on Windows without one, whole-computer System load elsewhere
+      setSysLoad($('load'), !(d.processSupported && !d.process), d.process, 'Strata');
     } else {
       const a = d.average, l = d.loaded;
       $('title').textContent = l && l.phase === 'unavailable' ? 'Engine not answering' : l ? 'Idle — no request running' : 'No model loaded';
@@ -91,7 +92,8 @@ defineLens({
       '<td title="' + escH(l.loadedAt || '') + '">' + (l.loadedAt ? escH(fmtWhen(Date.parse(l.loadedAt))) : ONONE) + '</td></tr>' : '';
     $('empty').hidden = !!l;
     $('empty').textContent = d.online ? 'No model loaded. Load one in Strata (Models).' : 'Strata is offline. Start the Strata app to see its model and requests.';
-    $('hint').textContent = l && l.error ? '— ' + l.error : '';
+    const where = l ? procVramText(d.process) : '';   // per-card VRAM of the model process (Windows, AI_SCOPE-051)
+    $('hint').textContent = [where, l && l.error ? l.error : ''].filter(Boolean).map((t, i) => (i ? '' : '— ') + t).join(' · ');
   },
 });
 

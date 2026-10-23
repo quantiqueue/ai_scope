@@ -1,4 +1,4 @@
-# AI_SCOPE procstats loop (AI_SCOPE-038). Started by procstats.js with -EncodedCommand after filling in
+# AI_SCOPE procstats loop (AI_SCOPE-038). procstats.js runs it from a temp file (-File) after filling in
 # __LUIDS__ (unused here, reserved), __FILE__ (watch file: one "key|port,port|name,name" line per app; the names are
 # optional - when given, only the app's processes with those exe names count, e.g. Bionic's llama-server.exe) and __PARENT__ (Node's PID).
 # Every 2 s prints, for each watched app:
@@ -37,6 +37,13 @@ public static class AiScopeProc {
     Mem m = new Mem(); m.cb = (uint)Marshal.SizeOf(typeof(Mem)); bool okm = GetProcessMemoryInfo(h, ref m, m.cb);
     long a, b, k, u; bool okt = GetProcessTimes(h, out a, out b, out k, out u); CloseHandle(h);
     return (okm ? m.WorkingSetSize.ToString() + "|" + m.PrivateUsage.ToString() : "|") + "|" + (okt ? (k + u).ToString() : ""); }
+  // Whether a process still exists (a fresh snapshot; works even when OpenProcess is refused, e.g. Strata's strata.exe)
+  public static bool Exists(int pid) {
+    IntPtr s = CreateToolhelp32Snapshot(2, 0); if (s == IntPtr.Zero || s == new IntPtr(-1)) return true;
+    Entry e = new Entry(); e.dwSize = (uint)Marshal.SizeOf(typeof(Entry)); bool found = false;
+    if (Process32FirstW(s, ref e)) { do { if ((int)e.th32ProcessID == pid) { found = true; break; } } while (Process32NextW(s, ref e)); }
+    CloseHandle(s); return found;
+  }
   // All processes: pid -> parent pid, pid -> exe name
   public static Dictionary<int, int> Parents = new Dictionary<int, int>();
   public static Dictionary<int, string> Names = new Dictionary<int, string>();
@@ -68,7 +75,13 @@ public static class AiScopeProc {
       if (PdhAddEnglishCounter(query, "\\GPU Process Memory(" + inst + ")\\Dedicated Usage", IntPtr.Zero, out d) != 0) d = IntPtr.Zero;
       if (PdhAddEnglishCounter(query, "\\GPU Process Memory(" + inst + ")\\Shared Usage", IntPtr.Zero, out s) != 0) s = IntPtr.Zero;
       if (PdhAddEnglishCounter(query, "\\GPU Engine(" + inst + ")\\Utilization Percentage", IntPtr.Zero, out e) != 0) e = IntPtr.Zero;
-      counters[p] = new IntPtr[] { d, s, e };
+      // CPU / RAM from the process counters too, for processes that refuse OpenProcess (Strata's strata.exe):
+      // "Process V2" instances are named "<name>:<pid>" (Windows 10 1709+), so a "*:<pid>" wildcard finds the process by PID.
+      IntPtr pc, ws, pb;
+      if (PdhAddEnglishCounter(query, "\\Process V2(*:" + p + ")\\% Processor Time", IntPtr.Zero, out pc) != 0) pc = IntPtr.Zero;
+      if (PdhAddEnglishCounter(query, "\\Process V2(*:" + p + ")\\Working Set", IntPtr.Zero, out ws) != 0) ws = IntPtr.Zero;
+      if (PdhAddEnglishCounter(query, "\\Process V2(*:" + p + ")\\Private Bytes", IntPtr.Zero, out pb) != 0) pb = IntPtr.Zero;
+      counters[p] = new IntPtr[] { d, s, e, pc, ws, pb };
     }
     PdhCollectQueryData(query);
   }
@@ -102,6 +115,32 @@ public static class AiScopeProc {
       }
     } finally { Marshal.FreeHGlobal(buf); }
     return res;
+  }
+  // Sum of all instances of a counter (null when it has no valid value yet)
+  static double? Sum(IntPtr c) {
+    if (c == IntPtr.Zero) return null;
+    uint size = 0, n = 0;
+    if (PdhGetFormattedCounterArray(c, 0x8200, ref size, out n, IntPtr.Zero) != 0x800007D2 || size == 0) return null;
+    IntPtr buf = Marshal.AllocHGlobal((int)size);
+    try {
+      if (PdhGetFormattedCounterArray(c, 0x8200, ref size, out n, buf) != 0) return null;
+      int item = IntPtr.Size == 8 ? 24 : 16, vo = IntPtr.Size == 8 ? 16 : 8; double t = 0; bool any = false;
+      for (int i = 0; i < n; i++) {
+        IntPtr q = new IntPtr(buf.ToInt64() + (long)i * item);
+        int status = Marshal.ReadInt32(q, IntPtr.Size); if (status != 0 && status != 1) continue;
+        t += BitConverter.Int64BitsToDouble(Marshal.ReadInt64(q, vo)); any = true;
+      }
+      return any ? (double?)t : null;
+    } finally { Marshal.FreeHGlobal(buf); }
+  }
+  // "workingSet|private||cpuPercent" from the process counters (cpu as a share of the whole CPU), or null
+  public static string ProcCounters(int pid) {
+    IntPtr[] c; if (!counters.TryGetValue(pid, out c)) return null;
+    double? cpu = Sum(c[3]), ws = Sum(c[4]), pb = Sum(c[5]);
+    if (ws == null && cpu == null) return null;
+    System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+    return (ws == null ? "" : ((long)ws.Value).ToString()) + "|" + (pb == null ? "" : ((long)pb.Value).ToString()) + "||" +
+      (cpu == null ? "" : (cpu.Value / Environment.ProcessorCount).ToString("R", inv));
   }
   // "G|key|pid|luid|dedicated|shared|util" lines for one process (cards it uses only)
   public static string Gpu(string key, int pid) {
@@ -152,7 +191,13 @@ while ($true) {
   $out = New-Object Text.StringBuilder
   foreach ($k in $apps.Keys) {
     foreach ($x in $apps[$k]) {
-      $r = [AiScopeProc]::Read($x); if ($null -eq $r) { $last = 0; continue }
+      # RAM / CPU via OpenProcess; some processes refuse it (Strata's strata.exe) - then from the process counters
+      # (P line gets a 7th field, cpu %, instead of CPU time), else the GPU numbers only
+      $r = [AiScopeProc]::Read($x)
+      if ($null -eq $r) {
+        if (-not [AiScopeProc]::Exists($x)) { $last = 0; continue }
+        $r = [AiScopeProc]::ProcCounters($x); if ($null -eq $r) { $r = '||' }
+      }
       $null = $out.Append('P|' + $k + '|' + $x + '|' + [AiScopeProc]::Names[$x] + '|' + $r + "`n")
       $null = $out.Append([AiScopeProc]::Gpu($k, $x))
     }

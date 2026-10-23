@@ -14,6 +14,9 @@ const spawn = require('child_process').spawn;
 const hwstats = require('./hwstats');
 
 const WATCH_FILE = path.join(os.tmpdir(), 'ai_scope-procwatch-' + process.pid + '.txt');
+// The filled-in script is run from a temp file: passed with -EncodedCommand it outgrew Windows' 32,767-character
+// command-line limit (spawn ENAMETOOLONG, which crashed the server - AI_SCOPE-051).
+const SCRIPT_FILE = path.join(os.tmpdir(), 'ai_scope-procstats-' + process.pid + '.ps1');
 const STALE_MS = 8000;
 const watches = {};     // key -> [ports]
 const results = {};     // key -> { at, pids: [{ pid, name }], luids: { luid: { vram, shared, util } }, cpu, ram, ramPrivate }
@@ -35,7 +38,10 @@ function handleBlock(lines) {
     const r = fresh[p[1]] || (fresh[p[1]] = { at: now, pids: [], luids: {}, cpu: null, ram: 0, ramPrivate: 0 });
     if (p[0] === 'P' && p.length >= 7) {
       const pid = +p[2], cpu = p[6] === '' ? null : +p[6];
+      // 8th field: CPU % straight from the process counters (process refused OpenProcess, so no CPU time to diff)
+      if (p.length >= 8 && p[7] !== '') { const c = parseFloat(p[7].replace(',', '.')); if (isFinite(c)) r.cpu = (r.cpu || 0) + Math.max(0, c); }
       r.pids.push({ pid: pid, name: p[3] });
+      if (p[4] === '') r.ramUnknown = true;   // the process refused OpenProcess: GPU numbers only
       r.ram += +p[4] || 0; r.ramPrivate += +p[5] || 0;
       const prev = lastCpu[pid];
       if (cpu != null) {
@@ -68,8 +74,15 @@ function startLoop() {
   const script = fill(fill(fill(src, '__LUIDS__', luids.map(function (l) { return l.toUpperCase(); }).join(',')),
     '__FILE__', WATCH_FILE.replace(/'/g, "''")), '__PARENT__', String(process.pid));
   let buf = '', block = [];
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  let child;
+  try {
+    fs.writeFileSync(SCRIPT_FILE, '\ufeff' + script, 'utf8');   // BOM: Windows PowerShell 5.1 reads BOM-less files as ANSI
+    child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_FILE],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (e) {   // never take the server down over per-process stats
+    console.log('[procstats] could not start: ' + e.message);
+    return;
+  }
   ps = child;
   child.on('error', function () { if (ps === child) ps = null; });
   child.on('exit', function () {
@@ -87,7 +100,7 @@ function startLoop() {
   });
 }
 function stopLoop() { if (ps) { try { ps.kill(); } catch (e) {} ps = null; } }
-process.on('exit', function () { stopLoop(); try { fs.unlinkSync(WATCH_FILE); } catch (e) {} });
+process.on('exit', function () { stopLoop(); try { fs.unlinkSync(WATCH_FILE); } catch (e) {} try { fs.unlinkSync(SCRIPT_FILE); } catch (e) {} });
 
 // Watch an app's processes: key (e.g. 'comfyui'), the port(s) it listens on, and optionally the exe names to count
 // (e.g. ['llama-server.exe'] for Bionic, whose model runs in a child process; default: the port owner + all children).
@@ -119,8 +132,8 @@ function get(key) {
     pids: r.pids,
     gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, shared: g.shared, util: g.util } : { vram: 0, shared: 0, util: 0 }; }),
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
-    ram: r.ram,
-    ramPrivate: r.ramPrivate,
+    ram: r.ramUnknown && !r.ram ? null : r.ram,
+    ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate,
   };
 }
 

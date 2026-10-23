@@ -157,8 +157,10 @@ function setSysLoad(id, on, proc, app) {   // id or element (lenses pass their o
     mem.push(g.vramUsed != null ? item('VRAM' + n, pct(g.vramUsed, g.vramTotal), GB(g.vramUsed) + (g.vramTotal ? ' / ' + GB(g.vramTotal) : '') + ' GB') : blank);
   });
   if (mine) {
-    top.push(mine.cpu != null ? item('CPU', mine.cpu, mine.cpu.toFixed(0) + '%', 'Share of the whole CPU (all cores)') : blank);
-    mem.push(item('MEM', pct(mine.ram, s.ramTotal), GB(mine.ram) + ' / ' + GB(s.ramTotal) + ' GB', 'RAM in use (working set); committed: ' + GB(mine.ramPrivate) + ' GB'));
+    const noAccess = 'Windows did not allow reading this process\'s CPU and RAM';
+    top.push(mine.cpu != null ? item('CPU', mine.cpu, mine.cpu.toFixed(0) + '%', 'Share of the whole CPU (all cores)') : mine.ram == null ? item('CPU', null, '—', noAccess) : blank);
+    mem.push(mine.ram != null ? item('MEM', pct(mine.ram, s.ramTotal), GB(mine.ram) + ' / ' + GB(s.ramTotal) + ' GB', 'RAM in use (working set); committed: ' + GB(mine.ramPrivate) + ' GB')
+      : item('MEM', null, '—', noAccess));
   } else {
     top.push(s.cpu != null ? item('CPU', s.cpu, s.cpu.toFixed(0) + '%') : blank);
     mem.push(item('MEM', pct(s.ramUsed, s.ramTotal), GB(s.ramUsed) + ' / ' + GB(s.ramTotal) + ' GB'));
@@ -178,7 +180,9 @@ function setSysLoad(id, on, proc, app) {   // id or element (lenses pass their o
 function procVramText(pr) {
   const cards = pr && pr.gpus ? pr.gpus.map((g, i) => ({ n: i + 1, g })).filter(x => x.g.vram >= 64 * 1048576) : [];
   if (!cards.length) return '';
-  const shared = pr.gpus.reduce((a, g) => a + (g.shared || 0), 0);
+  // Shared (system) memory: Windows can report the same shared allocation on every card (seen with Strata), so take the
+  // largest rather than adding them up.
+  const shared = pr.gpus.reduce((a, g) => Math.max(a, g.shared || 0), 0);
   return 'in VRAM: ' + cards.map(x => (pr.gpus.length > 1 ? 'GPU ' + x.n : 'GPU') + ' ' + fmtBytes(x.g.vram)).join(' · ') +
     (shared >= 64 * 1048576 ? ' · ' + fmtBytes(shared) + ' in shared (system) memory' : '') +
     (pr.pids.length > 1 ? ' (' + pr.pids.length + ' model processes together)' : '');
