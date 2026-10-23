@@ -343,7 +343,7 @@ function getStats() {
   };
 }
 
-// ---- VRAM fit for the model lists (LM Studio, Ollama, ComfyUI) ----
+// ---- VRAM fit for the model lists (Bionic, Ollama, ComfyUI) ----
 // Card sizes, biggest first, e.g. { cards: [16 GB, 8 GB], largest: 16 GB, total: 24 GB }; null if unknown.
 function vramInfo() {
   const sizes = allCards().map(function (c) { return c.vramTotal; }).filter(function (v) { return v > 0; })
@@ -352,7 +352,7 @@ function vramInfo() {
   return { cards: sizes, largest: sizes[0], total: sizes.reduce(function (a, b) { return a + b; }, 0) };
 }
 // A model "fits" when it fits on the largest single card. If it only fits split across cards
-// (and the app can split, like llama.cpp-based LM Studio / Ollama), returns fit 'multi' with the
+// (and the app can split, like llama.cpp-based Bionic / Ollama), returns fit 'multi' with the
 // number of cards needed. Returns { fit, gpus } or null.
 function vramFit(size, vram, canSplit) {
   if (!vram || !size) return null;

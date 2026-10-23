@@ -23,7 +23,12 @@ function load() {
     // AI_SCOPE-022: the built-in SYSTEM scope is now "hardware"; move saved lenses over (system.cpu -> hardware.cpu, ...)
     let moved = 0;
     scopes.forEach(function (s) { s.lenses.forEach(function (l) { if (l && /^system\./.test(l.lens)) { l.lens = 'hardware.' + l.lens.slice(7); moved++; } }); });
-    if (moved) { save(); console.log('[custom] renamed ' + moved + ' SYSTEM lens(es) to Hardware'); }
+    // AI_SCOPE-035: the LM Studio scope is now Bionic (lmstudio.requests -> bionic.requests, ...)
+    let movedLm = 0;
+    scopes.forEach(function (s) { s.lenses.forEach(function (l) { if (l && /^lmstudio\./.test(l.lens)) { l.lens = 'bionic.' + l.lens.slice(9); movedLm++; } }); });
+    if (moved || movedLm) save();
+    if (moved) console.log('[custom] renamed ' + moved + ' SYSTEM lens(es) to Hardware');
+    if (movedLm) console.log('[custom] renamed ' + movedLm + ' LM Studio lens(es) to Bionic');
   } catch (e) {
     scopes = [];
     const bad = FILE + '.bad-' + new Date().toISOString().replace(/[:.]/g, '-');

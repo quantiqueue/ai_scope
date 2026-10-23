@@ -1,6 +1,6 @@
-// LM Studio model status from its REST API: installed models + loaded instances.
-// Uses /api/v1/models (LM Studio 0.4+), falls back to /api/v0/models.
-// Port: LMSTUDIO_URL env, else tries 1234, then 1235. No dependencies; conservative JS.
+// Model status from the LM Studio server REST API (used by Bionic's local server): installed models + loaded instances.
+// Uses /api/v1/models, falls back to /api/v0/models. Used by the Bionic scope; the file name stays generic for AI_SCOPE-036.
+// Port: the scope's Server URL setting, else tries 1234, then 1235. No dependencies; conservative JS.
 'use strict';
 const http = require('http');
 const fs = require('fs');
@@ -9,7 +9,7 @@ const vramFit = require('./hwstats').vramFit;  // VRAM fit vs the largest card
 const os = require('os');
 
 // ---------- where each model came from (Hugging Face repo / LM Studio hub) ----------
-// LM Studio stores downloads as <models>/<publisher>/<repo>/<file>, where publisher/repo is the Hugging Face repo.
+// Bionic (like LM Studio) stores downloads as <models>/<publisher>/<repo>/<file>, where publisher/repo is the Hugging Face repo.
 // Folders are set from the scope's install settings in start().
 let MODEL_DIRS = [];
 let HUB_DIR = null;
@@ -66,7 +66,7 @@ let online = false;
 let apiVersion = null;
 let lastError = null;
 let models = [];          // installed models, normalized
-let raw = null;           // last raw response (for /api/lmstudio/raw debugging)
+let raw = null;           // last raw response (for /api/bionic/raw debugging)
 let lastLoadedKeys = '';
 
 function getJson(url, cb) {
@@ -140,7 +140,7 @@ function normV0(d) {
 }
 
 function tryBase(list, i, cb) {
-  if (i >= list.length) return cb(new Error('LM Studio server not reachable (tried ' + list.join(', ') + ')'));
+  if (i >= list.length) return cb(new Error('Bionic\'s local server not reachable (tried ' + list.join(', ') + ')'));
   getJson(list[i] + '/api/v1/models', function (err, d) {
     if (!err && d && d.models) return cb(null, list[i], 'v1', d);
     getJson(list[i] + '/api/v0/models', function (err2, d2) {
@@ -159,11 +159,11 @@ function poll() {
     if (Date.now() - reposAt > 60000) scanRepos();
     models.forEach(function (m) { const s = sourceFor(m); m.modelUrl = s.modelUrl; m.publisherUrl = s.publisherUrl; m.source = s.source; m.modified = s.modified; });
     const keys = models.filter(function (m) { return m.instances.length; }).map(function (m) { return m.key; }).join(',');
-    if (keys !== lastLoadedKeys) { lastLoadedKeys = keys; console.log('[lmstudio] loaded: ' + (keys || 'none')); }
+    if (keys !== lastLoadedKeys) { lastLoadedKeys = keys; console.log('[bionic] loaded: ' + (keys || 'none')); }
   });
 }
 
-// vram: hwstats.vramInfo() (card sizes); LM Studio (llama.cpp) can split a model across cards.
+// vram: hwstats.vramInfo() (card sizes); Bionic (llama.cpp) can split a model across cards.
 function getState(vram) {
   const loaded = [];
   models.forEach(function (m) {
@@ -186,7 +186,7 @@ function getState(vram) {
 }
 function getRaw() { return raw; }
 
-// settings: { url (empty = auto-detect), home (LM Studio folder), modelsDir (empty = <home>/models) }
+// settings: { url (empty = auto-detect), home (data folder, ~/.lmstudio), modelsDir (empty = <home>/models) }
 let timer = null;
 function start(settings) {
   settings = settings || {};
@@ -196,7 +196,7 @@ function start(settings) {
   CANDIDATES = settings.url ? [settings.url] : AUTO_URLS;
   base = null; reposAt = 0;
   stopTimer();
-  poll(); timer = setInterval(poll, 10000); // each poll adds 2 lines to LM Studio's server log
+  poll(); timer = setInterval(poll, 10000); // each poll adds 2 lines to Bionic's server log
 }
 function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
 function stop() { stopTimer(); online = false; base = null; models = []; raw = null; lastError = null; lastLoadedKeys = ''; }

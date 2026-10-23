@@ -12,7 +12,7 @@ if (major < 18) {
 }
 
 const HELP = [
-  'AI_SCOPE ' + pkg.version + ' - local AI monitor (LM Studio, Ollama, ComfyUI, CPU/GPU)',
+  'AI_SCOPE ' + pkg.version + ' - local AI monitor (Bionic, Ollama, ComfyUI, Strata, CPU/GPU)',
   '',
   'Usage: ai_scope [options]      (or: npx ai_scope [options])',
   '',

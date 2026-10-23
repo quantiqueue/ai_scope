@@ -7,17 +7,17 @@ Back to the [README](README.md).
 | Scope | What it shows |
 |---|---|
 | **Hardware** (built in) | CPU, RAM, and a GPU + VRAM tile per graphics card, with 5-minute sparklines; GPU temperature and power draw on NVIDIA cards |
-| **LM Studio** | Current request (live state, tok/s), loaded models, request history, installed models with VRAM fit |
+| **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit |
 | **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit |
 | **ComfyUI** | Current job (step progress, speed, time left), run history with thumbnails, installed models (filter by type) |
 | **Strata** | Current request (reading / thinking / answering, tok/s, prompt and context fill), loaded model (experts in VRAM, speculation), request history (reused prompt tokens, hit rate), installed models with Strata's own fit verdict |
 | **Custom** | A custom scope is your own page made of lenses from any installed scope, e.g. ComfyUI's current job next to Strata's current request and your GPU tiles. |
 
-- Click **+** to open the Scopes page. It has three sections: **Installable scopes** (install, settings, remove), **Built-in scopes** (Hardware) and **Custom scopes**. Click **Install** on a scope, check its settings (e.g. the LM Studio folder) and its tab is added. **Remove** takes the tab away and stops that scope; **Settings** changes an installed scope's settings. Click a scope to reopen a closed tab.
+- Click **+** to open the Scopes page. It has three sections: **Installable scopes** (install, settings, remove), **Built-in scopes** (Hardware) and **Custom scopes**. Click **Install** on a scope, check its settings (e.g. Bionic's data folder) and its tab is added. **Remove** takes the tab away and stops that scope; **Settings** changes an installed scope's settings. Click a scope to reopen a closed tab.
 - Drag tabs to reorder them; close a tab with its **×**. Each browser remembers its own tabs and order.
 - **While something runs**, each *Current request / Current job* card says what it's doing ("Running — reading prompt", "Running — sampling (+2 queued)") and shows a **System load** row (whole-computer GPU, VRAM, CPU and RAM). When idle it tells you the next step ("Load a model in Strata to see live stats.").
 - The request and run tables have a **Peak load** column: the highest GPU % and VRAM while each one ran (hover for CPU and RAM too).
-- Model and publisher names link to their Hugging Face / Ollama / LM Studio pages (opens a new tab).
+- Model and publisher names link to their Hugging Face / Ollama / LM Studio catalog pages (opens a new tab).
 - Tables page by 15.
 - Scopes are listed in **`scopes.json`** (name, description, icon, the server modules that collect its data, and the settings asked at install). Installed scopes and their settings are saved in `~/.ai_scope/installed.json`.
 

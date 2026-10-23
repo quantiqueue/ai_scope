@@ -11,19 +11,19 @@
       "settings": []
     },
     {
-      "id": "lmstudio",
-      "name": "LM Studio",
+      "id": "bionic",
+      "name": "Bionic",
       "desc": "Loaded and installed models, plus token performance for recent requests",
       "logo": true,
       "modules": ["lmstats", "lmapi"],
       "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 3v18h18\"/><path d=\"M7 15l4-4 3 3 5-6\"/></svg>",
       "settings": [
-        { "key": "home", "label": "LM Studio folder", "type": "folder", "default": "~/.lmstudio", "required": true, "mustExist": true,
-          "help": "LM Studio's data folder. Request stats are read from its server logs." },
+        { "key": "home", "label": "Data folder", "type": "folder", "default": "~/.lmstudio", "required": true, "mustExist": true,
+          "help": "Bionic's data folder (it uses LM Studio's .lmstudio folder). Request stats are read from its server logs." },
         { "key": "url", "label": "Server URL", "type": "url", "default": "", "placeholder": "Auto-detect (127.0.0.1:1234, then :1235)",
-          "help": "LM Studio's local server (Developer tab). Leave empty to auto-detect." },
-        { "key": "modelsDir", "label": "Models folder", "type": "folder", "default": "", "placeholder": "Default: the models folder inside the LM Studio folder", "mustExist": true,
-          "help": "Only needed if you moved your models (My Models → Models directory)." }
+          "help": "Bionic's local server (Local Server screen). Leave empty to auto-detect." },
+        { "key": "modelsDir", "label": "Models folder", "type": "folder", "default": "", "placeholder": "Default: the models folder inside the data folder", "mustExist": true,
+          "help": "Only needed if you moved Bionic's models folder somewhere else." }
       ]
     },
     {

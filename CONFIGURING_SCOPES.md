@@ -21,7 +21,7 @@ The terminal settings apply to that window only. The same help, with **Copy** bu
 
 | Scope | Settings |
 |---|---|
-| LM Studio | LM Studio folder (default `%USERPROFILE%\.lmstudio`), server URL (empty = try `:1234`, then `:1235`), models folder (empty = inside the LM Studio folder) |
+| Bionic | Data folder (default `%USERPROFILE%\.lmstudio`, which LM Studio's Bionic uses), server URL (empty = try `:1234`, then `:1235`), models folder (empty = inside the data folder) |
 | ComfyUI | URL (empty = try `:8188`, then `:8000`) |
 | Ollama | URL (default `http://127.0.0.1:11434`), relay port (default `11435`) |
 | Strata | Strata app URL (empty = `http://127.0.0.1:47831`, shown in Strata under *Connect Strata to an app*) |

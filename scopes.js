@@ -25,6 +25,8 @@ function loadCatalog() {
 }
 function loadState() {
   try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) || {}; } catch (e) { state = {}; }
+  // AI_SCOPE-035: the "LM Studio" scope was really watching LM Studio's Bionic and is now "bionic"; keep its install + settings.
+  if (state.lmstudio && !state.bionic) { state.bionic = state.lmstudio; delete state.lmstudio; saveState(); console.log('[scopes] renamed the LM Studio scope to Bionic'); }
 }
 function saveState() {
   paths.ensure();

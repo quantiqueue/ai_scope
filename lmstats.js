@@ -1,12 +1,13 @@
-// Parses LM Studio server logs (llama.cpp "print_timing" blocks) into per-request performance rows.
+// Parses LM Studio-format server logs (llama.cpp "print_timing" blocks) into per-request performance rows.
+// Used by the Bionic scope (LM Studio's Bionic); the file name stays generic for the LM Studio desktop scope later (AI_SCOPE-036).
 // Written in conservative JS so it runs on older Node versions.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// Where LM Studio keeps server logs: <LM Studio folder>/apps/bionic/server-logs (newer) or /server-logs.
-// The LM Studio folder comes from the scope's install settings (scopes.json -> data/installed.json).
+// Where the logs are: <data folder>/apps/bionic/server-logs (Bionic), else <data folder>/server-logs (LM Studio desktop).
+// The data folder (~/.lmstudio) comes from the scope's install settings (scopes.json -> data/installed.json).
 let CANDIDATE_DIRS = [];
 function start(settings) {
   const home = (settings && settings.home) || path.join(os.homedir(), '.lmstudio');
@@ -83,7 +84,7 @@ function parseText(text, file, rows) {
 function getLatestRequests(limit) {
   limit = limit || 100;
   const dir = findLogDir();
-  if (!dir) return { logDir: null, rows: [], error: 'LM Studio log folder not found. Looked in: ' + CANDIDATE_DIRS.join(', ') };
+  if (!dir) return { logDir: null, rows: [], error: 'Bionic server log folder not found. Looked in: ' + CANDIDATE_DIRS.join(', ') };
   const files = listLogFiles(dir);
   const rows = [];
   // Read newest files first until we have enough rows.

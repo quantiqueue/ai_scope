@@ -1,13 +1,14 @@
 {
   "name": "ai_scope",
   "version": "0.3.0",
-  "description": "AI_SCOPE: local dashboard for monitoring AI tools (LM Studio, Ollama, ComfyUI, CPU/GPU/VRAM)",
+  "description": "AI_SCOPE: local dashboard for monitoring AI tools (Bionic, Ollama, ComfyUI, Strata, CPU/GPU/VRAM)",
   "keywords": [
     "ai",
     "llm",
     "dashboard",
     "monitor",
     "lmstudio",
+    "bionic",
     "ollama",
     "comfyui",
     "gpu",

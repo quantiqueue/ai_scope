@@ -1,15 +1,15 @@
-// AI_SCOPE dashboard - LM Studio scope: current request, requests (from its logs), loaded and installed models.
-// Data: /api/requests (server log parser) and /api/lmstudio/models (LM Studio's REST API).
+// AI_SCOPE dashboard - Bionic scope (LM Studio's Bionic): current request, requests (from its server logs), loaded and installed models.
+// Data: /api/bionic (server log parser) and /api/bionic/models (the REST API of Bionic's local server).
 // Every card/table is a lens (lens.js), so it can also be shown on custom scopes, more than once.
 
-defineSource('lmstudio', '/api/requests?limit=100');
-defineSource('lmstudio.models', '/api/lmstudio/models', 'lmstudio');
+defineSource('bionic', '/api/bionic?limit=100');
+defineSource('bionic.models', '/api/bionic/models', 'bionic');
 
 // ---------- Current request ----------
 defineLens({
-  id: 'lmstudio.current', scope: 'lmstudio', size: 'wide',
+  id: 'bionic.current', scope: 'bionic', size: 'wide',
   name: 'Current request',
-  description: 'What LM Studio is answering right now: prompt progress, speed, tokens and system load.',
+  description: 'What Bionic\'s local server is answering right now: prompt progress, speed, tokens and system load.',
   markup: nowCardMarkup([
     { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
     { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
@@ -19,7 +19,7 @@ defineLens({
     const $ = L.$, cur = data.current, avg = data.average;
     $('dot').className = 'dot' + (cur ? ' live' : '');
     if (cur) {
-      // state line from LM Studio's server log: starting -> reading prompt (n%) -> generating (no "thinking" or model loading in the log)
+      // state line from Bionic's server log: starting -> reading prompt (n%) -> generating (no "thinking" or model loading in the log)
       const doing = cur.phase === 'gen' ? 'generating' : cur.progress > 0 && cur.progress < 1 ? 'reading prompt' : 'starting';   // the % is in the box below
       $('title').textContent = 'Running — ' + doing + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
       $('model').textContent = cur.model;
@@ -44,13 +44,13 @@ defineLens({
       $('tps').textContent = avg ? fmtTps(avg.genTps) : '—';
       $('timeBox').hidden = true;
       $('tokBox').hidden = true;
-      // like Strata's card: a hint while no model is loaded (loaded models come from LM Studio's API, the other source)
-      const models = SOURCES['lmstudio.models'].data;
+      // like Strata's card: a hint while no model is loaded (loaded models come from Bionic's API, the other source)
+      const models = SOURCES['bionic.models'].data;
       // what to do to see live stats: start the server, load a model, then send a request
       $('foot').textContent = !models || !models.loaded ? ' '
-        : !models.online ? 'Start the LM Studio server to see live stats.'
-        : !models.loaded.length ? 'Load a model in LM Studio to see live stats.'
-        : 'Send a request to the LM Studio server to see live stats.';
+        : !models.online ? 'Start Bionic\'s local server to see live stats.'
+        : !models.loaded.length ? 'Load a model in Bionic to see live stats.'
+        : 'Send a request to Bionic\'s local server to see live stats.';
       setSysLoad($('load'), false);
     }
   },
@@ -58,9 +58,9 @@ defineLens({
 
 // ---------- Loaded in memory ----------
 defineLens({
-  id: 'lmstudio.loaded', scope: 'lmstudio', source: 'lmstudio.models', size: 'full',
+  id: 'bionic.loaded', scope: 'bionic', source: 'bionic.models', size: 'full',
   name: 'Loaded in memory',
-  description: 'Models LM Studio has loaded: size, context, flash attention, KV cache, parallel slots, auto-unload.',
+  description: 'Models Bionic has loaded: size, context, flash attention, KV cache, parallel slots, auto-unload.',
   markup: tableLensMarkup({ title:'Loaded in memory',
     cols:['Model', 'Params', 'Size', 'Context', 'Flash attention', 'KV cache', 'Parallel', 'Auto-unload'] }),
   render(L, d) {
@@ -77,19 +77,19 @@ defineLens({
         '<td>' + (m.ttlMs ? fmtDur(m.ttlMs) + ' idle' : 'off') + '</td></tr>';
     }).join('');
     $('empty').hidden = d.loaded.length > 0;
-    $('empty').textContent = d.online ? 'No model loaded. Load one in LM Studio, or it loads on the first request (JIT loading).'
-      : 'LM Studio server is not reachable' + (d.error ? ' (' + d.error + ')' : '') + '. Start the server in LM Studio (Developer tab) to see models.';
+    $('empty').textContent = d.online ? 'No model loaded. Load one in Bionic, or it loads on the first request (JIT loading).'
+      : 'Bionic\'s local server is not reachable' + (d.error ? ' (' + d.error + ')' : '') + '. Start it on Bionic\'s Local Server screen to see models.';
     const vt = d.vramTotal;
     const big = vt ? d.loaded.filter(m => m.size && m.size > vt) : [];
-    $('hint').textContent = big.length ? (d.vramCards > 1 ? '— larger than one card (' + fmtBytes(vt) + ' VRAM), so it is split across GPUs or partly in system RAM' : '— larger than ' + fmtBytes(vt) + ' VRAM, so part of it runs from system RAM') : (d.loaded.length ? '— LM Studio does not report GPU offload; compare VRAM on the Hardware tab' : '');
+    $('hint').textContent = big.length ? (d.vramCards > 1 ? '— larger than one card (' + fmtBytes(vt) + ' VRAM), so it is split across GPUs or partly in system RAM' : '— larger than ' + fmtBytes(vt) + ' VRAM, so part of it runs from system RAM') : (d.loaded.length ? '— Bionic does not report GPU offload; compare VRAM on the Hardware tab' : '');
   },
 });
 
 // ---------- Requests ----------
 defineLens({
-  id: 'lmstudio.requests', scope: 'lmstudio', size: 'full',
+  id: 'bionic.requests', scope: 'bionic', size: 'full',
   name: 'Requests',
-  description: 'Finished requests from LM Studio\'s server logs: speeds, tokens, first token, total time, peak load.',
+  description: 'Finished requests from Bionic\'s server logs: speeds, tokens, first token, total time, peak load.',
   markup: tableLensMarkup({ title:'Requests', pager:true,
     hint: '',
     foot: '\n      <div class="err" data-k="err" hidden></div>',
@@ -116,9 +116,9 @@ defineLens({
 
 // ---------- Installed models ----------
 defineLens({
-  id: 'lmstudio.installed', scope: 'lmstudio', source: 'lmstudio.models', size: 'full',
+  id: 'bionic.installed', scope: 'bionic', source: 'bionic.models', size: 'full',
   name: 'Installed models',
-  description: 'Models downloaded in LM Studio, with size, features, VRAM fit and max context.',
+  description: 'Models downloaded in Bionic, with size, features, VRAM fit and max context.',
   markup: tableLensMarkup({ title:'Installed models',
     cols:['Model', 'Publisher', 'Arch', 'Params', 'Quant', 'Size', 'Features', 'VRAM fit', 'Max context', 'Modified'] }),
   render(L, d) {
@@ -136,19 +136,19 @@ defineLens({
         '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>';
     }).join('');
     $('empty').hidden = d.installed.length > 0;
-    $('empty').textContent = d.online ? 'No models found.' : 'LM Studio server is not reachable.';
+    $('empty').textContent = d.online ? 'No models found.' : 'Bionic\'s local server is not reachable.';
     $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' models · ' + fmtBytes(d.installed.reduce((a, m) => a + (m.size || 0), 0)) + ' on disk' +
       (vt ? ' · fit is weights vs ' + vramWord(d) + ' (context adds more)' : '') : '';
   },
 });
 
-// ---------- The LM Studio scope page: header line + its lenses ----------
-subscribeSource('lmstudio', (data, err) => {
+// ---------- The Bionic scope page: header line + its lenses ----------
+subscribeSource('bionic', (data, err) => {
   const meta = document.getElementById('meta');
   if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }
-  const lmApi = SOURCES['lmstudio.models'].data;
+  const lmApi = SOURCES['bionic.models'].data;
   meta.textContent =
-    (lmApi ? (lmApi.online ? 'connected to ' + lmApi.url + ' (API ' + lmApi.apiVersion + ')' : 'LM Studio server offline') + ' · ' : '') +
+    (lmApi ? (lmApi.online ? 'connected to ' + lmApi.url + ' (API ' + lmApi.apiVersion + ')' : 'Bionic\'s local server offline') + ' · ' : '') +
     data.rows.length + ' latest requests · updated ' + new Date().toLocaleTimeString() + ' · updates every 2 s';
 });
-mountScopePage('lmstudio', ['lmstudio.current', 'lmstudio.loaded', 'lmstudio.requests', 'lmstudio.installed']);
+mountScopePage('bionic', ['bionic.current', 'bionic.loaded', 'bionic.requests', 'bionic.installed']);

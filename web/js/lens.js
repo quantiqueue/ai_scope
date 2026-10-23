@@ -7,7 +7,7 @@
 
 // ---------- Sources: one poll per endpoint, shared by every subscriber ----------
 // A scope usually has one source named like the scope ('strata'); a scope with several endpoints names the
-// others 'scope.part' (e.g. 'lmstudio.models'). Polling stops while the scope is not installed.
+// others 'scope.part' (e.g. 'bionic.models'). Polling stops while the scope is not installed.
 const SOURCES = {};   // source id -> { id, scope, url, every, subs, data, error, busy, timer, kick }
 function defineSource(id, url, scope, every) {
   SOURCES[id] = { id, scope: scope || id, url, every: every || 2000, subs: new Set(), data: null, error: null };
@@ -80,7 +80,7 @@ function mountScopePage(scope, ids) {
 }
 
 // ---------- Shared building blocks (markup) ----------
-// The LLM scopes (Strata, Ollama, LM Studio, later llama.cpp) and ComfyUI draw the same kinds of cards;
+// The LLM scopes (Strata, Ollama, Bionic, later llama.cpp) and ComfyUI draw the same kinds of cards;
 // these build their markup so every lens looks alike. Parts are marked data-k for lens.$().
 
 // Lens header (every lens): a tab docked to the top edge of the lens card with the lens title; on custom scopes

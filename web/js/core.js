@@ -1,5 +1,5 @@
 // AI_SCOPE dashboard - shared code: installed scopes, table paging, formatting helpers.
-// Loaded first; the scope files (hardware, comfyui, ollama, lmstudio, strata) and shell.js build on it.
+// Loaded first; the scope files (hardware, comfyui, ollama, bionic, strata) and shell.js build on it.
 
 // ---------- Scopes (catalog: scopes.json; install state: data/installed.json) ----------
 // Filled in by the server when it sends the page; refreshed from /api/scopes.
@@ -83,7 +83,7 @@ function fmtUntil(ms) {
 }
 const ONONE = '—';
 const featTags = f => f && f.length ? f.map(x => '<span class="tag">' + escH(x) + '</span>').join('') : ONONE;
-// LM Studio log timestamps are local "YYYY-MM-DD HH:MM:SS"
+// Bionic (LM Studio-format) log timestamps are local "YYYY-MM-DD HH:MM:SS"
 function lmTs(ts) {
   const m = /^(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+)$/.exec(ts || '');
   return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : null;

@@ -39,7 +39,7 @@ function sendWebFile(res, name, type) {
 }
 
 // Which scope each data endpoint belongs to: endpoints of scopes that aren't installed answer 404.
-// Peak whole-PC load per LM Studio request. Its log rows are re-read on every poll, so peaks are cached
+// Peak whole-PC load per Bionic request. Its log rows are re-read on every poll, so peaks are cached
 // in memory by row. The log timestamp is written when the request finishes (1 s resolution).
 const lmPeaks = new Map();
 function lmPeak(r) {
@@ -56,7 +56,7 @@ function lmPeak(r) {
   }
   return p;
 }
-const SCOPE_ROUTES = [['/api/requests', 'lmstudio'], ['/api/lmstudio/', 'lmstudio'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata']];
+const SCOPE_ROUTES = [['/api/bionic', 'bionic'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata']];
 const PKG_VERSION = require('./package.json').version;
 function isLocal(req) {
   const a = (req.socket && req.socket.remoteAddress) || '';
@@ -151,11 +151,11 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(stratastats.getState(limit)));
   }
-  if (url.pathname === '/api/lmstudio/models') {
+  if (url.pathname === '/api/bionic/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(lmapi.getState(hwstats.vramInfo())));
   }
-  if (url.pathname === '/api/lmstudio/raw') {
+  if (url.pathname === '/api/bionic/raw') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(lmapi.getRaw(), null, 2));
   }
@@ -173,7 +173,7 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(hwstats.getStats()));
   }
-  if (url.pathname === '/api/requests') {
+  if (url.pathname === '/api/bionic') {   // Bionic's requests (from its server logs)
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
     let body;
     try {

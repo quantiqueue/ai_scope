@@ -8,7 +8,8 @@ used only to show which app a scope watches.
 | File | App | Copied from (Windows, 2026-10-22) |
 |---|---|---|
 | `ollama.png` | Ollama | `%LOCALAPPDATA%\Programs\Ollama\app.ico` (largest PNG image) |
-| `lmstudio.png` | LM Studio | `%LOCALAPPDATA%\Programs\Bionic\resources\icon.ico` (largest PNG image) |
+| `bionic.png` | Bionic (LM Studio's Bionic) | `%LOCALAPPDATA%\Programs\Bionic\Bionic.exe` (largest PNG icon resource; copied 2026-10-23) |
+| `lmstudio.png` | LM Studio (desktop app) | `%LOCALAPPDATA%\Programs\Bionic\resources\icon.ico` (largest PNG image) — Bionic still ships LM Studio's icon there. Not used yet; kept for the LM Studio scope (AI_SCOPE-036). |
 | `comfyui.png` | ComfyUI (Comfy Desktop) | `%LOCALAPPDATA%\Programs\Comfy Desktop\resources\app.asar` → `assets/Comfy_Logo_x256.png` |
 | `strata-light.svg` | Strata (for light backgrounds) | `%LOCALAPPDATA%\Programs\Strata\host\dist\brand\strata-mark-light.svg` (metadata block removed) |
 | `strata-dark.svg` | Strata (for dark backgrounds) | `%LOCALAPPDATA%\Programs\Strata\host\dist\brand\strata-mark-dark.svg` (metadata block removed) |
