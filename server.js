@@ -15,9 +15,9 @@ const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pag
 hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
 scopes.init();      // starts the modules of every installed scope (scopes.json + data/installed.json)
 
-// Port/host come from the command line (bin/ai-scope.js sets these) or the environment.
+// Port/host come from the command line (bin/ai_scope.js sets these) or the environment.
 // 127.0.0.1 = this PC only; 0.0.0.0 = also other devices on your network.
-// `npx ai-scope` defaults to 127.0.0.1; running server.js directly (dev.js / start.bat) defaults to 0.0.0.0.
+// `npx ai_scope` defaults to 127.0.0.1; running server.js directly (dev.js / start.bat) defaults to 0.0.0.0.
 const PORT = parseInt(process.env.AI_SCOPE_PORT, 10) || 9000;
 const HOST = process.env.AI_SCOPE_HOST || '0.0.0.0';
 const BOOT_ID = Date.now().toString(); // changes on every restart; the page uses it to auto-reload
@@ -64,7 +64,7 @@ function isLocal(req) {
 }
 let iconBuf = null;
 function sendIcon(res) {
-  if (!iconBuf) { try { iconBuf = fs.readFileSync(path.join(__dirname, 'assets', 'ai-scope.ico')); } catch (e) { iconBuf = Buffer.alloc(0); } }
+  if (!iconBuf) { try { iconBuf = fs.readFileSync(path.join(__dirname, 'assets', 'ai_scope.ico')); } catch (e) { iconBuf = Buffer.alloc(0); } }
   if (!iconBuf.length) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { 'Content-Type': 'image/x-icon', 'Cache-Control': 'max-age=86400' });
   res.end(iconBuf);
@@ -97,9 +97,9 @@ http.createServer((req, res) => {
   if (WEB_FILES[url.pathname]) return sendWebFile(res, WEB_FILES[url.pathname][0], WEB_FILES[url.pathname][1]);
   const js = WEB_JS.exec(url.pathname);
   if (js) return sendWebFile(res, 'js/' + js[1] + '.js', 'text/javascript; charset=utf-8');
-  // "Is AI_SCOPE running here?" for `ai-scope --app` / `--stop`; `local` = request from this PC (shows the Stop button).
-  if (url.pathname === '/api/ping') return sendJson(res, 200, { app: 'ai-scope', version: PKG_VERSION, pid: process.pid, port: PORT, local: isLocal(req) });
-  // Stop AI_SCOPE (ai-scope --stop, or the Stop button). Only from this PC, and only with the custom header,
+  // "Is AI_SCOPE running here?" for `ai_scope --app` / `--stop`; `local` = request from this PC (shows the Stop button).
+  if (url.pathname === '/api/ping') return sendJson(res, 200, { app: 'ai_scope', version: PKG_VERSION, pid: process.pid, port: PORT, local: isLocal(req) });
+  // Stop AI_SCOPE (ai_scope --stop, or the Stop button). Only from this PC, and only with the custom header,
   // so other web pages can't trigger it (a cross-site request with that header needs CORS, which we never allow).
   if (url.pathname === '/api/stop' && req.method === 'POST') {
     if (!isLocal(req) || req.headers['x-ai-scope'] !== 'stop') return sendJson(res, 403, { ok: false, error: 'Only allowed from this computer' });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// AI_SCOPE command line: `npx ai-scope [options]`.
+// AI_SCOPE command line: `npx ai_scope [options]`.
 // Parses the flags, then runs server.js in this process (no auto-restart; dev.js is for development).
 'use strict';
 const path = require('path');
@@ -14,7 +14,7 @@ if (major < 18) {
 const HELP = [
   'AI_SCOPE ' + pkg.version + ' - local AI monitor (LM Studio, Ollama, ComfyUI, CPU/GPU)',
   '',
-  'Usage: ai-scope [options]      (or: npx ai-scope [options])',
+  'Usage: ai_scope [options]      (or: npx ai_scope [options])',
   '',
   'Options:',
   '  -p, --port <n>          Port for the dashboard (default 9000)',
@@ -32,14 +32,14 @@ const HELP = [
   '  -h, --help              Show this help',
   '',
   'Examples:',
-  '  ai-scope --open',
-  '  ai-scope --app',
-  '  ai-scope --stop',
-  '  ai-scope --host 0.0.0.0 --port 9100',
-  '  ai-scope --host 0.0.0.0 --install-startup'
+  '  ai_scope --open',
+  '  ai_scope --app',
+  '  ai_scope --stop',
+  '  ai_scope --host 0.0.0.0 --port 9100',
+  '  ai_scope --host 0.0.0.0 --install-startup'
 ].join('\n');
 
-function fail(msg) { console.log('ai-scope: ' + msg + '\n\nRun "ai-scope --help" for the options.'); process.exit(1); }
+function fail(msg) { console.log('ai_scope: ' + msg + '\n\nRun "ai_scope --help" for the options.'); process.exit(1); }
 
 const argv = process.argv.slice(2);
 const opts = { port: null, host: null, open: false, app: false, stop: false, dataDir: null, install: false, uninstall: false };
@@ -67,7 +67,7 @@ for (let i = 0; i < argv.length; i++) {
     case '--install-startup': opts.install = true; break;
     case '--uninstall-startup': opts.uninstall = true; break;
     case '--uninstall':
-      // Normally handled by the ai-scope launcher before Node starts; we only get here when run another way.
+      // Normally handled by the ai_scope launcher before Node starts; we only get here when run another way.
       console.log(process.env.AI_SCOPE_LAUNCHER ? 'Uninstall failed to start - remove the AI_SCOPE folder by hand.'
         : 'This copy was not installed with install.ps1 / install.sh. With npx there is nothing to uninstall (npx keeps only a cache); a cloned folder can just be deleted.');
       process.exit(0); break;
@@ -87,7 +87,7 @@ if (opts.install || opts.uninstall) {
 if (opts.stop) require('./app').stop(opts.port || 9000);
 else if (opts.app) {
   if (opts.dataDir) process.env.AI_SCOPE_DATA = opts.dataDir;
-  require('./app').app({ port: opts.port || 9000, flags: passOn, logFile: require('../paths').file('ai-scope.log') });
+  require('./app').app({ port: opts.port || 9000, flags: passOn, logFile: require('../paths').file('ai_scope.log') });
 } else {
 
 if (opts.port) process.env.AI_SCOPE_PORT = String(opts.port);

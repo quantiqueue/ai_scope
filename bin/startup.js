@@ -1,14 +1,14 @@
 // Start AI_SCOPE when you log in: Windows Startup folder, macOS LaunchAgent, Linux XDG autostart.
 // What the login item runs:
-//  - installed with install.ps1 / install.sh: the `ai-scope` launcher (AI_SCOPE_LAUNCHER, set by it)
-//  - run through npx: `npx -y ai-scope@latest`
-//  - otherwise (a cloned folder): this Node.js + this folder's bin/ai-scope.js
+//  - installed with install.ps1 / install.sh: the `ai_scope` launcher (AI_SCOPE_LAUNCHER, set by it)
+//  - run through npx: `npx -y ai_scope@latest`
+//  - otherwise (a cloned folder): this Node.js + this folder's bin/ai_scope.js
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const NAME = 'ai-scope';
+const NAME = 'ai_scope';
 
 function npxPath() {
   // Absolute path: login items don't always have Node on their PATH.
@@ -22,7 +22,7 @@ function command() {
   const launcher = process.env.AI_SCOPE_LAUNCHER;
   if (launcher && fs.existsSync(launcher)) return [launcher];
   if (/[\\/]_npx[\\/]/.test(__dirname)) return [npxPath(), '-y', NAME + '@latest'];
-  return [process.execPath, path.join(__dirname, 'ai-scope.js')];
+  return [process.execPath, path.join(__dirname, 'ai_scope.js')];
 }
 
 function target() {
@@ -44,11 +44,11 @@ function content(flags) {
   if (process.platform === 'win32') {
     // Minimized console window titled AI_SCOPE; close it to stop AI_SCOPE.
     return '@echo off\r\n' +
-      'rem Created by "ai-scope --install-startup". Remove with "ai-scope --uninstall-startup".\r\n' +
+      'rem Created by "ai_scope --install-startup". Remove with "ai_scope --uninstall-startup".\r\n' +
       'start "AI_SCOPE" /min cmd /c "' + [exe].concat(args).map(winQuote).join(' ') + '"\r\n';
   }
   if (process.platform === 'darwin') {
-    const log = path.join(os.homedir(), '.ai_scope', 'ai-scope.log');
+    const log = path.join(os.homedir(), '.ai_scope', 'ai_scope.log');
     return '<?xml version="1.0" encoding="UTF-8"?>\n' +
       '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
       '<plist version="1.0"><dict>\n' +
@@ -70,7 +70,7 @@ function install(flags) {
   fs.writeFileSync(file, content(flags));
   console.log('AI_SCOPE will start when you log in.');
   console.log('  Login item: ' + file);
-  console.log('  Remove it with: ai-scope --uninstall-startup');
+  console.log('  Remove it with: ai_scope --uninstall-startup');
 }
 
 function uninstall() {

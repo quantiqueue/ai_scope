@@ -1,5 +1,5 @@
 {
-  "name": "ai-scope",
+  "name": "ai_scope",
   "version": "0.2.0",
   "description": "AI_SCOPE: local dashboard for monitoring AI tools (LM Studio, Ollama, ComfyUI, CPU/GPU/VRAM)",
   "keywords": [
@@ -26,7 +26,7 @@
   "author": "ferr",
   "main": "server.js",
   "bin": {
-    "ai-scope": "bin/ai-scope.js"
+    "ai_scope": "bin/ai_scope.js"
   },
   "files": [
     "bin/",
@@ -52,6 +52,6 @@
   },
   "scripts": {
     "start": "node dev.js",
-    "serve": "node bin/ai-scope.js"
+    "serve": "node bin/ai_scope.js"
   }
 }

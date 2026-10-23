@@ -2,14 +2,14 @@
 #
 #   irm https://github.com/quantiqueue/ai_scope/releases/latest/download/install.ps1 | iex
 #
-# Installs to %LOCALAPPDATA%\ai-scope (no admin rights needed, nothing system-wide):
+# Installs to %LOCALAPPDATA%\ai_scope (no admin rights needed, nothing system-wide):
 #   app\    the app (from the latest GitHub release)
 #   node\   a private node.exe - only if this PC has no Node.js 18+
-#   bin\    ai-scope.cmd (added to your user PATH) and ai-scope.vbs (starts it without a console window)
+#   bin\    ai_scope.cmd (added to your user PATH) and ai_scope.vbs (starts it without a console window)
 # plus a Start Menu shortcut "AI_SCOPE" (and, if you want, one on the desktop). The shortcuts run
-# "ai-scope --app": AI_SCOPE starts in the background and opens in its own window. Settings and
+# "ai_scope --app": AI_SCOPE starts in the background and opens in its own window. Settings and
 # history live in %USERPROFILE%\.ai_scope.
-# Run the same line again to update. Uninstall: ai-scope --uninstall
+# Run the same line again to update. Uninstall: ai_scope --uninstall
 #
 # Options (set before running):
 #   $env:AI_SCOPE_STARTUP = "1"        also start AI_SCOPE when you log in
@@ -24,7 +24,7 @@ $ProgressPreference = 'SilentlyContinue'   # the progress bar makes downloads ve
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $Repo    = if ($env:AI_SCOPE_REPO) { $env:AI_SCOPE_REPO } else { 'quantiqueue/ai_scope' }
-$Root    = Join-Path $env:LOCALAPPDATA 'ai-scope'
+$Root    = Join-Path $env:LOCALAPPDATA 'ai_scope'
 $AppDir  = Join-Path $Root 'app'
 $NodeDir = Join-Path $Root 'node'
 $BinDir  = Join-Path $Root 'bin'
@@ -49,15 +49,15 @@ function Stop-AiScope {
 
 # --- 1. download the app ---
 Step 'Downloading AI_SCOPE'
-$tmp = Join-Path ([IO.Path]::GetTempPath()) ('ai-scope-' + [guid]::NewGuid().ToString('N'))
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ('ai_scope-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
-$zip = Join-Path $tmp 'ai-scope.zip'
+$zip = Join-Path $tmp 'ai_scope.zip'
 if ($env:AI_SCOPE_ZIP) {
   Copy-Item $env:AI_SCOPE_ZIP $zip
   Say "from $($env:AI_SCOPE_ZIP)"
 } else {
-  if ($env:AI_SCOPE_VERSION) { $url = "https://github.com/$Repo/releases/download/$($env:AI_SCOPE_VERSION)/ai-scope.zip" }
-  else { $url = "https://github.com/$Repo/releases/latest/download/ai-scope.zip" }
+  if ($env:AI_SCOPE_VERSION) { $url = "https://github.com/$Repo/releases/download/$($env:AI_SCOPE_VERSION)/ai_scope.zip" }
+  else { $url = "https://github.com/$Repo/releases/latest/download/ai_scope.zip" }
   Say $url
   Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
 }
@@ -110,20 +110,20 @@ if (-not $nodeExe) {
 }
 
 # --- 3. launcher on the PATH ---
-Step 'Adding the ai-scope command'
+Step 'Adding the ai_scope command'
 New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 $cmd = @"
 @echo off
-rem AI_SCOPE launcher (created by install.ps1). Run "ai-scope --help" for the options, "ai-scope --uninstall" to remove.
+rem AI_SCOPE launcher (created by install.ps1). Run "ai_scope --help" for the options, "ai_scope --uninstall" to remove.
 for %%I in ("%~dp0..") do set "AISCOPE_ROOT=%%~fI"
-if /i "%~1"=="--uninstall" (copy /y "%AISCOPE_ROOT%\app\install\uninstall.ps1" "%TEMP%\ai-scope-uninstall.ps1" >nul & powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\ai-scope-uninstall.ps1" & exit /b)
+if /i "%~1"=="--uninstall" (copy /y "%AISCOPE_ROOT%\app\install\uninstall.ps1" "%TEMP%\ai_scope-uninstall.ps1" >nul & powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\ai_scope-uninstall.ps1" & exit /b)
 title AI_SCOPE
 set "AI_SCOPE_LAUNCHER=%~f0"
 set "AISCOPE_NODE=%AISCOPE_ROOT%\node\node.exe"
 if not exist "%AISCOPE_NODE%" (set "AISCOPE_NODE=node" & where node >nul 2>nul || (echo Node.js was not found. Run the AI_SCOPE installer again to get a private copy. & exit /b 1))
-"%AISCOPE_NODE%" "%AISCOPE_ROOT%\app\bin\ai-scope.js" %*
+"%AISCOPE_NODE%" "%AISCOPE_ROOT%\app\bin\ai_scope.js" %*
 "@
-Set-Content -Path (Join-Path $BinDir 'ai-scope.cmd') -Value $cmd -Encoding ASCII
+Set-Content -Path (Join-Path $BinDir 'ai_scope.cmd') -Value $cmd -Encoding ASCII
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (-not $userPath) { $userPath = '' }
@@ -133,11 +133,11 @@ if (($userPath -split ';') -notcontains $BinDir) {
 }
 if (($env:Path -split ';') -notcontains $BinDir) { $env:Path = $env:Path + ';' + $BinDir }
 
-# --- 4. shortcuts: open AI_SCOPE in its own window (ai-scope --app), with no console window ---
-# The shortcuts run wscript.exe with ai-scope.vbs, which starts "ai-scope.cmd --app" hidden.
-$vbs = Join-Path $BinDir 'ai-scope.vbs'
+# --- 4. shortcuts: open AI_SCOPE in its own window (ai_scope --app), with no console window ---
+# The shortcuts run wscript.exe with ai_scope.vbs, which starts "ai_scope.cmd --app" hidden.
+$vbs = Join-Path $BinDir 'ai_scope.vbs'
 $vbsText = @'
-' AI_SCOPE app launcher (created by install.ps1): runs "ai-scope --app" without a console window.
+' AI_SCOPE app launcher (created by install.ps1): runs "ai_scope --app" without a console window.
 ' --app starts AI_SCOPE in the background if it isn't running, then opens it in its own window.
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
@@ -145,11 +145,11 @@ args = ""
 For Each a In WScript.Arguments
   args = args & " """ & a & """"
 Next
-CreateObject("WScript.Shell").Run """" & dir & "\ai-scope.cmd"" --app" & args, 0, False
+CreateObject("WScript.Shell").Run """" & dir & "\ai_scope.cmd"" --app" & args, 0, False
 '@
 Set-Content -Path $vbs -Value $vbsText -Encoding ASCII
 
-$ico = Join-Path $AppDir 'assets\ai-scope.ico'
+$ico = Join-Path $AppDir 'assets\ai_scope.ico'
 $sh = New-Object -ComObject WScript.Shell
 function New-AppShortcut($lnk) {
   $s = $sh.CreateShortcut($lnk)
@@ -180,7 +180,7 @@ if ($wantDesk -eq '1') { Step 'Adding a desktop shortcut'; New-AppShortcut $desk
 # --- 5. optional: start at login ---
 if ($env:AI_SCOPE_STARTUP -eq '1') {
   Step 'Starting AI_SCOPE when you log in'
-  & (Join-Path $BinDir 'ai-scope.cmd') --install-startup | ForEach-Object { Say $_ }
+  & (Join-Path $BinDir 'ai_scope.cmd') --install-startup | ForEach-Object { Say $_ }
 }
 
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -188,9 +188,9 @@ Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
 Write-Host "AI_SCOPE $version is installed." -ForegroundColor Green
 Say 'Start it from the Start Menu (AI_SCOPE) or the desktop shortcut - it opens in its own window.'
-Say 'Closing the window keeps AI_SCOPE running in the background. Stop it with:  ai-scope --stop'
-Say 'From a terminal:  ai-scope  (runs there, Ctrl+C to stop)   ai-scope --open  (in your browser)'
-Say 'Options:  ai-scope --help      Uninstall:  ai-scope --uninstall'
+Say 'Closing the window keeps AI_SCOPE running in the background. Stop it with:  ai_scope --stop'
+Say 'From a terminal:  ai_scope  (runs there, Ctrl+C to stop)   ai_scope --open  (in your browser)'
+Say 'Options:  ai_scope --help      Uninstall:  ai_scope --uninstall'
 Write-Host ''
 
 # --- 6. start it ---

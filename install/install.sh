@@ -3,21 +3,21 @@
 #
 #   curl -fsSL https://github.com/quantiqueue/ai_scope/releases/latest/download/install.sh | sh
 #
-# Installs to ~/.local/share/ai-scope (no sudo, nothing system-wide):
+# Installs to ~/.local/share/ai_scope (no sudo, nothing system-wide):
 #   app/    the app (from the latest GitHub release)
 #   node/   a private Node.js - only if this computer has no Node.js 18+
-# and the command ~/.local/bin/ai-scope. Settings and history live in ~/.ai_scope.
-# Run the same line again to update. Uninstall: ai-scope --uninstall
+# and the command ~/.local/bin/ai_scope. Settings and history live in ~/.ai_scope.
+# Run the same line again to update. Uninstall: ai_scope --uninstall
 #
 # Options (environment variables, e.g. `curl ... | AI_SCOPE_STARTUP=1 sh`):
 #   AI_SCOPE_STARTUP=1        also start AI_SCOPE when you log in
 #   AI_SCOPE_VERSION=v1.2.0   install a specific release instead of the latest
-#   AI_SCOPE_TARBALL=path     install from a local ai-scope.tar.gz (testing)
+#   AI_SCOPE_TARBALL=path     install from a local ai_scope.tar.gz (testing)
 #   AI_SCOPE_PRIVATE_NODE=1   always use a private Node.js, even if this computer has one
 set -eu
 
 REPO="${AI_SCOPE_REPO:-quantiqueue/ai_scope}"
-ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/ai-scope"
+ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/ai_scope"
 BIN_DIR="$HOME/.local/bin"
 MIN_NODE=18
 
@@ -44,17 +44,17 @@ step "Downloading AI_SCOPE"
 if [ -n "${AI_SCOPE_TARBALL:-}" ]; then
   cp "$AI_SCOPE_TARBALL" "$TMP/app.tar.gz"; say "from $AI_SCOPE_TARBALL"
 else
-  if [ -n "${AI_SCOPE_VERSION:-}" ]; then URL="https://github.com/$REPO/releases/download/$AI_SCOPE_VERSION/ai-scope.tar.gz"
-  else URL="https://github.com/$REPO/releases/latest/download/ai-scope.tar.gz"; fi
+  if [ -n "${AI_SCOPE_VERSION:-}" ]; then URL="https://github.com/$REPO/releases/download/$AI_SCOPE_VERSION/ai_scope.tar.gz"
+  else URL="https://github.com/$REPO/releases/latest/download/ai_scope.tar.gz"; fi
   say "$URL"
   fetch "$URL" "$TMP/app.tar.gz" || die "download failed"
 fi
 mkdir -p "$TMP/app"
 tar -xzf "$TMP/app.tar.gz" -C "$TMP/app"
-[ -f "$TMP/app/bin/ai-scope.js" ] || die "the download doesn't look like AI_SCOPE"
+[ -f "$TMP/app/bin/ai_scope.js" ] || die "the download doesn't look like AI_SCOPE"
 
 # stop a running AI_SCOPE from this install
-if command -v pkill >/dev/null 2>&1; then pkill -f "$ROOT/app/bin/ai-scope.js" 2>/dev/null && { say "Stopped the running AI_SCOPE."; sleep 1; } || true; fi
+if command -v pkill >/dev/null 2>&1; then pkill -f "$ROOT/app/bin/ai_scope.js" 2>/dev/null && { say "Stopped the running AI_SCOPE."; sleep 1; } || true; fi
 
 mkdir -p "$ROOT"
 rm -rf "$ROOT/app"
@@ -94,21 +94,21 @@ if [ -z "$NODE" ]; then
 fi
 
 # --- 3. launcher ---
-step "Adding the ai-scope command"
+step "Adding the ai_scope command"
 mkdir -p "$BIN_DIR"
-cat > "$BIN_DIR/ai-scope" <<LAUNCHER
+cat > "$BIN_DIR/ai_scope" <<LAUNCHER
 #!/bin/sh
-# AI_SCOPE launcher (created by install.sh). "ai-scope --help" for the options, "ai-scope --uninstall" to remove.
+# AI_SCOPE launcher (created by install.sh). "ai_scope --help" for the options, "ai_scope --uninstall" to remove.
 ROOT="$ROOT"
 if [ "\${1:-}" = "--uninstall" ]; then exec sh "\$ROOT/app/install/uninstall.sh"; fi
 NODE="\$ROOT/node/bin/node"
 [ -x "\$NODE" ] || NODE="\$(command -v node || true)"
 [ -n "\$NODE" ] || { echo "Node.js was not found. Run the AI_SCOPE installer again to get a private copy." >&2; exit 1; }
-export AI_SCOPE_LAUNCHER="$BIN_DIR/ai-scope"
-exec "\$NODE" "\$ROOT/app/bin/ai-scope.js" "\$@"
+export AI_SCOPE_LAUNCHER="$BIN_DIR/ai_scope"
+exec "\$NODE" "\$ROOT/app/bin/ai_scope.js" "\$@"
 LAUNCHER
-chmod +x "$BIN_DIR/ai-scope"
-say "$BIN_DIR/ai-scope"
+chmod +x "$BIN_DIR/ai_scope"
+say "$BIN_DIR/ai_scope"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ON_PATH=1 ;;
   *) ON_PATH=0; say "Note: $BIN_DIR is not on your PATH. Add this line to your ~/.zshrc or ~/.bashrc:"
@@ -118,10 +118,10 @@ esac
 # --- 4. optional: start at login ---
 if [ "${AI_SCOPE_STARTUP:-}" = "1" ]; then
   step "Starting AI_SCOPE when you log in"
-  "$BIN_DIR/ai-scope" --install-startup | sed 's/^/  /'
+  "$BIN_DIR/ai_scope" --install-startup | sed 's/^/  /'
 fi
 
-CMD=ai-scope; [ "$ON_PATH" = 1 ] || CMD="$BIN_DIR/ai-scope"
+CMD=ai_scope; [ "$ON_PATH" = 1 ] || CMD="$BIN_DIR/ai_scope"
 printf '\n\033[32mAI_SCOPE %s is installed.\033[0m\n' "$VERSION"
 say "Start it:   $CMD --open"
 say "Options:    $CMD --help"

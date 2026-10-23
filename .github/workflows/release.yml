@@ -1,8 +1,8 @@
 # Runs when you publish a GitHub release (tag like v1.2.0):
-#  1. builds ai-scope.zip (Windows) and ai-scope.tar.gz (macOS/Linux) and attaches them to the
+#  1. builds ai_scope.zip (Windows) and ai_scope.tar.gz (macOS/Linux) and attaches them to the
 #     release together with install.ps1 and install.sh - the installers download from
 #     .../releases/latest/download/, so they always get the newest release;
-#  2. optionally publishes the same version to npm (for `npx ai-scope`).
+#  2. optionally publishes the same version to npm (for `npx ai_scope`).
 #     Off until you set the repository variable NPM_PUBLISH = true
 #     (Settings -> Secrets and variables -> Actions -> Variables) and set up npm trusted publishing
 #     for this workflow (release.yml) on npmjs.com. No npm token is stored in GitHub.
@@ -33,18 +33,18 @@ jobs:
         run: for f in *.js bin/*.js web/js/*.js; do node --check "$f"; done
       - name: Point the installers at this repository (matters for forks or a renamed repo)
         run: sed -i "s#quantiqueue/ai_scope#${GITHUB_REPOSITORY}#g" install/install.ps1 install/install.sh
-      - name: Build ai-scope.zip and ai-scope.tar.gz
+      - name: Build ai_scope.zip and ai_scope.tar.gz
         run: |
           npm pack
           mkdir stage
-          tar -xzf ai-scope-*.tgz -C stage --strip-components=1
+          tar -xzf ai_scope-*.tgz -C stage --strip-components=1
           cp -r install stage/install
-          (cd stage && zip -qr ../ai-scope.zip . && tar -czf ../ai-scope.tar.gz .)
-          ls -l ai-scope.zip ai-scope.tar.gz
+          (cd stage && zip -qr ../ai_scope.zip . && tar -czf ../ai_scope.tar.gz .)
+          ls -l ai_scope.zip ai_scope.tar.gz
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" ai-scope.zip ai-scope.tar.gz install/install.ps1 install/install.sh --clobber
+        run: gh release upload "$GITHUB_REF_NAME" ai_scope.zip ai_scope.tar.gz install/install.ps1 install/install.sh --clobber
 
   npm:
     needs: assets

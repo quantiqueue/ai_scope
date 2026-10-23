@@ -1,17 +1,17 @@
 #!/bin/sh
-# AI_SCOPE uninstaller for macOS and Linux (run with: ai-scope --uninstall).
-# Removes ~/.local/share/ai-scope, the ai-scope command and the login item.
+# AI_SCOPE uninstaller for macOS and Linux (run with: ai_scope --uninstall).
+# Removes ~/.local/share/ai_scope, the ai_scope command and the login item.
 # Asks before deleting your settings and history in ~/.ai_scope.
-ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/ai-scope"
-BIN="$HOME/.local/bin/ai-scope"
+ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/ai_scope"
+BIN="$HOME/.local/bin/ai_scope"
 DATA="${AI_SCOPE_DATA:-$HOME/.ai_scope}"
 
 printf '\n\033[36mUninstalling AI_SCOPE\033[0m\n'
-command -v pkill >/dev/null 2>&1 && pkill -f "$ROOT/app/bin/ai-scope.js" 2>/dev/null && sleep 1
+command -v pkill >/dev/null 2>&1 && pkill -f "$ROOT/app/bin/ai_scope.js" 2>/dev/null && sleep 1
 
-PLIST="$HOME/Library/LaunchAgents/com.ai-scope.plist"
+PLIST="$HOME/Library/LaunchAgents/com.ai_scope.plist"
 if [ -f "$PLIST" ]; then launchctl unload "$PLIST" 2>/dev/null; rm -f "$PLIST"; echo "  Removed the login item"; fi
-DESK="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/ai-scope.desktop"
+DESK="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/ai_scope.desktop"
 if [ -f "$DESK" ]; then rm -f "$DESK"; echo "  Removed the login item"; fi
 
 [ -f "$BIN" ] && rm -f "$BIN" && echo "  Removed $BIN"

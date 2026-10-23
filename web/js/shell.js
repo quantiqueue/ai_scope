@@ -12,7 +12,7 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
   window.aiScopeStopped = true;
   const d = document.createElement('div');
   d.className = 'stopped';
-  d.innerHTML = '<div><h2>AI_SCOPE has stopped</h2><p>You can close this window.<br>Start it again from the Start Menu, or with <code>ai-scope --app</code>.</p></div>';
+  d.innerHTML = '<div><h2>AI_SCOPE has stopped</h2><p>You can close this window.<br>Start it again from the Start Menu, or with <code>ai_scope --app</code>.</p></div>';
   document.body.appendChild(d);
 });
 

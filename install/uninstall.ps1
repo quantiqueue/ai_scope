@@ -1,9 +1,9 @@
-# AI_SCOPE uninstaller for Windows (run with: ai-scope --uninstall).
-# Stops AI_SCOPE (and its app window), then removes %LOCALAPPDATA%\ai-scope, the Start Menu and desktop
+# AI_SCOPE uninstaller for Windows (run with: ai_scope --uninstall).
+# Stops AI_SCOPE (and its app window), then removes %LOCALAPPDATA%\ai_scope, the Start Menu and desktop
 # shortcuts, the login item and the PATH entry.
 # Asks before deleting your settings and history in %USERPROFILE%\.ai_scope.
 $ErrorActionPreference = 'Continue'
-$Root    = Join-Path $env:LOCALAPPDATA 'ai-scope'
+$Root    = Join-Path $env:LOCALAPPDATA 'ai_scope'
 $AppDir  = Join-Path $Root 'app'
 $BinDir  = Join-Path $Root 'bin'
 $Data    = if ($env:AI_SCOPE_DATA) { $env:AI_SCOPE_DATA } else { Join-Path $env:USERPROFILE '.ai_scope' }
@@ -23,7 +23,7 @@ try {
   Start-Sleep -Milliseconds 800
 } catch {}
 
-$startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'ai-scope.cmd'
+$startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'ai_scope.cmd'
 if (Test-Path $startup) { Remove-Item $startup -Force; Write-Host '  Removed the login item' }
 $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'AI_SCOPE.lnk'
 if (Test-Path $lnk) { Remove-Item $lnk -Force; Write-Host '  Removed the Start Menu shortcut' }
@@ -34,11 +34,11 @@ $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath -and (($userPath -split ';') -contains $BinDir)) {
   $new = (($userPath -split ';') | Where-Object { $_ -and $_ -ne $BinDir }) -join ';'
   [Environment]::SetEnvironmentVariable('Path', $new, 'User')
-  Write-Host '  Removed ai-scope from your PATH'
+  Write-Host '  Removed ai_scope from your PATH'
 }
 
 if (Test-Path $Root) {
-  # Everything except bin\ now; bin\ai-scope.cmd is still running (it started this uninstaller), so bin\ is
+  # Everything except bin\ now; bin\ai_scope.cmd is still running (it started this uninstaller), so bin\ is
   # removed at the very end by a hidden cmd, a moment after the launcher exits (deleting a running batch
   # file makes cmd print "The system cannot find the path specified").
   Get-ChildItem $Root -Force | Where-Object { $_.Name -ne 'bin' } | Remove-Item -Recurse -Force
