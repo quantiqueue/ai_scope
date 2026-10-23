@@ -13,7 +13,7 @@ defineSource('comfyui.models', '/api/comfy/models', 'comfyui', 5000);
 defineLens({
   id: 'comfyui.current', scope: 'comfyui', size: 'wide',
   name: 'Current job',
-  description: 'The workflow ComfyUI is running: model, step progress, speed, elapsed time and system load.',
+  description: 'The workflow ComfyUI is running: model, step progress, speed, elapsed time and ComfyUI\'s own GPU, VRAM, CPU and RAM use.',
   markup: nowCardMarkup([
     { box:'progBox', label:'Progress', labelK:'progLabel', k:'prog', bar:'bar' },
     { box:'rateBox', label:'Speed', k:'rate', small:true },
@@ -45,7 +45,7 @@ defineLens({
       $('timeLabel').textContent = 'Elapsed';
       $('time').textContent = fmtDur(cur.elapsedMs);
       const sm = cur.summary;
-      setSysLoad($('load'), true);
+      setSysLoad($('load'), true, d.process, 'ComfyUI');   // ComfyUI's own GPU / VRAM / CPU / RAM when known (Windows), else whole computer
       // workflow details next to the state on the top line (the step count is already in the Steps box)
       $('detail').textContent = [sm.width ? sm.width + '×' + sm.height + (sm.batch > 1 ? ' ×' + sm.batch : '') : null,
         sm.sampler, sm.loras.length ? 'LoRA: ' + sm.loras.join(', ') : null].filter(Boolean).join(' · ');

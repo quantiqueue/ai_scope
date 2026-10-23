@@ -15,7 +15,7 @@ Back to the [README](README.md).
 
 - Click **+** to open the Scopes page. It has three sections: **Installable scopes** (install, settings, remove), **Built-in scopes** (Hardware) and **Custom scopes**. Click **Install** on a scope, check its settings (e.g. Bionic's data folder) and its tab is added. **Remove** takes the tab away and stops that scope; **Settings** changes an installed scope's settings. Click a scope to reopen a closed tab.
 - Drag tabs to reorder them; close a tab with its **×**. Each browser remembers its own tabs and order.
-- **While something runs**, each *Current request / Current job* card says what it's doing ("Running — reading prompt", "Running — sampling (+2 queued)") and shows a **System load** row (whole-computer GPU, VRAM, CPU and RAM). When idle it tells you the next step ("Load a model in Strata to see live stats.").
+- **While something runs**, each *Current request / Current job* card says what it's doing ("Running — reading prompt", "Running — sampling (+2 queued)") and shows a **System load** row (whole-computer GPU, VRAM, CPU and RAM). On Windows, ComfyUI's *Current job* card shows a **ComfyUI process** row instead: the GPU %, VRAM (per card), CPU and RAM used by ComfyUI's own process, read from Windows' GPU performance counters. When idle it tells you the next step ("Load a model in Strata to see live stats.").
 - The request and run tables have a **Peak load** column: the highest GPU % and VRAM while each one ran (hover for CPU and RAM too).
 - Model and publisher names link to their Hugging Face / Ollama / LM Studio catalog pages (opens a new tab).
 - Tables page by 15.

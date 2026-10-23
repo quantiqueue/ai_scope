@@ -22,6 +22,7 @@ let lastCpu = null;
 let gpuMode = null;   // 'nvidia' | 'windows' | 'mixed' | 'none'
 let nvCards = [];     // latest nvidia-smi readings: [{ id, name, vendor, source, util, vramUsed, vramTotal }]
 let winCards = [];    // cards read from Windows counters: [{ id, luid, name, vendor, source, util, vramUsed, vramTotal }]
+let dxgiList = [];    // every DXGI adapter (name, LUID, vendor) - also used to find the LUID of NVIDIA cards (procstats.js)
 let winAggregate = false; // fallback: no DXGI, so all counter adapters are summed into one card
 let nvBusy = false;
 
@@ -108,6 +109,21 @@ const PS_DXGI =
   "    return sb.ToString(); } }\n" +
   "'@;" +
   "[AiScopeDxgi]::List()";
+
+// NVIDIA cards come from nvidia-smi, which has no LUID. Match each to a DXGI adapter by name (in order, so two
+// identical cards pair up by enumeration order), so per-process counters (keyed by LUID) map to the right card.
+function matchNvidiaLuids() {
+  const used = {};
+  const nv = dxgiList.filter(function (a) { return a.vendorId === NVIDIA; });
+  nvCards.forEach(function (c) {
+    const want = String(c.name || '').trim().toLowerCase();
+    let a = nv.filter(function (x) { return !used[x.luid] && x.name.trim().toLowerCase() === want; })[0];
+    if (!a) a = nv.filter(function (x) { return !used[x.luid]; })[0];
+    if (a) { used[a.luid] = true; c.luid = a.luid; }
+  });
+}
+// LUID of each card, in the same order as info.gpus / samples' gpus[] ('<high8>_<low8>', or null if unknown).
+function cardLuids() { return allCards().map(function (c) { return c.luid || null; }); }
 
 function readDxgi(cb) {
   run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_DXGI], 20000, function (err, out) {
@@ -245,6 +261,8 @@ function detectGpu(cb) {
     if (process.platform !== 'win32') { setMode(); return cb(); }
     readDxgi(function (adapters) {
       if (adapters) {
+        dxgiList = adapters;
+        matchNvidiaLuids();
         const cards = pickCards(adapters).filter(function (a) { return !nvCards.length || a.vendorId !== NVIDIA; });
         winCards = cards.map(function (a, i) {
           return { id: 'win' + i, luid: a.luid, name: a.name, vendor: vendorName(a.vendorId), source: 'windows',
@@ -387,5 +405,5 @@ function peakBetween(t0, t1) {
 }
 function oldestSample() { return history.length ? history[0].t : null; }
 
-module.exports = { start: start, getStats: getStats, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
+module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
                    _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards } };

@@ -126,26 +126,49 @@ defineLens({
 // ---- "System load" row on the Current request / Current job cards ----
 // Whole-computer totals from the latest Hardware sample (all apps together, not this request alone).
 // Shown only while something is running.
-function setSysLoad(id, on) {   // id or element (lenses pass their own)
+// The "System load" row on the running-request cards: whole-computer GPU / VRAM / CPU / RAM.
+// With proc (an app's own processes, from procstats.js on Windows; AI_SCOPE-038) and app (its name), the row shows
+// that app's own use instead and is labelled "<app> process"; without proc it falls back to whole-computer load.
+const SYSLOAD_TIP = 'Whole-computer totals (all apps together), not only this request';
+function setSysLoad(id, on, proc, app) {   // id or element (lenses pass their own)
   const el = typeof id === 'string' ? document.getElementById(id) : id;
   if (!el) return;
   const s = on ? hwHist[hwHist.length - 1] : null;
   el.hidden = !s;
   if (!s) return;
   const pct = (u, t) => (u != null && t) ? 100 * u / t : null;
-  const item = (k, p, txt) => '<span class="sl-item"><span class="sl-k">' + k + '</span><span class="sl-meter"><div style="width:' +
+  const item = (k, p, txt, tip) => '<span class="sl-item"' + (tip ? ' title="' + esc(tip) + '"' : '') + '><span class="sl-k">' + k + '</span><span class="sl-meter"><div style="width:' +
     (p == null ? 0 : Math.max(0, Math.min(100, p))) + '%"></div></span><span class="sl-v">' + txt + '</span></span>';
   // Two rows, one column per card (+ one for the CPU): usage % on top, memory below.
   const top = [], mem = [];
   const blank = '<span></span>';
   const cards = s.gpus && s.gpus.length ? s.gpus : (s.gpu != null ? [{ util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal }] : []);
+  const mine = proc && proc.gpus && proc.gpus.length === cards.length ? proc : null;
   cards.forEach((g, i) => {
     const n = cards.length > 1 ? ' ' + (i + 1) : '';
+    if (mine) {
+      const p = mine.gpus[i];
+      top.push(item('GPU' + n, p.util, p.util != null ? p.util.toFixed(0) + '%' : '—', p.util != null ? null : 'GPU % not available for this card'));
+      mem.push(item('VRAM' + n, pct(p.vram, g.vramTotal), GB(p.vram) + (g.vramTotal ? ' / ' + GB(g.vramTotal) : '') + ' GB',
+        p.shared > 0 ? '+ ' + GB(p.shared) + ' GB in shared (system) memory' : null));
+      return;
+    }
     top.push(g.util != null ? item('GPU' + n, g.util, g.util.toFixed(0) + '%') : blank);
     mem.push(g.vramUsed != null ? item('VRAM' + n, pct(g.vramUsed, g.vramTotal), GB(g.vramUsed) + (g.vramTotal ? ' / ' + GB(g.vramTotal) : '') + ' GB') : blank);
   });
-  top.push(s.cpu != null ? item('CPU', s.cpu, s.cpu.toFixed(0) + '%') : blank);
-  mem.push(item('MEM', pct(s.ramUsed, s.ramTotal), GB(s.ramUsed) + ' / ' + GB(s.ramTotal) + ' GB'));
+  if (mine) {
+    top.push(mine.cpu != null ? item('CPU', mine.cpu, mine.cpu.toFixed(0) + '%', 'Share of the whole CPU (all cores)') : blank);
+    mem.push(item('MEM', pct(mine.ram, s.ramTotal), GB(mine.ram) + ' / ' + GB(s.ramTotal) + ' GB', 'RAM in use (working set); committed: ' + GB(mine.ramPrivate) + ' GB'));
+  } else {
+    top.push(s.cpu != null ? item('CPU', s.cpu, s.cpu.toFixed(0) + '%') : blank);
+    mem.push(item('MEM', pct(s.ramUsed, s.ramTotal), GB(s.ramUsed) + ' / ' + GB(s.ramTotal) + ' GB'));
+  }
+  const label = el.querySelector('.sl-label');
+  const ltext = mine ? app + ' process' : 'System load';
+  const ltip = mine ? 'Used by ' + app + '\'s own process' + (mine.pids.length > 1 ? 'es' : '') + ' (' +
+    mine.pids.map(p => p.name + ' ' + p.pid).join(', ') + ')' : SYSLOAD_TIP;
+  if (label.textContent !== ltext) label.textContent = ltext;
+  if (label.title !== ltip) label.title = ltip;
   const html = top.concat(mem).join('');
   const box = el.querySelector('.sl-items');
   if (box._html !== html) { box._html = html; box.innerHTML = html; box.style.gridTemplateColumns = 'repeat(' + top.length + ', max-content)'; }

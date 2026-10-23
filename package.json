@@ -44,6 +44,8 @@
     "comfystats.js",
     "ollamastats.js",
     "stratastats.js",
+    "procstats.js",
+    "procstats.ps1",
     "logos.js",
     "README.md",
     "LICENSE"
