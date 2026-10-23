@@ -48,7 +48,7 @@ function ollamaHelpHtml(d) {
 defineLens({
   id: 'ollama.current', scope: 'ollama', size: 'wide',
   name: 'Current request',
-  description: 'What Ollama is answering right now (through the AI_SCOPE relay): speed, tokens and system load.',
+  description: 'What Ollama is answering right now (through the AI_SCOPE relay): speed, tokens and the model process\'s GPU, VRAM, CPU and RAM use.',
   markup: nowCardMarkup([
     { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
     { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
@@ -78,7 +78,8 @@ defineLens({
       $('detail').textContent = cur.endpoint + ' via AI_SCOPE relay';   // details next to the state on the top line
       $('foot').textContent = '';
       $('foot').classList.remove('warn');
-      setSysLoad($('load'), true);
+      // Ollama's model process when known (Windows); hidden on Windows without one, whole-computer System load elsewhere
+      setSysLoad($('load'), !(d.processSupported && !d.process), d.process, 'Ollama');
     } else {
       const a = d.average;
       $('title').textContent = 'Idle — no request running';
@@ -119,7 +120,8 @@ defineLens({
     $('empty').hidden = d.loaded.length > 0;
     $('empty').textContent = d.online ? 'No model loaded. Ollama loads a model on the first request and unloads it after it has been idle (5 min by default).' : 'Ollama is offline.';
     const spill = d.loaded.some(m => m.gpuPct != null && m.gpuPct < 100);
-    $('hint').textContent = spill ? '— part of a model is running on the CPU, so generation will be slower' : '';
+    const where = d.loaded.length ? procVramText(d.process) : '';   // per-card VRAM of the model process (Windows, AI_SCOPE-050)
+    $('hint').textContent = [where, spill ? 'part of a model is running on the CPU, so generation will be slower' : ''].filter(Boolean).map((t, i) => (i ? '' : '— ') + t).join(' · ');
   },
 });
 

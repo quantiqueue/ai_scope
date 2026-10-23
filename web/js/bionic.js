@@ -82,14 +82,8 @@ defineLens({
     $('empty').textContent = d.online ? 'No model loaded. Load one in Bionic, or it loads on the first request (JIT loading).'
       : 'Bionic\'s local server is not reachable' + (d.error ? ' (' + d.error + ')' : '') + '. Start it on Bionic\'s Local Server screen to see models.';
     // Where the model actually sits: per-card VRAM of Bionic's model process(es) (Windows, AI_SCOPE-049) - Bionic's API doesn't say
-    const pr = d.process, cards = pr && pr.gpus ? pr.gpus.map((g, i) => ({ n: i + 1, g })).filter(x => x.g.vram >= 64 * 1048576) : [];
-    if (d.loaded.length && cards.length) {
-      const shared = pr.gpus.reduce((a, g) => a + (g.shared || 0), 0);
-      $('hint').textContent = '— in VRAM: ' + cards.map(x => (pr.gpus.length > 1 ? 'GPU ' + x.n : 'GPU') + ' ' + fmtBytes(x.g.vram)).join(' · ') +
-        (shared >= 64 * 1048576 ? ' · ' + fmtBytes(shared) + ' in shared (system) memory' : '') +
-        (pr.pids.length > 1 ? ' (' + pr.pids.length + ' model processes together)' : '');
-      return;
-    }
+    const where = d.loaded.length ? procVramText(d.process) : '';
+    if (where) { $('hint').textContent = '— ' + where; return; }
     // Windows: no model process (yet) - e.g. a model being unloaded or loaded; the API lags behind by up to 10 s
     if (d.processSupported) { $('hint').textContent = ''; return; }
     const vt = d.vramTotal;

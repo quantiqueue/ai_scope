@@ -173,6 +173,16 @@ function setSysLoad(id, on, proc, app) {   // id or element (lenses pass their o
   const box = el.querySelector('.sl-items');
   if (box._html !== html) { box._html = html; box.innerHTML = html; box.style.gridTemplateColumns = 'repeat(' + top.length + ', max-content)'; }
 }
+// "in VRAM: GPU 1 4.0 GB · GPU 2 2.3 GB" for an app's model process(es) (procstats, Windows) - where a model actually sits
+// on the cards, for the Loaded in memory lenses (AI_SCOPE-049 / 050). '' when there's nothing on a card.
+function procVramText(pr) {
+  const cards = pr && pr.gpus ? pr.gpus.map((g, i) => ({ n: i + 1, g })).filter(x => x.g.vram >= 64 * 1048576) : [];
+  if (!cards.length) return '';
+  const shared = pr.gpus.reduce((a, g) => a + (g.shared || 0), 0);
+  return 'in VRAM: ' + cards.map(x => (pr.gpus.length > 1 ? 'GPU ' + x.n : 'GPU') + ' ' + fmtBytes(x.g.vram)).join(' · ') +
+    (shared >= 64 * 1048576 ? ' · ' + fmtBytes(shared) + ' in shared (system) memory' : '') +
+    (pr.pids.length > 1 ? ' (' + pr.pids.length + ' model processes together)' : '');
+}
 // "Peak load" cell in the history tables: highest whole-PC GPU % and VRAM while it ran; details on hover.
 function peakCell(p) {
   if (!p) return '<td class="na" title="No peak recorded (AI_SCOPE was not sampling while this ran, or it ran before v0.2)">—</td>';

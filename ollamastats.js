@@ -11,6 +11,9 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const hwstats = require('./hwstats');
+const procstats = require('./procstats');   // Ollama's model process: VRAM per card, GPU %, CPU, RAM (Windows; AI_SCOPE-050)
+// Ollama (0.40 on snow) runs each loaded model in a child llama-server.exe of `ollama serve`; older versions used ollama_llama_server.exe.
+const MODEL_PROCS = ['llama-server.exe', 'ollama_llama_server.exe'];
 const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
 const StringDecoder = require('string_decoder').StringDecoder;
 
@@ -344,6 +347,8 @@ function getState(limit, vram) {
       return Object.assign({ fit: f ? f.fit : null, fitGpus: f ? f.gpus || null : null, loaded: loaded.some(function (l) { return l.name === m.name; }) }, m, sourceOf(m));
     }).sort(function (a, b) { return (b.loaded - a.loaded) || ((b.size || 0) - (a.size || 0)); }),
     current: currentRequest(), average: average(), directUse: directUse,
+    // Ollama's model process(es) (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded
+    process: online ? procstats.get('ollama') : null, processSupported: procstats.supported(),
     totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),
   };
 }
@@ -361,11 +366,13 @@ function start(settings) {
   tagsAt = 0;
   if (!requestsLoaded) { requestsLoaded = true; loadRequests(); }
   startProxy();
+  procstats.watch('ollama', [+(UP.port || (UP.protocol === 'https:' ? 443 : 80))], MODEL_PROCS);
   poll();
   timer = setInterval(poll, 2000);
 }
 function stop() {
   if (timer) { clearInterval(timer); timer = null; }
+  procstats.unwatch('ollama');
   if (proxySrv) { try { proxySrv.close(); if (proxySrv.closeAllConnections) proxySrv.closeAllConnections(); } catch (e) {} proxySrv = null; }
   proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null };
   online = false; loaded = []; lastError = null;
