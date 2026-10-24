@@ -39,6 +39,7 @@ function handleBlock(lines) {
       const r = proc(+p[1]);
       r.name = p[2]; r.cpu = num(p[3]); r.ram = num(p[4]);
       if (p[5]) pidPath[r.pid] = p[5];
+      r.ioRead = num(p[6]); r.ioWrite = num(p[7]);   // all I/O bytes/s (disk, network, devices; AI_SCOPE-030)
     } else if (p[0] === 'G' && p.length >= 6) {
       const r = proc(+p[1]);
       r.luids[p[2].toLowerCase()] = { vram: num(p[3]) || 0, shared: num(p[4]) || 0, util: num(p[5]) };
@@ -113,7 +114,7 @@ function get() {
     cores: os.cpus().length,
     procs: fresh ? latest.procs.map(function (r) {
       const path = pidPath[r.pid];
-      return { pid: r.pid, name: r.name, cpu: r.cpu, ram: r.ram, icon: path && icons[path.toLowerCase()] || byName[r.name.toLowerCase()] || null,
+      return { pid: r.pid, name: r.name, cpu: r.cpu, ram: r.ram, ioRead: r.ioRead, ioWrite: r.ioWrite, icon: path && icons[path.toLowerCase()] || byName[r.name.toLowerCase()] || null,
         gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, shared: g.shared, util: g.util } : null; }) };
     }) : [],
   };

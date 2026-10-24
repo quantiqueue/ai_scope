@@ -6,8 +6,8 @@ Back to the [README](README.md).
 
 | Scope | What it shows |
 |---|---|
-| **Hardware** (built in) | CPU, RAM, and a GPU + VRAM tile per graphics card, with 5-minute sparklines; GPU temperature and power draw on NVIDIA cards |
-| **Processes** (built in, Windows) | Your AI apps' own VRAM, GPU, CPU and RAM (AI processes), and the top 5 processes by CPU, RAM, and per graphics card GPU, VRAM and shared GPU memory, each with a 5-minute line per process |
+| **Hardware** (built in) | CPU, RAM, a GPU + VRAM tile per graphics card and a Disk tile per physical disk (active time, read / write speed), with 5-minute sparklines; GPU temperature and power draw on NVIDIA cards |
+| **Processes** (built in, Windows) | Your AI apps' own VRAM, GPU, CPU and RAM (AI processes), and the top 5 processes by CPU, RAM, I/O (read / write), and per graphics card GPU, VRAM and shared GPU memory, each with a 5-minute line per process |
 | **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit |
 | **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit |
 | **ComfyUI** | Current job (step progress, speed, time left), run history with thumbnails, installed models (filter by type) |
@@ -23,11 +23,16 @@ Back to the [README](README.md).
 - Request, run and installed-model tables show 5 rows per page (change it with the lens's cog: Rows per page).
 - Scopes are listed in **`scopes.json`** (name, description, icon, the server modules that collect its data, and the settings asked at install). Installed scopes and their settings are saved in `~/.ai_scope/installed.json`.
 
+## Disk tiles (Hardware)
+
+One **Disk** tile per physical disk, named like Task Manager ("Disk 1 (C:)"): **active time** (how busy the disk was) as the big number, read and write speed, and a 5-minute chart with a read line and a dashed write line, scaled to the busiest moment (hover for the values at a time). Read from Windows' disk counters every 2 s (Linux: `/proc/diskstats`). The request and run tables' **Peak load** hover also shows the highest disk read while each ran. In a custom scope, pick the disk with the lens's cog.
+
 ## Processes scope
 
 Built in, Windows only for now. Read from Windows' performance counters (the same numbers as Task Manager), every 5 s, and only while a Processes lens is on screen.
 
 - **AI processes**: one row per installed AI scope (Bionic, Ollama, ComfyUI, Strata) with the VRAM, GPU, CPU and RAM of its own process: the one that runs the model (Bionic, Ollama, Strata) or ComfyUI's python. VRAM is all graphics cards added up and GPU the busiest card; hover for each card.
+- **Top I/O**: the 5 processes reading and writing the most (MB/s, Read and Write columns) — shows which app is loading a model. Windows counts *all* of a process's I/O here (disk, network and devices together); a per-process disk-only number needs admin rights.
 - **Top CPU, Top RAM, Top GPU, Top VRAM, Top shared GPU memory**: the 5 processes using the most, with the program's icon, a 5-minute line (hover for the value at a time; kept while the page is open) and the value. GPU, VRAM and shared GPU memory are per graphics card.
 - **Cog** settings: **Rows** — per app (all processes of a program added together, e.g. "chrome.exe ×27") or per process; **Show the Windows desktop process (dwm.exe)** on the GPU lenses — off by default, because Windows counts the window surfaces dwm draws under dwm *and* under the app that made them, so its number is mostly other apps' memory again. For the same reason the VRAM rows can add up to more than the card's total on the Hardware page.
 - Settings chosen on the Processes page are saved in `~/.ai_scope/lens-settings.json`.

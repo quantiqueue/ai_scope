@@ -123,6 +123,57 @@ defineLens({
   },
 });
 
+// ---------- Disk (AI_SCOPE-030): one physical disk - active time %, read and write lines ----------
+// bytes/s -> "12.3 MB/s" ("850 KB/s" below 1 MB/s)
+const fmtRate = b => b == null ? '—' : b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB/s' : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + ' MB/s' : Math.round(b / 1e3) + ' KB/s';
+const diskOf = (s, id) => s && s.disks ? (id ? s.disks.find(x => x.id === id) : s.disks[0]) || null : null;
+// The lines are scaled to the busiest moment of the last 5 minutes (+25 %), at least 1 MB/s.
+const diskScale = (hist, id) => Math.max(1e6, 1.25 * hist.reduce((a, s) => { const x = diskOf(s, id); return x ? Math.max(a, x.read || 0, x.write || 0) : a; }, 0));
+function diskPath(hist, id, key, max) {
+  const n = hist.length;
+  return hist.map((s, i) => { const x = diskOf(s, id); return x ? [n < 2 ? 100 : 100 * i / (n - 1), 100 - Math.min(100, 100 * (x[key] || 0) / max)] : null; })
+    .filter(Boolean).map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join(' ');
+}
+defineLens({
+  id: 'hardware.disk', scope: 'hardware', size: 'tile',
+  name: 'Disk', description: 'One physical disk: active time, and read / write speed with a 5-minute history (e.g. while a model loads).',
+  settings: [{ id:'disk', label:'Disk', type:'disk', default:'' }],
+  markup: st => `
+  <div class="tilebox" data-tile="disk:${escH(st.disk || '')}">` + lensHeadMarkup('Disk') + `
+  <div class="tile disk">
+    <div class="v">—</div>
+    <div class="sub">&nbsp;</div>
+    <div class="meter"><div></div></div>
+    <div class="spark"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
+      <path class="line"></path><path class="line wline"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
+      <div class="tip" hidden></div></div>
+    <div class="spark-axis"><span>5 min ago</span><span class="dlegend"><i class="rd"></i>read <i class="wr"></i>write</span><span>now</span></div>
+  </div></div>`,
+  render(L, d) {
+    const info = d.info, disks = info.disks || [], want = L.settings.disk || '';
+    const meta = want ? disks.find(x => x.id === want) : disks[0];
+    const id = meta ? meta.id : want;
+    const box = L.el.querySelector('.tilebox'), el = L.el.querySelector('.tile');
+    if (box.dataset.tile !== 'disk:' + id) box.dataset.tile = 'disk:' + id;   // the hover finds the disk by this
+    const title = meta ? meta.name : want ? 'Disk ' + want : 'Disk';
+    if (box.querySelector('.ltitle').textContent !== title) box.querySelector('.ltitle').textContent = title;
+    const x = diskOf(hwLatest(d), id);
+    if (!x) {
+      el.querySelector('.v').innerHTML = NA_HTML;
+      el.querySelector('.sub').textContent = !info.disksSupported ? 'Disk stats: Windows and Linux only for now' : want && disks.length ? 'Disk ' + want + ' not found' : 'detecting…';
+      return;
+    }
+    el.querySelector('.v').innerHTML = (x.active != null ? x.active.toFixed(0) : '—') + '<small>% active</small>';
+    const sub = 'Read ' + fmtRate(x.read) + ' · Write ' + fmtRate(x.write);
+    el.querySelector('.sub').textContent = sub; el.querySelector('.sub').title = 'Active time = how busy the disk was (like Task Manager)';
+    el.querySelector('.meter > div').style.width = Math.max(0, Math.min(100, x.active || 0)) + '%';
+    const max = diskScale(d.history, id);
+    el.querySelector('.line:not(.wline)').setAttribute('d', diskPath(d.history, id, 'read', max));
+    el.querySelector('.wline').setAttribute('d', diskPath(d.history, id, 'write', max));
+    el.querySelector('.spark').title = 'Top of the chart = ' + fmtRate(max);
+  },
+});
+
 // Setting of the Current request / Current job lenses (AI_SCOPE-020): show the process stats row (below) or not.
 const PROC_STATS_FIELD = { id: 'procStats', label: 'Show process stats', type: 'toggle', default: true,
   tip: 'While a request or job runs: the row with GPU, VRAM, CPU and RAM use — of the app\'s own process where known, otherwise of the whole computer.' };
@@ -199,6 +250,7 @@ function peakCell(p) {
   if (p.vramUsed != null) parts.push('VRAM ' + GB(p.vramUsed) + (p.vramTotal ? ' / ' + GB(p.vramTotal) : '') + ' GB');
   if (p.cpu != null) parts.push('CPU ' + p.cpu + '%');
   if (p.ramUsed != null) parts.push('RAM ' + GB(p.ramUsed) + (p.ramTotal ? ' / ' + GB(p.ramTotal) : '') + ' GB');
+  if (p.diskRead != null) parts.push('disk read ' + fmtRate(p.diskRead));   // AI_SCOPE-030: all disks together
   const tip = 'Peak system load while this ran (whole computer, all apps): ' + parts.join(' · ') + (p.partial ? ' (last 5 minutes only)' : '');
   const short = [p.gpu != null ? p.gpu + '%' : null, p.vramUsed != null ? GB(p.vramUsed) + ' GB' : null].filter(Boolean).join(' · ') || '—';
   return '<td class="peak" title="' + tip + '">' + short + '</td>';
@@ -211,11 +263,16 @@ document.addEventListener('mousemove', e => {
   const r = spark.getBoundingClientRect();
   const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
   const i = Math.round(f * (hwHist.length - 1));
-  const h = hwHist[i], v = tileValues(h)[id];
+  const h = hwHist[i], v = id.indexOf('disk:') === 0 ? null : tileValues(h)[id];
   const tip = spark.querySelector('.tip'), guide = spark.querySelector('.guide');
   const x = hwHist.length < 2 ? 100 : 100 * i / (hwHist.length - 1);
   guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
   tip.hidden = false; tip.style.left = x + '%';
+  if (id.indexOf('disk:') === 0) {   // disk tile: read / write / active at that time
+    const x = diskOf(h, id.slice(5));
+    tip.textContent = (x ? 'R ' + fmtRate(x.read) + ' · W ' + fmtRate(x.write) + ' · ' + (x.active != null ? x.active.toFixed(0) : '—') + '%' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
+    return;
+  }
   tip.textContent = (v == null ? 'n/a' : v.toFixed(0) + '%') + ' · ' + new Date(h.t).toLocaleTimeString();
 });
 document.addEventListener('mouseout', e => {
@@ -228,6 +285,8 @@ defineScopeLayout('hardware', () => {
   const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
   const items = layoutOf(['hardware.cpu', 'hardware.ram']);
   for (let i = 0; i < Math.max(1, gpus.length); i++) items.push({ lens: 'hardware.gpu', settings: { card: i, show: 'both' } });
+  const disks = (SOURCES.hardware.data && SOURCES.hardware.data.info.disks) || [];
+  disks.forEach(x => items.push({ lens: 'hardware.disk', settings: { disk: x.id } }));   // AI_SCOPE-030
   return items;
 });
 subscribeSource('hardware', (d, err) => {

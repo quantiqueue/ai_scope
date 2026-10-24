@@ -39,6 +39,8 @@
     "customscopes.js",
     "paths.js",
     "hwstats.js",
+    "diskstats.js",
+    "diskstats.ps1",
     "lmstats.js",
     "lmapi.js",
     "comfystats.js",

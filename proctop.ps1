@@ -1,9 +1,10 @@
 # AI_SCOPE proctop loop (AI_SCOPE-023): numbers for EVERY process, for the Processes scope's top-5 lenses.
 # proctop.js runs it from a temp file (-File) after filling in __PARENT__ (Node's PID) and __EVERY__ (ms between samples).
 # Every cycle prints:
-#   P|pid|exe|cpuPercent|workingSet|path     one line per process (CPU % of the whole CPU, all cores); path (full exe path)
+#   P|pid|exe|cpuPercent|workingSet|path|ioRead|ioWrite   one line per process (CPU % of the whole CPU, all cores); path (full exe path)
 #                                            only the first time a process is seen, '' after that or when Windows won't tell
-#                                            (refused: System32\<exe> if it exists, e.g. svchost.exe / dwm.exe)
+#                                            (refused: System32\<exe> if it exists, e.g. svchost.exe / dwm.exe); ioRead / ioWrite =
+#                                            bytes/s of ALL the process's I/O (disk, network, devices - AI_SCOPE-030)
 #   I|path|base64png                         the exe's icon (32 px), once per exe path (after a block, 40 at a time)
 #   G|pid|luid|dedicated|shared|util         one line per process and graphics card it uses (util = busiest engine type)
 # then "---". One PDH query with wildcard counters over all processes (AI_SCOPE-023 probe on a test PC: ~1 s to set up,
@@ -32,11 +33,11 @@ public static class AiScopeTop {
     uint c; bool ok = GetExitCodeProcess(h, out c); CloseHandle(h); return ok && c == 259; }
 
   static IntPtr query = IntPtr.Zero;
-  static IntPtr[] c = new IntPtr[5];   // dedicated, shared, engine util, cpu, working set
+  static IntPtr[] c = new IntPtr[7];   // dedicated, shared, engine util, cpu, working set, I/O read B/s, I/O write B/s
   public static bool Open() {
     if (PdhOpenQuery(null, IntPtr.Zero, out query) != 0) return false;
     string[] paths = { "\\GPU Process Memory(*)\\Dedicated Usage", "\\GPU Process Memory(*)\\Shared Usage", "\\GPU Engine(*)\\Utilization Percentage",
-      "\\Process V2(*)\\% Processor Time", "\\Process V2(*)\\Working Set" };
+      "\\Process V2(*)\\% Processor Time", "\\Process V2(*)\\Working Set", "\\Process V2(*)\\IO Read Bytes/sec", "\\Process V2(*)\\IO Write Bytes/sec" };
     for (int i = 0; i < paths.Length; i++) if (PdhAddEnglishCounter(query, paths[i], IntPtr.Zero, out c[i]) != 0) c[i] = IntPtr.Zero;
     PdhCollectQueryData(query);
     return true;
@@ -104,10 +105,12 @@ public static class AiScopeTop {
     int cores = Math.Max(1, Environment.ProcessorCount);
     StringBuilder sb = new StringBuilder();
     // CPU + working set per process ("Process V2" instances are "<name>:<pid>", Windows 10 1709+)
-    Dictionary<int, double> cpu = new Dictionary<int, double>(), ws = new Dictionary<int, double>();
+    Dictionary<int, double> cpu = new Dictionary<int, double>(), ws = new Dictionary<int, double>(), ior = new Dictionary<int, double>(), iow = new Dictionary<int, double>();
     Dictionary<int, string> inst = new Dictionary<int, string>();
     foreach (KeyValuePair<string, double> kv in Read(c[3])) { Match m = ProcInst.Match(kv.Key); if (!m.Success) continue; int pid = int.Parse(m.Groups[2].Value); cpu[pid] = kv.Value / cores; inst[pid] = m.Groups[1].Value; }
     foreach (KeyValuePair<string, double> kv in Read(c[4])) { Match m = ProcInst.Match(kv.Key); if (!m.Success) continue; int pid = int.Parse(m.Groups[2].Value); ws[pid] = kv.Value; inst[pid] = m.Groups[1].Value; }
+    foreach (KeyValuePair<string, double> kv in Read(c[5])) { Match m = ProcInst.Match(kv.Key); if (m.Success) ior[int.Parse(m.Groups[2].Value)] = kv.Value; }
+    foreach (KeyValuePair<string, double> kv in Read(c[6])) { Match m = ProcInst.Match(kv.Key); if (m.Success) iow[int.Parse(m.Groups[2].Value)] = kv.Value; }
     foreach (KeyValuePair<int, string> kv in inst) {
       int pid = kv.Key; if (pid == 0 || kv.Value == "_Total" || kv.Value == "Idle") continue;
       string name; if (!names.TryGetValue(pid, out name) || string.IsNullOrEmpty(name)) name = kv.Value;
@@ -123,7 +126,9 @@ public static class AiScopeTop {
         }
         if (path != "" && !iconSent.Contains(path)) { iconSent.Add(path); iconQueue.Enqueue(path); }
       }
-      sb.Append("P|" + pid + "|" + name.Replace("|", "/") + "|" + (hc ? F(Math.Max(0, cv)) : "") + "|" + (hw ? F(wv) : "") + "|" + path + "\n");
+      double rv, xv; bool hr = ior.TryGetValue(pid, out rv), hx = iow.TryGetValue(pid, out xv);
+      sb.Append("P|" + pid + "|" + name.Replace("|", "/") + "|" + (hc ? F(Math.Max(0, cv)) : "") + "|" + (hw ? F(wv) : "") + "|" + path + "|" +
+        (hr ? F(Math.Max(0, rv)) : "") + "|" + (hx ? F(Math.Max(0, xv)) : "") + "\n");
     }
     // forget processes that are gone
     List<int> gone = new List<int>(); foreach (int k in seen.Keys) if (!inst.ContainsKey(k)) gone.Add(k); foreach (int k in gone) seen.Remove(k);

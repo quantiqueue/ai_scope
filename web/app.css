@@ -198,6 +198,11 @@
   .spark svg { width:100%; height:100%; display:block; overflow:visible; }
   .spark .line { fill:none; stroke:var(--accent); stroke-width:2; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
   .spark .area { fill:var(--accent); opacity:.12; }
+  /* Disk tile (AI_SCOPE-030): read = accent line, write = amber dashed line, with a small legend under the chart */
+  .spark .wline { stroke:var(--mid); stroke-dasharray:4 3; }
+  .dlegend { display:inline-flex; align-items:center; gap:4px; }
+  .dlegend i { display:inline-block; width:10px; height:2px; background:var(--accent); vertical-align:middle; }
+  .dlegend i.wr { background:var(--mid); margin-left:6px; }
   .spark .guide { stroke:var(--muted); stroke-width:1; opacity:.6; vector-effect:non-scaling-stroke; }
   .spark .tip { position:absolute; top:-26px; transform:translateX(-50%); background:var(--text); color:var(--bg);
                 font-size:.72rem; padding:2px 6px; border-radius:4px; white-space:nowrap; pointer-events:none; }
@@ -408,6 +413,9 @@
 /* 5-minute line per row (AI_SCOPE-023 item 6) */
 .ptop:not(.papps) th:nth-child(2) { width:22%; }
 .ptop:not(.papps) th:last-child { width:84px; }
+.ptop.psplit th:nth-child(3), .ptop.psplit td:nth-child(3) { width:72px; text-align:right; font-variant-numeric:tabular-nums; }   /* Top I/O: Read + Write (AI_SCOPE-030) */
+.ptop.psplit th:last-child { width:72px; }
+.ptop.psplit th:nth-child(2) { width:18%; }
 .ptop td.pspark { padding-top:6px; padding-bottom:6px; }
 .pspk { position:relative; height:20px; }
 .pspk svg { width:100%; height:100%; display:block; overflow:visible; }

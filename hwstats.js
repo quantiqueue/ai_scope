@@ -11,6 +11,7 @@
 const os = require('os');
 const execFile = require('child_process').execFile;
 const spawn = require('child_process').spawn;
+const diskstats = require('./diskstats');   // read / write per physical disk (AI_SCOPE-030)
 
 const INTERVAL_MS = 2000;
 const HISTORY = 150; // 150 x 2 s = 5 minutes
@@ -326,6 +327,12 @@ function sample() {
                                             temp: c.temp == null ? null : c.temp, power: c.power == null ? null : c.power,
                                             powerLimit: c.powerLimit == null ? null : c.powerLimit }; }),
   };
+  // Disks (AI_SCOPE-030): read / write bytes per second and active time % per physical disk; names in info.disks
+  const disks = diskstats.get();
+  if (disks) {
+    s.disks = disks.map(function (d) { return { id: d.id, read: Math.round(d.read), write: Math.round(d.write), active: d.active == null ? null : Math.round(d.active * 10) / 10 }; });
+    diskNames = {}; disks.forEach(function (d) { diskNames[d.id] = d.name; }); diskOrder = disks.map(function (d) { return d.id; });
+  }
   if (s.cpu != null) {
     history.push(s);
     if (history.length > HISTORY) history.shift();
@@ -333,10 +340,12 @@ function sample() {
   pollGpu(); // async; result lands in the next sample
 }
 
+let diskNames = {}, diskOrder = [];
 let started = false;
 function start() {
   if (started) return;
   started = true;
+  diskstats.start();
   cpuPercent();
   detectGpu(function () {
     const cards = allCards();
@@ -355,6 +364,8 @@ function getStats() {
       gpuName: cards.length ? cards.map(function (c) { return c.name; }).join(' + ') : null,
       gpuSource: gpuMode,
       gpus: cards.map(function (c) { return { id: c.id, name: c.name, vendor: c.vendor, source: c.source, vramTotal: c.vramTotal }; }),
+      disks: diskOrder.map(function (id) { return { id: id, name: diskNames[id] }; }),   // physical disks (AI_SCOPE-030)
+      disksSupported: diskstats.supported(),
     },
     intervalMs: INTERVAL_MS,
     history: history,
@@ -387,7 +398,7 @@ function vramFit(size, vram, canSplit) {
 }
 
 // ---- Peak whole-PC load while a request/run was going (from the 2 s samples, last 5 minutes) ----
-// Returns { gpu, vramUsed, vramTotal, cpu, ramUsed, ramTotal, partial } or null when no sample falls in
+// Returns { gpu, vramUsed, vramTotal, cpu, ramUsed, ramTotal, diskRead (bytes/s, all disks), partial } or null when no sample falls in
 // [t0, t1]. partial = the request started before the oldest kept sample, so only its last 5 min count.
 function peakBetween(t0, t1) {
   if (t0 == null || t1 == null || !history.length) return null;
@@ -397,6 +408,8 @@ function peakBetween(t0, t1) {
     if (s.t < t0 || s.t > t1) return;
     if (!p) p = { gpu: null, vramUsed: null, vramTotal: s.vramTotal, cpu: null, ramUsed: null, ramTotal: s.ramTotal };
     p.gpu = mx(p.gpu, s.gpu); p.vramUsed = mx(p.vramUsed, s.vramUsed); p.cpu = mx(p.cpu, s.cpu); p.ramUsed = mx(p.ramUsed, s.ramUsed);
+    // disk read (AI_SCOPE-030): all disks together, bytes per second
+    if (s.disks) p.diskRead = mx(p.diskRead, s.disks.reduce(function (a, d) { return a + (d.read || 0); }, 0));
   });
   if (!p) return null;
   ['gpu', 'cpu'].forEach(function (k) { if (p[k] != null) p[k] = Math.round(p[k]); });

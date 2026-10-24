@@ -9,6 +9,7 @@ const TOP_N = 5;
 // Values carry their unit: "3.4GB", "0.12GB", "30%", "4.1%"
 const pctText = v => (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + '%';
 const gb2 = b => { const g = b / 1073741824; return (g >= 1 ? g.toFixed(1) : g.toFixed(2)) + 'GB'; };
+const rate2 = b => b >= 1e9 ? (b / 1e9).toFixed(1) + 'GB/s' : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + 'MB/s' : b >= 1e3 ? Math.round(b / 1e3) + 'KB/s' : '0';
 // value(p, card) of one process; shown when at least min (GB columns: 0.005 GB, so nothing shows as 0.00). sum: how per-app rows add up (GPU % is capped at 100).
 const PROC_METRICS = {
   vram: { floor: 0.5 * 1073741824, name: 'Top VRAM', col: 'VRAM', card: true, min: 0.005 * 1073741824, fmt: gb2,
@@ -26,6 +27,13 @@ const PROC_METRICS = {
   cpu: { floor: 10, name: 'Top CPU', col: 'CPU', min: 0.05, fmt: pctText, cap: 100,
     description: 'The 5 processes using the most CPU (share of the whole CPU, all cores).',
     value: p => p.cpu || 0 },
+  // AI_SCOPE-030: Windows' per-process I/O counters count ALL I/O (disk, network, devices), so it's "I/O", not "disk".
+  // Ranked and drawn by read + write; split = the two columns shown.
+  io: { floor: 1e6, name: 'Top I/O', col: 'I/O', min: 1e3, fmt: rate2,
+    description: 'The 5 processes reading and writing the most (MB/s): disk, but also network and devices — Windows counts all of a process\'s I/O together. Shows which app is loading a model.',
+    colTip: 'All I/O of the process: disk, network and devices together (Windows doesn\'t separate disk per process without admin rights).',
+    value: p => (p.ioRead || 0) + (p.ioWrite || 0),
+    split: [{ col: 'Read', value: p => p.ioRead || 0 }, { col: 'Write', value: p => p.ioWrite || 0 }] },
   ram: { floor: 0.5 * 1073741824, name: 'Top RAM', col: 'RAM', min: 0.005 * 1073741824, fmt: gb2,
     description: 'The 5 processes using the most RAM (working set, like Task Manager\'s Memory column).',
     value: p => p.ram || 0 },
@@ -37,13 +45,15 @@ function topRows(procs, m, st) {
   // dwm.exe (the Windows desktop) is hidden on the GPU lenses unless the lens says otherwise: Windows counts the window
   // surfaces it draws under dwm AND under the app that made them, so its number is mostly other apps' memory again.
   if (m.card && st.dwm !== 'show') procs = procs.filter(p => p.name.toLowerCase() !== 'dwm.exe');
-  let rows = procs.map(p => ({ name: p.name, pids: [p.pid], icon: p.icon, value: m.value(p, card), tip: m.tip ? m.tip(p, card) : '' }));
+  let rows = procs.map(p => ({ name: p.name, pids: [p.pid], icon: p.icon, value: m.value(p, card), tip: m.tip ? m.tip(p, card) : '',
+    parts: m.split ? m.split.map(x => x.value(p)) : null }));
   if (st.group !== 'pid') {
     const by = {};
     rows.forEach(r => {
       const k = r.name.toLowerCase(), g = by[k];
-      if (!g) { by[k] = { name: r.name, pids: r.pids.slice(), icon: r.icon, value: r.value, tip: '' }; return; }
+      if (!g) { by[k] = { name: r.name, pids: r.pids.slice(), icon: r.icon, value: r.value, tip: '', parts: r.parts ? r.parts.slice() : null }; return; }
       g.pids.push(r.pids[0]); g.value += r.value;
+      if (g.parts) r.parts.forEach((v, i) => { g.parts[i] += v; });
       if (!g.icon) g.icon = r.icon;
     });
     rows = Object.values(by);
@@ -125,8 +135,9 @@ Object.keys(PROC_METRICS).forEach(key => {
   defineLens({
     id: 'processes.' + key, scope: 'processes', size: 'tile',
     name: m.name, description: m.description, settings,
-    markup: tableLensMarkup({ title: m.name, hint: '', cols: ['Process', '<span title="The last 5 minutes (while this page was open); hover for values">5 min</span>', m.colTip ? '<span title="' + escH(m.colTip) + '">' + m.col + '</span>' : m.col], foot: '' }),
-    init(L) { L.el.classList.add('ptop'); },
+    markup: tableLensMarkup({ title: m.name, hint: '', cols: ['Process', '<span title="The last 5 minutes (while this page was open); hover for values">5 min</span>']
+      .concat((m.split ? m.split.map(x => x.col) : [m.col]).map(c => m.colTip ? '<span title="' + escH(m.colTip) + '">' + c + '</span>' : c)), foot: '' }),
+    init(L) { L.el.classList.add('ptop'); if (m.split) L.el.classList.add('psplit'); },
     render(L, d) {
       recordProcSample(d);
       const st = L.settings;
@@ -146,9 +157,11 @@ Object.keys(PROC_METRICS).forEach(key => {
       }
       // Always TOP_N rows tall (message and blank filler rows count), so lenses side by side keep the same height.
       const series = rows.map(r => rowSeries(r, m, st));
-      const trs = msg ? ['<tr class="pmsg"><td colspan="3">' + msg + '</td></tr>']
-        : rows.map((r, i) => '<tr><td>' + procNameHtml(r, st) + '</td>' + sparkHtml(series[i], m) + '<td' + (r.tip ? ' title="' + escH(r.tip) + '"' : '') + '>' + m.fmt(r.value) + '</td></tr>');
-      while (trs.length < TOP_N) trs.push('<tr class="pfill" aria-hidden="true"><td colspan="3">&nbsp;</td></tr>');
+      const ncol = m.split ? 2 + m.split.length : 3;
+      const valueCells = r => r.parts ? r.parts.map(v => '<td>' + m.fmt(v) + '</td>').join('') : '<td' + (r.tip ? ' title="' + escH(r.tip) + '"' : '') + '>' + m.fmt(r.value) + '</td>';
+      const trs = msg ? ['<tr class="pmsg"><td colspan="' + ncol + '">' + msg + '</td></tr>']
+        : rows.map((r, i) => '<tr><td>' + procNameHtml(r, st) + '</td>' + sparkHtml(series[i], m) + valueCells(r) + '</tr>');
+      while (trs.length < TOP_N) trs.push('<tr class="pfill" aria-hidden="true"><td colspan="' + ncol + '">&nbsp;</td></tr>');
       const html = trs.join('');
       const body = L.$('rows');
       if (body._html !== html) {
@@ -211,6 +224,7 @@ defineScopeLayout('processes', () => {
   const n = Math.max(1, gpus.length), items = layoutOf(['processes.apps', 'processes.cpu', 'processes.ram']);
   for (let i = 0; i < n; i++) items.push({ lens: 'processes.gpu', settings: { card: i } }, { lens: 'processes.vram', settings: { card: i } });
   for (let i = 0; i < n; i++) items.push({ lens: 'processes.shared', settings: { card: i } });
+  items.push({ lens: 'processes.io', settings: {} });   // AI_SCOPE-030
   return items;
 });
 subscribeSource('processes', (d, err) => {

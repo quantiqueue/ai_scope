@@ -33,6 +33,7 @@ function lensLabel(item) {
   const st = lensSettings(def, item.settings);
   if ((def.settings || []).some(f => f.type === 'gpu')) txt += ' ' + ((st.card || 0) + 1);
   if (item.lens === 'hardware.gpu') txt += st.show === 'gpu' ? ' (usage)' : st.show === 'vram' ? ' (VRAM)' : '';
+  if ((def.settings || []).some(f => f.type === 'disk') && st.disk) txt += ' ' + st.disk;
   return txt;
 }
 
@@ -344,6 +345,11 @@ function lensFieldsHtml(def, cur) {
       const n = Math.max(1, gpus.length, (cur[f.id] || 0) + 1);
       opts = [];
       for (let i = 0; i < n; i++) opts.push([String(i), 'GPU ' + (i + 1) + (gpus[i] ? ' · ' + gpus[i].name : '')]);
+    }
+    if (f.type === 'disk') {   // physical disks (AI_SCOPE-030); '' = the first one
+      const disks = (SOURCES.hardware.data && SOURCES.hardware.data.info.disks) || [];
+      opts = [['', 'First disk' + (disks[0] ? ' · ' + disks[0].name : '')]].concat(disks.map(x => [x.id, x.name]));
+      if (cur[f.id] && !disks.some(x => x.id === cur[f.id])) opts.push([cur[f.id], 'Disk ' + cur[f.id] + ' (not found)']);
     }
     const val = String(f.id === 'width' ? lensWidth(def, cur) : cur[f.id]);
     return '<div class="field"><label for="lf-' + f.id + '">' + escH(f.label) + '</label>' +
