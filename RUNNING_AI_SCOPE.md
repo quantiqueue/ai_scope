@@ -37,4 +37,6 @@ Started without `--app`, AI_SCOPE runs in that console window: keep it open whil
 
 By default only this computer can open the dashboard (`127.0.0.1`). With `--host 0.0.0.0` the console also prints the network address(es) to use from other devices.
 
+AI_SCOPE only answers when it's opened by this computer's own name or address (`localhost`, its network address, or its computer name such as `snow` / `snow.local`), so a malicious web page can't reach it through a look-alike name. Behind a reverse proxy or another host name, list the extra names in `AI_SCOPE_ALLOWED_HOSTS` (comma-separated), e.g. `AI_SCOPE_ALLOWED_HOSTS=dash.example.lan`.
+
 `--install-startup` remembers the other flags you pass with it (e.g. `ai_scope --host 0.0.0.0 --install-startup`). On Windows it adds `ai_scope.cmd` to your Startup folder (opens a minimized *AI_SCOPE* window; close it to stop). On macOS it adds a LaunchAgent, on Linux a desktop autostart entry.

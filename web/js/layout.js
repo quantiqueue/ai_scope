@@ -409,8 +409,7 @@ function removePage(id) {
   delete PAGES[id];
 }
 async function postLayout(action, body) {
-  const r = await (await fetch('/api/scope-layouts/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body) })).json();
+  const r = await postJson('/api/scope-layouts/' + action, body);
   if (r.layouts) SCOPE_LAYOUTS = r.layouts;
   return r;
 }

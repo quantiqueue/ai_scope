@@ -400,8 +400,7 @@ function dlgBusy(btnText) {
   b.disabled = true; b.textContent = btnText;
 }
 async function postScope(action, body) {
-  const r = await fetch('/api/scopes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return r.json();
+  return postJson('/api/scopes/' + action, body);
 }
 function fieldHtml(f, edit) {
   const v = edit ? f.value : f.default;
@@ -473,8 +472,7 @@ function openRemove(id) {
 
 // ---- Custom scopes: create / settings (name) / remove, in the same dialog ----
 async function postCustom(action, body) {
-  const r = await fetch('/api/custom-scopes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return r.json();
+  return postJson('/api/custom-scopes/' + action, body);
 }
 // id = null: create a new custom scope (then open it, in edit mode since it's empty); else rename it.
 function openCustomName(id) {

@@ -22,6 +22,14 @@ const SERVER_OS = window.AI_SCOPE_OS || '';
 // A tab can show an installed scope or a custom scope.
 function canOpen(id) { return isInstalled(id) || !!customById(id); }
 
+// ---------- Changes to the server (AI_SCOPE-021) ----------
+// Every POST goes through here: JSON body + the X-AI-Scope header, which the server requires (a web page can't send
+// them cross-site). Returns the JSON answer.
+async function postJson(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Scope': '1' }, body: JSON.stringify(body || {}) });
+  return r.json();
+}
+
 // ---------- Paging for request tables ----------
 const PAGE_SIZE_DEFAULT = 15;
 const pages = {};      // table key -> current page (0-based)

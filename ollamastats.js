@@ -7,6 +7,7 @@
 // Settings (Ollama URL, relay port) come from the scope's install settings in start().
 // No dependencies; conservative JS for older Node versions.
 'use strict';
+const hostAllowed = require('./hostcheck').hostAllowed;
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -268,6 +269,12 @@ function finish(rec, aborted) {
 let proxySrv = null;
 function startProxy() {
   const srv = proxySrv = http.createServer(function (req, res) {
+    // DNS-rebinding guard (AI_SCOPE-021): the relay rewrites Host for Ollama, which would hide a foreign name from
+    // Ollama's own check - so check it here first.
+    if (!hostAllowed(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'AI_SCOPE relay: unknown host name (see AI_SCOPE_ALLOWED_HOSTS)' }));
+    }
     const ep = req.url.split('?')[0];
     let rec = null;
     if (req.method === 'POST') { lastRelayAt = Date.now(); res.on('close', function () { lastRelayAt = Date.now(); }); }   // any model call (also embeddings)

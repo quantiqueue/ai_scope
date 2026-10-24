@@ -27,8 +27,7 @@ function customPage(cs) {
         : 'Custom scope · ' + n + ' lens' + (n === 1 ? '' : 'es');
     },
     save: async list => {
-      const r = await (await fetch('/api/custom-scopes/update', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: id, lenses: list }) })).json();
+      const r = await postJson('/api/custom-scopes/update', { id: id, lenses: list });
       if (r.ok) r.apply = () => applyCustom(r.custom);
       return r;
     },

@@ -68,6 +68,20 @@ function isLocal(req) {
   const a = (req.socket && req.socket.remoteAddress) || '';
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
 }
+// ---------- Request checks (AI_SCOPE-021) ----------
+// 1. Host check on every request (DNS-rebinding guard, hostcheck.js; the Ollama relay uses it too).
+// 2. Every state-changing POST needs the X-AI-Scope header and (with a body) Content-Type: application/json. A web page
+//    can't send either cross-site without a CORS preflight, which this server never allows. Other devices on the
+//    network may still change things (user, 2026-10-24); /api/stop stays this-PC-only.
+// 3. Every answer forbids being shown inside another site's frame (clickjacking: a hidden AI_SCOPE under a fake button)
+//    and content-type sniffing.
+const hostAllowed = require('./hostcheck').hostAllowed;
+function postAllowed(req, withBody) {
+  if (!req.headers['x-ai-scope']) return false;
+  return !withBody || /^application\/json\b/i.test(String(req.headers['content-type'] || ''));
+}
+const NOT_ALLOWED = { ok: false, error: 'Request refused (missing X-AI-Scope header or JSON content type)' };
+
 let iconBuf = null;
 function sendIcon(res) {
   if (!iconBuf) { try { iconBuf = fs.readFileSync(path.join(__dirname, 'assets', 'ai_scope.ico')); } catch (e) { iconBuf = Buffer.alloc(0); } }
@@ -95,6 +109,14 @@ function pageHtml() {
 
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (!hostAllowed(req)) {   // AI_SCOPE-021: not a name of this machine (DNS rebinding)
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    return res.end('AI_SCOPE: unknown host name. Open AI_SCOPE by this computer\'s name or address, or add the name to AI_SCOPE_ALLOWED_HOSTS.');
+  }
+  if (req.method === 'POST' && url.pathname !== '/api/stop' && !postAllowed(req, true)) return sendJson(res, 403, NOT_ALLOWED);
   if (url.pathname === '/__boot') {
     res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
     return res.end(BOOT_ID);
