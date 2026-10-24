@@ -204,45 +204,15 @@ defineLens({
   },
 });
 
-// ---------- The Processes page: in Hardware's order - CPU, RAM, then GPU n + VRAM n per card ----------
-// (AI processes full width on top; shared GPU memory after the per-card lenses)
-// Each lens has a slot ("processes.cpu", "processes.gpu.2", …) for its cog settings. On this page a lens's card is fixed
-// by its place, so the cog only offers the other settings (Rows).
-const procBox = document.querySelector('[data-panel="processes"] [data-lenses]');
-let procKey = null, procMounted = [];
-function mountProcLens(key, card, box, before) {
-  const def = LENSES['processes.' + key];
-  const slot = 'processes.' + key + (PROC_METRICS[key].card ? '.' + (card + 1) : '');
-  const fixed = PROC_METRICS[key].card ? { card: card } : {};
-  const pageDef = Object.assign({}, def, { settings: def.settings.filter(f => f.id !== 'card') });
-  const L = mountLens(def.id, box, Object.assign({}, LENS_SET[slot], fixed), { onGear: lens => openLensSettingsFor(pageDef, lens.settings, async vals => {
-    const r = await saveLensSet(slot, vals);
-    if (!r.ok) { document.getElementById('pMeta').textContent = 'Not saved: ' + (r.error || 'failed'); return; }
-    const i = procMounted.indexOf(lens);
-    const L2 = mountProcLens(key, card, box, lens.el);
-    unmountLens(lens);
-    procMounted[i] = L2;
-  }) });
-  if (before) box.insertBefore(L.el, before);
-  return L;
-}
-function buildProcessesPage(gpus) {   // (re)built once the card list is known or when it changes
-  const key = String(gpus.length) + '|' + gpus.map(g => g.id).join(',');
-  if (key === procKey) return;
-  procKey = key;
-  procMounted.forEach(unmountLens);
-  procMounted = [];
-  procBox.innerHTML = '';
-  // One grid, lenses ≥ 450 px wide (AI_SCOPE-023: 4 per row on a ~1900 px window, 2 at 1280 px), in Hardware's order:
-  // AI processes (full width), CPU, RAM, then GPU n + VRAM n per card, then shared GPU memory per card.
-  procMounted.push(mountLens('processes.apps', procBox));
-  procMounted.push(mountProcLens('cpu', 0, procBox), mountProcLens('ram', 0, procBox));
-  const n = Math.max(1, gpus.length);
-  for (let i = 0; i < n; i++) procMounted.push(mountProcLens('gpu', i, procBox), mountProcLens('vram', i, procBox));
-  for (let i = 0; i < n; i++) procMounted.push(mountProcLens('shared', i, procBox));
-}
-subscribeSource('hardware', d => { if (d) buildProcessesPage(d.info.gpus || []); });
-buildProcessesPage([]);
+// ---------- The Processes page (default layout; editable, AI_SCOPE-020): AI processes (full width), CPU, RAM,
+// then GPU n + VRAM n per card, then shared GPU memory per card ----------
+defineScopeLayout('processes', () => {
+  const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
+  const n = Math.max(1, gpus.length), items = layoutOf(['processes.apps', 'processes.cpu', 'processes.ram']);
+  for (let i = 0; i < n; i++) items.push({ lens: 'processes.gpu', settings: { card: i } }, { lens: 'processes.vram', settings: { card: i } });
+  for (let i = 0; i < n; i++) items.push({ lens: 'processes.shared', settings: { card: i } });
+  return items;
+});
 subscribeSource('processes', (d, err) => {
   const meta = document.getElementById('pMeta');
   if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }

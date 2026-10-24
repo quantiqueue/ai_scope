@@ -380,6 +380,8 @@ setInterval(async () => {
     if (JSON.stringify(list) !== JSON.stringify(SCOPES)) applyScopes(list);
     const custom = await (await fetch('/api/custom-scopes', { cache: 'no-store' })).json();
     if (JSON.stringify(custom) !== JSON.stringify(CUSTOM)) applyCustom(custom);
+    const layouts = await (await fetch('/api/scope-layouts', { cache: 'no-store' })).json();   // scope pages edited elsewhere (AI_SCOPE-020)
+    if (JSON.stringify(layouts) !== JSON.stringify(SCOPE_LAYOUTS)) setScopeLayouts(layouts);
   } catch (e) {}
 }, 5000);
 

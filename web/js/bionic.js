@@ -10,6 +10,7 @@ defineLens({
   id: 'bionic.current', scope: 'bionic', size: 'wide',
   name: 'Current request',
   description: 'What Bionic\'s local server is answering right now: prompt progress, speed, tokens and the model process\'s GPU, VRAM, CPU and RAM use.',
+  settings: [PROC_STATS_FIELD],
   markup: nowCardMarkup([
     { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
     { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
@@ -38,7 +39,7 @@ defineLens({
       $('foot').textContent = '';   // the state is on the top line (an empty foot line is hidden)
       // Bionic's model process when known (Windows). On Windows without one (the model was unloaded or its llama-server
       // ended mid-request) the row is hidden rather than showing whole-computer load; other systems show System load.
-      setSysLoad($('load'), !(data.processSupported && !data.process), data.process, 'Bionic');
+      setSysLoad($('load'), L.settings.procStats !== false && (!(data.processSupported && !data.process)), data.process, 'Bionic');
     } else {
       $('title').textContent = 'Idle — no request running';
       setName($('model'), avg ? avg.model : '—');
@@ -97,6 +98,7 @@ defineLens({
   id: 'bionic.requests', scope: 'bionic', size: 'full',
   name: 'Requests',
   description: 'Finished requests from Bionic\'s server logs: speeds, tokens, first token, total time, peak load.',
+  settings: [PER_PAGE_FIELD],
   markup: tableLensMarkup({ title:'Requests', pager:true,
     hint: '',
     foot: '\n      <div class="err" data-k="err" hidden></div>',
@@ -116,7 +118,7 @@ defineLens({
         '<td>' + fmtSec(r.promptMs) + '</td>' +
         '<td>' + fmtSec(r.totalMs) + '</td>' + peakCell(r.peak) + '</tr>';
     });
-    $('rows').innerHTML = paginate(L.key, rows, $('pager')).join('');
+    $('rows').innerHTML = paginate(L.key, rows, $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
 });
@@ -126,12 +128,13 @@ defineLens({
   id: 'bionic.installed', scope: 'bionic', source: 'bionic.models', size: 'full',
   name: 'Installed models',
   description: 'Models downloaded in Bionic, with size, features, VRAM fit and max context.',
-  markup: tableLensMarkup({ title:'Installed models',
+  settings: [PER_PAGE_FIELD],
+  markup: tableLensMarkup({ title:'Installed models', pager:true,
     cols:['Model', 'Publisher', 'Arch', 'Params', 'Quant', 'Size', 'Features', 'VRAM fit', 'Max context', 'Modified'] }),
   render(L, d) {
     const $ = L.$, vt = d.vramTotal;
     const fitText = { fits:'fits', tight:'tight', spills:'partly CPU' };
-    $('rows').innerHTML = d.installed.map(m => {
+    $('rows').innerHTML = paginate(L.key, d.installed.map(m => {
       const feats = [m.vision ? 'vision' : null, m.tools ? 'tools' : null, m.reasoning ? 'reasoning' : null,
                      m.type && m.type.indexOf('embed') === 0 ? 'embedding' : null].filter(Boolean);
       return '<tr><td class="model">' + nameLink(m.name, m.modelUrl, (m.source ? m.source + ': ' : '') + (m.modelUrl || m.key)) + (m.loaded ? '<span class="tag">loaded</span>' : '') + '</td>' +
@@ -141,7 +144,7 @@ defineLens({
         '<td>' + fitPill(m, fitText) + '</td>' +
         '<td>' + (m.maxContext ? fmtNum(m.maxContext) : ONONE) + '</td>' +
         '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>';
-    }).join('');
+    }), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = d.installed.length > 0;
     $('empty').textContent = d.online ? 'No models found.' : 'Bionic\'s local server is not reachable.';
     $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' models · ' + fmtBytes(d.installed.reduce((a, m) => a + (m.size || 0), 0)) + ' on disk' +
@@ -158,4 +161,4 @@ subscribeSource('bionic', (data, err) => {
     (lmApi ? (lmApi.online ? 'connected to ' + lmApi.url + ' (API ' + lmApi.apiVersion + ')' : 'Bionic\'s local server offline') + ' · ' : '') +
     data.rows.length + ' latest requests · updated ' + new Date().toLocaleTimeString() + ' · updates every 2 s';
 });
-mountScopePage('bionic', ['bionic.current', 'bionic.loaded', 'bionic.requests', 'bionic.installed']);
+defineScopeLayout('bionic', () => layoutOf([{ lens: 'bionic.current', settings: { width: 'full' } }, 'bionic.loaded', 'bionic.requests', 'bionic.installed']));

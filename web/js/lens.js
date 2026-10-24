@@ -50,7 +50,16 @@ function subscribeSource(id, fn, el) {
 //        markup (HTML string, or a function of the settings; parts marked data-k="..."),
 //        init(lens) (optional, once after mounting), render(lens, data) (every poll with fresh data) }
 const LENSES = {};
-function defineLens(def) { LENSES[def.id] = def; }
+function defineLens(def) {
+  // Table lenses (AI_SCOPE-020): their column headers, for the Columns setting (show / hide; the first always shows)
+  if (def.columns == null && typeof def.markup === 'string' && def.markup.indexOf('<thead') >= 0) {
+    const t = document.createElement('template');
+    t.innerHTML = def.markup;
+    const ths = t.content.querySelectorAll('thead th');
+    def.columns = [...ths].map(th => th.textContent.replace(/\s+/g, ' ').trim() || '(no title)');
+  }
+  LENSES[def.id] = def;
+}
 function lensesOf(scope) { return Object.values(LENSES).filter(d => d.scope === scope); }
 
 // A tab switch or the window coming back: poll the visibleOnly sources right away instead of at their next tick.
@@ -61,25 +70,32 @@ window.addEventListener('hashchange', kickVisibleSources);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) kickVisibleSources(); });
 
 // ---------- Lens instances ----------
-// Lens settings cog (AI_SCOPE-023; the pattern for all lens settings, AI_SCOPE-020): top-right INSIDE the lens's card
-// panel (the box under the header tab), so things on the header line (e.g. the GPU tile's temperature) keep their place.
-// With several panels (GPU + VRAM side by side) it goes on the last one, the lens's top-right corner.
+// Gear icon: the lens settings button in edit mode (layout.js) and the settings dialog's title.
 const GEAR_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
-function addLensCog(lens, onGear) {
-  const panels = lens.el.querySelectorAll('.lhead + .card, .lhead + .tile');
-  const panel = panels[panels.length - 1];
-  if (!panel) return;
-  const b = document.createElement('button');
-  b.type = 'button'; b.className = 'lcog'; b.title = 'Lens settings'; b.setAttribute('aria-label', 'Lens settings');
-  b.innerHTML = GEAR_ICON;
-  b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); onGear(lens); });
-  panel.classList.add('haslcog');
-  panel.appendChild(b);
+// Width of a lens copy (AI_SCOPE-020): every lens has a Width setting - Quarter / Half / Full of the 4-column grid
+// ('tile' / 'wide' / 'full'); without one it keeps the lens's own size (def.size, which may depend on its settings).
+const LENS_WIDTHS = [['tile', 'Quarter'], ['wide', 'Half'], ['full', 'Full']];
+function naturalWidth(def, st) { return typeof def.size === 'function' ? def.size(st) : def.size; }
+function lensWidth(def, st) { return st && LENS_WIDTHS.some(w => w[0] === st.width) ? st.width : naturalWidth(def, st || {}); }
+
+// Rows per page of the request / run / installed-model tables (AI_SCOPE-020): 5 unless changed with the lens's cog.
+const PER_PAGE_FIELD = { id: 'perPage', label: 'Rows per page', type: 'number', default: 5, min: 1, max: 500 };
+
+// Hidden table columns of a lens copy (settings.cols = "2,5": 1-based column numbers; the first can't be hidden).
+// A <style> inside the lens hides those cells in every row, so the lens's own render code doesn't need to know.
+let colSeq = 0;
+function hideColumns(el, cols) {
+  const nums = String(cols || '').split(',').map(Number).filter(n => n > 1);
+  if (!nums.length) return;
+  const cls = 'lcols' + (++colSeq);
+  el.classList.add(cls);
+  const style = document.createElement('style');
+  style.textContent = nums.map(n => '.' + cls + ' th:nth-child(' + n + '), .' + cls + ' td:nth-child(' + n + ')').join(', ') + ' { display:none; }';
+  el.appendChild(style);
 }
 
 let lensSeq = 0;
-// opts.onGear(lens): show the settings cog (lenses with settings only) and what clicking it does.
-function mountLens(id, container, settings, opts) {
+function mountLens(id, container, settings) {
   const def = LENSES[id];
   if (!def) return null;
   // settings: the lens's own values over the defaults of its settings schema
@@ -87,10 +103,11 @@ function mountLens(id, container, settings, opts) {
   (def.settings || []).forEach(f => { st[f.id] = f.default; });
   Object.assign(st, settings || {});
   const el = document.createElement('div');
-  el.className = 'lens lens-' + (typeof def.size === 'function' ? def.size(st) : def.size);
+  el.className = 'lens lens-' + lensWidth(def, st);
   el.dataset.lens = id;
   el.innerHTML = typeof def.markup === 'function' ? def.markup(st) : def.markup;
   container.appendChild(el);
+  hideColumns(el, st.cols);
   const lens = {
     def, el, settings: st, state: {}, data: null,
     key: id + '#' + (++lensSeq),                         // pager key: every copy pages on its own
@@ -98,7 +115,6 @@ function mountLens(id, container, settings, opts) {
   };
   lens.redraw = () => { if (lens.data) def.render(lens, lens.data); };
   pagerReload[lens.key] = lens.redraw;
-  if (opts && opts.onGear && def.settings && def.settings.some(f => !f.when || f.when())) addLensCog(lens, opts.onGear);
   if (def.init) def.init(lens);
   lens.unsub = subscribeSource(def.source || def.scope, (d, err) => { if (d && !err) { lens.data = d; def.render(lens, d); } }, el);
   return lens;
@@ -109,11 +125,13 @@ function unmountLens(lens) {
   delete pages[lens.key];
   lens.el.remove();
 }
-// A scope's own page: its lenses, in the order given, inside the panel's [data-lenses] container.
-function mountScopePage(scope, ids) {
-  const box = document.querySelector('[data-panel="' + scope + '"] [data-lenses]');
-  return ids.map(id => mountLens(id, box));
-}
+// A scope page's default layout (AI_SCOPE-020): fn() returns the lens list [{ lens, settings, row? }] shown until the
+// page is edited and saved (scope-layouts.json). It may depend on what's detected (e.g. one GPU lens per card), so it is
+// asked again when the hardware info changes. layout.js draws the pages and their edit mode.
+const SCOPE_DEFAULTS = {};
+function defineScopeLayout(scope, fn) { SCOPE_DEFAULTS[scope] = fn; }
+// Shorthand: lens ids -> layout items
+const layoutOf = ids => ids.map(id => typeof id === 'string' ? { lens: id, settings: {} } : id);
 
 // ---------- Shared building blocks (markup) ----------
 // The LLM scopes (Strata, Ollama, Bionic, later llama.cpp) and ComfyUI draw the same kinds of cards;

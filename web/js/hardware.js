@@ -123,6 +123,10 @@ defineLens({
   },
 });
 
+// Setting of the Current request / Current job lenses (AI_SCOPE-020): show the process stats row (below) or not.
+const PROC_STATS_FIELD = { id: 'procStats', label: 'Show process stats', type: 'toggle', default: true,
+  tip: 'While a request or job runs: the row with GPU, VRAM, CPU and RAM use — of the app\'s own process where known, otherwise of the whole computer.' };
+
 // ---- "System load" row on the Current request / Current job cards ----
 // Whole-computer totals from the latest Hardware sample (all apps together, not this request alone).
 // Shown only while something is running.
@@ -219,27 +223,16 @@ document.addEventListener('mouseout', e => {
   if (spark && !spark.contains(e.relatedTarget)) { spark.querySelector('.tip').hidden = true; spark.querySelector('.guide').style.display = 'none'; }
 });
 
-// ---------- The Hardware scope page: CPU + RAM side by side, then one GPU lens (GPU + VRAM) per card ----------
-const hwBox = document.querySelector('[data-panel="hardware"] [data-lenses]');
-const hwPair = document.createElement('div');
-hwPair.className = 'tgroup';
-hwBox.appendChild(hwPair);
-let hwGpuKey = null, hwGpuLenses = [];
-function buildHardwarePage(gpus) {   // (re)built once the card list is known or when it changes
-  const key = String(gpus.length) + '|' + gpus.map(g => g.id).join(',');
-  if (key === hwGpuKey) return;
-  hwGpuKey = key;
-  hwGpuLenses.forEach(unmountLens);
-  hwGpuLenses = [];
-  for (let i = 0; i < Math.max(1, gpus.length); i++) hwGpuLenses.push(mountLens('hardware.gpu', hwBox, { card: i, show: 'both' }));
-}
+// ---------- The Hardware scope page: CPU + RAM, then one GPU lens (GPU + VRAM) per card (default layout; editable, AI_SCOPE-020) ----------
+defineScopeLayout('hardware', () => {
+  const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
+  const items = layoutOf(['hardware.cpu', 'hardware.ram']);
+  for (let i = 0; i < Math.max(1, gpus.length); i++) items.push({ lens: 'hardware.gpu', settings: { card: i, show: 'both' } });
+  return items;
+});
 subscribeSource('hardware', (d, err) => {
   const meta = document.getElementById('hwMeta');
   if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }
-  buildHardwarePage(d.info.gpus || []);
   const s = hwLatest(d);
   meta.textContent = s ? 'updated ' + new Date(s.t).toLocaleTimeString() + ' · every 2 s' : 'warming up…';
 });
-mountLens('hardware.cpu', hwPair);
-mountLens('hardware.ram', hwPair);
-buildHardwarePage([]);

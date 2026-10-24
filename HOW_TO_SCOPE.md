@@ -19,7 +19,7 @@ Back to the [README](README.md).
 - **While something runs**, each *Current request / Current job* card says what it's doing ("Running — reading prompt", "Running — sampling (+2 queued)") and shows a **System load** row (whole-computer GPU, VRAM, CPU and RAM). On Windows, ComfyUI's *Current job* card shows a **ComfyUI process** row instead, and the Bionic, Ollama and Strata *Current request* cards a **Bionic / Ollama / Strata process** row: the GPU %, VRAM (per card), CPU and RAM used by the app's own process (for these three, the process that runs the model: llama-server for Bionic and Ollama, strata.exe for Strata), read from Windows' GPU performance counters. Their *Loaded in memory* / *Loaded model* tables also show how much of the model sits on each graphics card. When idle it tells you the next step ("Load a model in Strata to see live stats.").
 - The request and run tables have a **Peak load** column: the highest GPU % and VRAM while each one ran (hover for CPU and RAM too).
 - Model and publisher names link to their Hugging Face / Ollama / LM Studio catalog pages (opens a new tab).
-- Tables page by 15.
+- Request, run and installed-model tables show 5 rows per page (change it with the lens's cog: Rows per page).
 - Scopes are listed in **`scopes.json`** (name, description, icon, the server modules that collect its data, and the settings asked at install). Installed scopes and their settings are saved in `~/.ai_scope/installed.json`.
 
 ## Processes scope

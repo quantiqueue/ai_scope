@@ -12,7 +12,7 @@ const stratastats = require('./stratastats');
 const lmapi = require('./lmapi');
 const procstats = require('./procstats');   // per-app process stats (AI_SCOPE-038 / 049)
 const proctop = require('./proctop');       // all processes, for the Processes scope (AI_SCOPE-023)
-const lenssettings = require('./lenssettings');   // cog settings of lenses on scope pages (AI_SCOPE-023)
+const scopelayouts = require('./scopelayouts');   // edited layouts of the scope pages (AI_SCOPE-020)
 const scopes = require('./scopes');
 const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
 hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
@@ -90,7 +90,7 @@ function pageHtml() {
   const html = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8');
   const js = v => JSON.stringify(v).replace(/</g, '\\u003c');
   return html.split('/*__SCOPES__*/[]').join(js(scopes.list())).split('/*__CUSTOM__*/[]').join(js(customscopes.list()))
-    .split('/*__LENSSET__*/{}').join(js(lenssettings.list())).split("/*__OS__*/''").join(js(process.platform));
+    .split('/*__LAYOUTS__*/{}').join(js(scopelayouts.list())).split("/*__OS__*/''").join(js(process.platform));
 }
 
 http.createServer((req, res) => {
@@ -134,12 +134,13 @@ http.createServer((req, res) => {
       sendJson(res, r.ok ? 200 : 400, r);
     });
   }
-  // Lens settings on scope pages (the lens cog, AI_SCOPE-023): list, set { slot, settings }.
-  if (url.pathname === '/api/lens-settings' && req.method === 'GET') return sendJson(res, 200, lenssettings.list());
-  if (url.pathname === '/api/lens-settings/set' && req.method === 'POST') {
+  // Scope page layouts (AI_SCOPE-020): list, save { scope, lenses }, reset { scope }. Answers carry the new list.
+  if (url.pathname === '/api/scope-layouts' && req.method === 'GET') return sendJson(res, 200, scopelayouts.list());
+  const lAction = /^\/api\/scope-layouts\/(save|reset)$/.exec(url.pathname);
+  if (lAction && req.method === 'POST') {
     return readJson(req, body => {
-      const r = body ? lenssettings.set(body) : { ok: false, error: 'Bad request' };
-      r.slots = lenssettings.list();
+      const r = !body ? { ok: false, error: 'Bad request' } : lAction[1] === 'save' ? scopelayouts.set(body, scopes.list().map(sc => sc.id)) : scopelayouts.reset(body);
+      r.layouts = scopelayouts.list();
       sendJson(res, r.ok ? 200 : 400, r);
     });
   }

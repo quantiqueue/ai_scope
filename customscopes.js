@@ -110,4 +110,4 @@ function remove(input) {
 function list() { return scopes; }
 
 load();
-module.exports = { list: list, create: create, update: update, remove: remove };
+module.exports = { list: list, create: create, update: update, remove: remove, cleanLenses: cleanLenses };
