@@ -80,18 +80,43 @@ function parseText(text, file, rows) {
   });
 }
 
+// ---------- Parsed files, cached (AI_SCOPE-057) ----------
+// Every /api/bionic call (each open view polls it every 2 s) used to read the log files again - newest first until 100
+// requests, often a whole 10 MB day, plus the newest file once more for the live card: ~10 MB per call, 5-23 MB/s of
+// disk reads on the test PC. Now each file is parsed once and again only when its size or modification time changes
+// (old days never; today's while Bionic writes). Kept per file: its request rows and the in-flight tasks at its end.
+const parsed = {};   // path -> { size, mtimeMs, rows, active, lastTs }
+function parseFile(file) {
+  let st;
+  try { st = fs.statSync(file); } catch (e) { delete parsed[file]; return null; }
+  const c = parsed[file];
+  if (c && c.size === st.size && c.mtimeMs === st.mtimeMs) return c;
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { return null; }
+  const rows = [];
+  parseText(text, file, rows);
+  const scan = scanActive(text);
+  return (parsed[file] = { size: st.size, mtimeMs: st.mtimeMs, rows: rows, active: scan.active });
+}
+function forgetGone(files) {
+  const keep = {};
+  files.forEach(function (f) { keep[f] = true; });
+  Object.keys(parsed).forEach(function (f) { if (!keep[f]) delete parsed[f]; });
+}
+
 // Returns the newest `limit` requests, newest first.
 function getLatestRequests(limit) {
   limit = limit || 100;
   const dir = findLogDir();
   if (!dir) return { logDir: null, rows: [], error: 'Bionic server log folder not found. Looked in: ' + CANDIDATE_DIRS.join(', ') };
   const files = listLogFiles(dir);
+  forgetGone(files);
   const rows = [];
-  // Read newest files first until we have enough rows.
+  // Newest files first until we have enough rows (each file parsed once, see parseFile).
   for (let i = files.length - 1; i >= 0 && rows.length < limit; i--) {
-    const fileRows = [];
-    try { parseText(fs.readFileSync(files[i], 'utf8'), files[i], fileRows); } catch (e) { continue; }
-    for (let j = fileRows.length - 1; j >= 0 && rows.length < limit; j--) rows.push(fileRows[j]);
+    const c = parseFile(files[i]);
+    if (!c) continue;
+    for (let j = c.rows.length - 1; j >= 0 && rows.length < limit; j--) rows.push(c.rows[j]);
   }
   return { logDir: dir, rows: rows };
 }
@@ -111,14 +136,8 @@ function tsToMs(ts) {
   return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : null;
 }
 
-function getCurrentRequest() {
-  const dir = findLogDir();
-  if (!dir) return null;
-  const files = listLogFiles(dir);
-  if (!files.length) return null;
-  let text;
-  try { text = fs.readFileSync(files[files.length - 1], 'utf8'); } catch (e) { return null; }
-
+// The tasks still in flight at the end of a log text: task id -> state.
+function scanActive(text) {
   const active = {}; // task id -> state
   let ts = null, model = null;
   text.split(/\r?\n/).forEach(function (line) {
@@ -145,6 +164,17 @@ function getCurrentRequest() {
     }
   });
 
+  return { active: active };
+}
+
+function getCurrentRequest() {
+  const dir = findLogDir();
+  if (!dir) return null;
+  const files = listLogFiles(dir);
+  if (!files.length) return null;
+  const c = parseFile(files[files.length - 1]);   // cached: read again only when the file changed
+  if (!c) return null;
+  const active = c.active;
   const now = Date.now();
   const running = Object.keys(active).map(function (k) { return active[k]; })
     .filter(function (a) { const t = tsToMs(a.last); return t != null && now - t < STALE_MS; })
