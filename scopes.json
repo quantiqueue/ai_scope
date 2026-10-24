@@ -11,6 +11,15 @@
       "settings": []
     },
     {
+      "id": "processes",
+      "name": "Processes",
+      "desc": "Top processes by VRAM, GPU, CPU and RAM (Windows)",
+      "builtin": true,
+      "modules": [],
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 6h13M8 12h13M8 18h13\"/><path d=\"M3 6h.01M3 12h.01M3 18h.01\"/></svg>",
+      "settings": []
+    },
+    {
       "id": "bionic",
       "name": "Bionic",
       "desc": "Loaded and installed models, plus token performance for recent requests",

@@ -46,6 +46,9 @@
     "stratastats.js",
     "procstats.js",
     "procstats.ps1",
+    "proctop.js",
+    "proctop.ps1",
+    "lenssettings.js",
     "logos.js",
     "README.md",
     "LICENSE"

@@ -8,26 +8,36 @@
 // ---------- Sources: one poll per endpoint, shared by every subscriber ----------
 // A scope usually has one source named like the scope ('strata'); a scope with several endpoints names the
 // others 'scope.part' (e.g. 'bionic.models'). Polling stops while the scope is not installed.
-const SOURCES = {};   // source id -> { id, scope, url, every, subs, data, error, busy, timer, kick }
-function defineSource(id, url, scope, every) {
-  SOURCES[id] = { id, scope: scope || id, url, every: every || 2000, subs: new Set(), data: null, error: null };
+const SOURCES = {};   // source id -> { id, scope, url, every, visibleOnly, subs, els, data, error, busy, timer, kick }
+// visibleOnly: poll only while one of its lenses is on screen (a shown tab, window not minimized) - for endpoints that
+// cost something to keep fresh, e.g. the Processes scope (the server samples all processes only while it's asked).
+function defineSource(id, url, scope, every, visibleOnly) {
+  SOURCES[id] = { id, scope: scope || id, url, every: every || 2000, visibleOnly: !!visibleOnly, subs: new Set(), els: new Map(), data: null, error: null };
+}
+function sourceSeen(src) {
+  if (!src.visibleOnly) return true;
+  if (document.hidden) return false;
+  for (const el of src.els.values()) if (el && el.isConnected && el.offsetParent !== null) return true;
+  return false;
 }
 async function pollSource(src) {
-  if (src.busy || !src.subs.size || !isInstalled(src.scope)) return;
+  if (src.busy || !src.subs.size || !isInstalled(src.scope) || !sourceSeen(src)) return;
   src.busy = true;
   try { src.data = await (await fetch(src.url, { cache:'no-store' })).json(); src.error = null; }
   catch (e) { src.error = e; }
   src.busy = false;
   src.subs.forEach(fn => fn(src.data, src.error));
 }
-// fn(data, error) runs after every poll. Returns an unsubscribe function.
-function subscribeSource(id, fn) {
+// fn(data, error) runs after every poll. el (optional): the lens element, for visibleOnly sources. Returns an unsubscribe function.
+function subscribeSource(id, fn, el) {
   const src = SOURCES[id];
   src.subs.add(fn);
+  src.els.set(fn, el || null);
   if (!src.timer) src.timer = setInterval(() => pollSource(src), src.every);
   if (!src.kick) src.kick = setTimeout(() => { src.kick = null; pollSource(src); }, 0);   // first poll right away (once for a batch of subscribers)
   return () => {
     src.subs.delete(fn);
+    src.els.delete(fn);
     if (!src.subs.size) { clearInterval(src.timer); src.timer = null; }
   };
 }
@@ -35,16 +45,41 @@ function subscribeSource(id, fn) {
 // ---------- Lens definitions ----------
 // def: { id ('strata.requests'), scope, source (default: the scope's own), name, description,
 //        size ('tile' | 'wide' | 'full', or a function of the settings),
-//        settings (optional schema: [{ id, label, type, default, options }] — values per lens copy, e.g. which GPU),
+//        settings (optional schema: [{ id, label, type, default, options, when }] — values per lens copy, e.g. which GPU;
+//                  when() = false hides the field, e.g. a Windows-only option elsewhere),
 //        markup (HTML string, or a function of the settings; parts marked data-k="..."),
 //        init(lens) (optional, once after mounting), render(lens, data) (every poll with fresh data) }
 const LENSES = {};
 function defineLens(def) { LENSES[def.id] = def; }
 function lensesOf(scope) { return Object.values(LENSES).filter(d => d.scope === scope); }
 
+// A tab switch or the window coming back: poll the visibleOnly sources right away instead of at their next tick.
+function kickVisibleSources() {
+  Object.values(SOURCES).forEach(src => { if (src.visibleOnly && src.subs.size) setTimeout(() => pollSource(src), 0); });
+}
+window.addEventListener('hashchange', kickVisibleSources);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) kickVisibleSources(); });
+
 // ---------- Lens instances ----------
+// Lens settings cog (AI_SCOPE-023; the pattern for all lens settings, AI_SCOPE-020): top-right INSIDE the lens's card
+// panel (the box under the header tab), so things on the header line (e.g. the GPU tile's temperature) keep their place.
+// With several panels (GPU + VRAM side by side) it goes on the last one, the lens's top-right corner.
+const GEAR_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+function addLensCog(lens, onGear) {
+  const panels = lens.el.querySelectorAll('.lhead + .card, .lhead + .tile');
+  const panel = panels[panels.length - 1];
+  if (!panel) return;
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'lcog'; b.title = 'Lens settings'; b.setAttribute('aria-label', 'Lens settings');
+  b.innerHTML = GEAR_ICON;
+  b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); onGear(lens); });
+  panel.classList.add('haslcog');
+  panel.appendChild(b);
+}
+
 let lensSeq = 0;
-function mountLens(id, container, settings) {
+// opts.onGear(lens): show the settings cog (lenses with settings only) and what clicking it does.
+function mountLens(id, container, settings, opts) {
   const def = LENSES[id];
   if (!def) return null;
   // settings: the lens's own values over the defaults of its settings schema
@@ -63,8 +98,9 @@ function mountLens(id, container, settings) {
   };
   lens.redraw = () => { if (lens.data) def.render(lens, lens.data); };
   pagerReload[lens.key] = lens.redraw;
+  if (opts && opts.onGear && def.settings && def.settings.some(f => !f.when || f.when())) addLensCog(lens, opts.onGear);
   if (def.init) def.init(lens);
-  lens.unsub = subscribeSource(def.source || def.scope, (d, err) => { if (d && !err) { lens.data = d; def.render(lens, d); } });
+  lens.unsub = subscribeSource(def.source || def.scope, (d, err) => { if (d && !err) { lens.data = d; def.render(lens, d); } }, el);
   return lens;
 }
 function unmountLens(lens) {

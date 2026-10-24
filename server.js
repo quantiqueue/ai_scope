@@ -11,6 +11,8 @@ const ollamastats = require('./ollamastats');
 const stratastats = require('./stratastats');
 const lmapi = require('./lmapi');
 const procstats = require('./procstats');   // per-app process stats (AI_SCOPE-038 / 049)
+const proctop = require('./proctop');       // all processes, for the Processes scope (AI_SCOPE-023)
+const lenssettings = require('./lenssettings');   // cog settings of lenses on scope pages (AI_SCOPE-023)
 const scopes = require('./scopes');
 const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
 hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
@@ -59,6 +61,9 @@ function lmPeak(r) {
 }
 const SCOPE_ROUTES = [['/api/bionic', 'bionic'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata']];
 const PKG_VERSION = require('./package.json').version;
+// App scopes whose processes procstats watches (key = scope id), for the Processes scope's AI processes lens.
+const AI_APPS = [{ id: 'bionic', name: 'Bionic', modelOnly: true }, { id: 'ollama', name: 'Ollama', modelOnly: true },
+                 { id: 'comfyui', name: 'ComfyUI' }, { id: 'strata', name: 'Strata', modelOnly: true }];
 function isLocal(req) {
   const a = (req.socket && req.socket.remoteAddress) || '';
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
@@ -84,7 +89,8 @@ function readJson(req, cb) {
 function pageHtml() {
   const html = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8');
   const js = v => JSON.stringify(v).replace(/</g, '\\u003c');
-  return html.split('/*__SCOPES__*/[]').join(js(scopes.list())).split('/*__CUSTOM__*/[]').join(js(customscopes.list()));
+  return html.split('/*__SCOPES__*/[]').join(js(scopes.list())).split('/*__CUSTOM__*/[]').join(js(customscopes.list()))
+    .split('/*__LENSSET__*/{}').join(js(lenssettings.list())).split("/*__OS__*/''").join(js(process.platform));
 }
 
 http.createServer((req, res) => {
@@ -127,6 +133,29 @@ http.createServer((req, res) => {
       r.custom = customscopes.list();
       sendJson(res, r.ok ? 200 : 400, r);
     });
+  }
+  // Lens settings on scope pages (the lens cog, AI_SCOPE-023): list, set { slot, settings }.
+  if (url.pathname === '/api/lens-settings' && req.method === 'GET') return sendJson(res, 200, lenssettings.list());
+  if (url.pathname === '/api/lens-settings/set' && req.method === 'POST') {
+    return readJson(req, body => {
+      const r = body ? lenssettings.set(body) : { ok: false, error: 'Bad request' };
+      r.slots = lenssettings.list();
+      sendJson(res, r.ok ? 200 : 400, r);
+    });
+  }
+  // Every process (Processes scope, built in; Windows only for now). Polling it keeps the sampler running.
+  if (url.pathname === '/api/processes') {
+    const body = proctop.get();
+    // AI processes lens (AI_SCOPE-023): each installed AI app scope with its own process(es), as matched for its
+    // Current request card (procstats, AI_SCOPE-038/049-051). Bionic / Ollama count the model process only.
+    body.apps = AI_APPS.filter(a => scopes.isInstalled(a.id)).map(a => ({ id: a.id, name: a.name, modelOnly: a.modelOnly, process: procstats.get(a.id) }));
+    return sendJson(res, 200, body);
+  }
+  if (url.pathname.indexOf('/api/process-icon/') === 0) {   // exe icon for the Processes lenses
+    const png = proctop.icon(url.pathname.slice('/api/process-icon/'.length));
+    if (!png) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no icon'); }
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'max-age=86400' });
+    return res.end(png);
   }
   const owner = SCOPE_ROUTES.filter(r => url.pathname.indexOf(r[0]) === 0)[0];
   if (owner && !scopes.isInstalled(owner[1])) return sendJson(res, 404, { error: 'Scope not installed: ' + owner[1] });

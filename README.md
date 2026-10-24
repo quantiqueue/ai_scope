@@ -33,6 +33,7 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 | Scope | What it shows |
 |---|---|
 | **Hardware** (built in) | CPU, RAM, and a GPU + VRAM tile per graphics card, with 5-minute sparklines; GPU temperature and power draw on NVIDIA cards |
+| **Processes** (built in, Windows) | Your AI apps' own VRAM, GPU, CPU and RAM (AI processes), and the top 5 processes by CPU, RAM, and per graphics card GPU, VRAM and shared GPU memory, each with a 5-minute line per process |
 | **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit |
 | **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit |
 | **ComfyUI** | Current job (step progress, speed, time left), run history with thumbnails, installed models (filter by type) |

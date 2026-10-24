@@ -1,11 +1,11 @@
 // AI_SCOPE dashboard - custom scopes (AI_SCOPE-003): user-named pages built from lenses of the app scopes and Hardware.
-// Edit mode (pencil): add lenses (Add lens dialog), drag to reorder, remove, change lens settings (gear); save or cancel.
+// Edit mode (pencil): add lenses (Add lens dialog), drag to reorder, remove; save or cancel. Lens settings: the cog inside
+// each lens (AI_SCOPE-023) - in edit mode it changes the draft, otherwise it saves right away.
 // Unsaved edits stay while switching tabs (kept in memory, lost on reload). Loaded last: uses shell.js (tabs, dialogs).
 
 const ICON = {
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>',
-  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
 };
 const CS = {};   // custom scope id -> { panel, editing, draft, savedJson, mounted: [lens instances] }
 const clone = v => JSON.parse(JSON.stringify(v));
@@ -100,7 +100,6 @@ function renderCustom(id) {
     f.dataset.i = i;
     if (st.editing) {
       f.innerHTML = '<div class="ltools"><span class="lgrip" title="Drag to reorder">&#8942;&#8942;</span><span class="lname">' + escH(lensLabel(item)) + '</span>' +
-        (def && def.settings ? '<button type="button" class="lbtn" data-lgear="' + i + '" title="Lens settings">' + ICON.gear + '</button>' : '') +
         '<button type="button" class="lbtn" data-lremove="' + i + '" title="Remove lens">&times;</button></div>' +
         '<button type="button" class="lplus left" data-add="' + i + '" data-left title="Add a lens to the left">+</button>' +
         '<button type="button" class="lplus right" data-add="' + (i + 1) + '" title="Add a lens to the right">+</button>';
@@ -112,7 +111,7 @@ function renderCustom(id) {
     if (!def) body.innerHTML = '<div class="card hintbox">This lens (' + escH(item.lens) + ') is no longer available.</div>';
     else if (!isInstalled(def.scope)) body.innerHTML = '<div class="card hintbox"><b>' + escH(scopeName(sid)) + ' &middot; ' + escH(def.name) + '</b><br>' +
       escH(scopeName(sid)) + ' isn&#39;t installed. Install it on the Scopes page (<b>+</b>) to see this lens again.</div>';
-    else { st.mounted.push(mountLens(item.lens, body, item.settings)); scopeTag(body, sid); }
+    else { st.mounted.push(mountLens(item.lens, body, item.settings, { onGear: () => customGear(id, i) })); scopeTag(body, sid); }
   });
 }
 // After the list changes (load, poll, create, rename, save, remove): add/update/remove pages.
@@ -138,13 +137,12 @@ function onPanelClick(id, e) {
   const st = CS[id], cs = customById(id);
   const chip = e.target.closest('[data-open-scope]');
   if (chip) { e.preventDefault(); openScope(chip.dataset.openScope); return; }   // the scope chip: open that scope's tab
-  const b = e.target.closest('[data-cs-edit],[data-cs-save],[data-cs-cancel],[data-add],[data-lgear],[data-lremove]');
+  const b = e.target.closest('[data-cs-edit],[data-cs-save],[data-cs-cancel],[data-add],[data-lremove]');
   if (!b || !cs) return;
   if (b.hasAttribute('data-cs-edit')) { st.editing = true; st.draft = clone(cs.lenses); renderCustom(id); }
   else if (b.hasAttribute('data-cs-cancel')) { st.editing = false; st.draft = null; renderCustom(id); }
   else if (b.hasAttribute('data-cs-save')) saveCustom(id, b);
   else if (b.dataset.add != null) { lensDlg.dataset.left = b.hasAttribute('data-left') ? '1' : ''; openAddLens(id, +b.dataset.add); }
-  else if (b.dataset.lgear) openLensSettings(id, st.draft[+b.dataset.lgear].lens, +b.dataset.lgear);
   else if (b.dataset.lremove) { st.draft.splice(+b.dataset.lremove, 1); renderCustom(id); }
 }
 async function saveCustom(id, btn) {
@@ -320,10 +318,29 @@ lensForm.addEventListener('click', e => {
   if (def.settings) openLensSettings(id, def.id, null);
   else addLens(id, { lens: def.id, settings: {} });
 });
-// Settings step: when adding a lens that has settings (index null), or from its gear in edit mode.
-function openLensSettings(id, lensId, index) {
-  const def = LENSES[lensId], st = CS[id];
-  const cur = lensSettings(def, index == null ? {} : st.draft[index].settings);
+// The lens cog on a custom scope: in edit mode it changes the draft (saved with the page); otherwise it saves at once.
+function customGear(id, i) {
+  const st = CS[id], cs = customById(id);
+  if (!st || !cs) return;
+  if (st.editing) { openLensSettings(id, st.draft[i].lens, i); return; }
+  const item = cs.lenses[i], def = item && LENSES[item.lens];
+  if (!def) return;
+  openLensSettingsFor(def, lensSettings(def, item.settings), async vals => {
+    const lenses = clone(cs.lenses);
+    lenses[i].settings = vals;
+    let r;
+    try {
+      r = await (await fetch('/api/custom-scopes/update', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id, lenses: lenses }) })).json();
+    } catch (e) { r = { ok: false, error: 'Could not reach AI_SCOPE: ' + e.message }; }
+    const m = st.panel.querySelector('.meta');
+    if (!r.ok) { m.textContent = 'Not saved: ' + (r.error || 'failed'); m.classList.add('bad'); return; }
+    m.classList.remove('bad');
+    applyCustom(r.custom);
+  });
+}
+// Settings form fields for a lens (schema: def.settings) with the current values.
+function lensFieldsHtml(def, cur) {
   const field = f => {
     let opts = f.options;
     if (f.type === 'gpu') {
@@ -339,16 +356,39 @@ function openLensSettings(id, lensId, index) {
         : '<input id="lf-' + f.id + '" name="' + f.id + '" data-type="' + f.type + '" type="' + (f.type === 'number' ? 'number' : 'text') + '" value="' + escH(val) + '">') +
       '</div>';
   };
-  lensForm.innerHTML = '<h2>' + CUSTOM_ICON + '<span>' + escH(scopeName(def.scope) + ' · ' + def.name) + '</span></h2>' +
-    '<p class="lead">' + escH(def.description) + '</p>' + def.settings.map(field).join('') +
+  return lensFields(def).map(field).join('');
+}
+// Fields that apply here: a field with when() shows only when it returns true (e.g. only on Windows, AI_SCOPE-023).
+function lensFields(def) { return def.settings.filter(f => !f.when || f.when()); }
+// Values from the form; fields not shown keep their current value (cur).
+function lensFieldsRead(def, cur) {
+  const vals = {};
+  def.settings.forEach(f => { if (cur && f.id in cur) vals[f.id] = cur[f.id]; });
+  lensFields(def).forEach(f => {
+    const v = lensForm.querySelector('[name="' + f.id + '"]').value;
+    vals[f.id] = f.type === 'gpu' || f.type === 'number' ? parseInt(v, 10) || 0 : v;
+  });
+  return vals;
+}
+const lensDlgHead = def => '<h2>' + GEAR_ICON + '<span>' + escH(scopeName(def.scope) + ' · ' + def.name) + '</span></h2>' +
+  '<p class="lead">' + escH(def.description) + '</p>';
+// The lens cog anywhere (scope pages, custom scopes outside edit mode): edit the settings, then onSave(values).
+function openLensSettingsFor(def, cur, onSave) {
+  lensForm.innerHTML = lensDlgHead(def) + lensFieldsHtml(def, cur) +
+    '<div class="actions"><button type="button" class="btn" data-lcancel>Cancel</button><button type="submit" class="btn primary">Save</button></div>';
+  lensSubmit = () => { const vals = lensFieldsRead(def, cur); lensDlg.close(); onSave(vals); };
+  if (!lensDlg.open) lensDlg.showModal();
+  lensForm.querySelector('[type=submit]').focus();
+}
+// Settings step: when adding a lens that has settings (index null), or from its cog in edit mode.
+function openLensSettings(id, lensId, index) {
+  const def = LENSES[lensId], st = CS[id];
+  const cur = lensSettings(def, index == null ? {} : st.draft[index].settings);
+  lensForm.innerHTML = lensDlgHead(def) + lensFieldsHtml(def, cur) +
     '<div class="actions">' + (index == null ? '<button type="button" class="btn" data-lback="' + id + '">Back</button>' : '<button type="button" class="btn" data-lcancel>Cancel</button>') +
     '<button type="submit" class="btn primary">' + (index == null ? 'Add lens' : 'Save') + '</button></div>';
   lensSubmit = () => {
-    const vals = {};
-    def.settings.forEach(f => {
-      const v = lensForm.querySelector('[name="' + f.id + '"]').value;
-      vals[f.id] = f.type === 'gpu' || f.type === 'number' ? parseInt(v, 10) || 0 : v;
-    });
+    const vals = lensFieldsRead(def, cur);
     if (index == null) addLens(id, { lens: def.id, settings: vals });
     else { st.draft[index].settings = vals; lensDlg.close(); renderCustom(id); }
   };

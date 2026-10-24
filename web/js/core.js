@@ -12,6 +12,19 @@ let CUSTOM = window.AI_SCOPE_CUSTOM || [];   // [{ id: 'c-...', name, lenses: [{
 const CUSTOM_HOOKS = [];                     // called after the list changes (custom.js rebuilds the pages)
 function customById(id) { return CUSTOM.find(x => x.id === id); }
 function setCustom(list) { CUSTOM = list || []; CUSTOM_HOOKS.forEach(f => f()); }
+// Lens cog settings on scope pages (AI_SCOPE-023): { "<page>.<slot>": { ...values } }, saved by the server (lens-settings.json).
+let LENS_SET = window.AI_SCOPE_LENSSET || {};
+// The server's system ('win32', 'linux', 'darwin'), for options that only apply on one system.
+const SERVER_OS = window.AI_SCOPE_OS || '';
+async function saveLensSet(slot, settings) {
+  let r;
+  try {
+    r = await (await fetch('/api/lens-settings/set', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slot: slot, settings: settings }) })).json();
+  } catch (e) { r = { ok: false, error: 'Could not reach AI_SCOPE: ' + e.message }; }
+  if (r.slots) LENS_SET = r.slots;
+  return r;
+}
 // A tab can show an installed scope or a custom scope.
 function canOpen(id) { return isInstalled(id) || !!customById(id); }
 
