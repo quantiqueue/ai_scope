@@ -13,5 +13,9 @@ used only to show which app a scope watches.
 | `comfyui.png` | ComfyUI (Comfy Desktop) | `%LOCALAPPDATA%\Programs\Comfy Desktop\resources\app.asar` → `assets/Comfy_Logo_x256.png` |
 | `strata-light.svg` | Strata (for light backgrounds) | `%LOCALAPPDATA%\Programs\Strata\host\dist\brand\strata-mark-light.svg` (metadata block removed) |
 | `strata-dark.svg` | Strata (for dark backgrounds) | `%LOCALAPPDATA%\Programs\Strata\host\dist\brand\strata-mark-dark.svg` (metadata block removed) |
+| `llamacpp-light.svg` | llama.cpp (for light backgrounds) | the web UI icon served by `llama serve` (`/favicon.svg`, build b11706; copied 2026-10-24) |
+| `llamacpp-dark.svg` | llama.cpp (for dark backgrounds) | the same file with its fill `#111111` changed to `#E8E8E8` (the server ships only the dark mark) |
+
+llama.cpp has no install folder to read: its scope fetches the icon from the running server instead (`llamacppstats.js`).
 
 To refresh them, extract the logos the same way `logos.js` does and replace the files.

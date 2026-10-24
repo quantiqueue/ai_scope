@@ -25,3 +25,4 @@ The terminal settings apply to that window only. The same help, with **Copy** bu
 | ComfyUI | URL (empty = try `:8188`, then `:8000`) |
 | Ollama | URL (default `http://127.0.0.1:11434`), relay port (default `11435`) |
 | Strata | Strata app URL (empty = `http://127.0.0.1:47831`, shown in Strata under *Connect Strata to an app*) |
+| llama.cpp | Server URL (empty = try `:9931` for `llama serve`, then `:8080` for `llama-server`) |

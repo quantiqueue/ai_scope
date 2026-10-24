@@ -9,6 +9,7 @@ const logos = require('./logos');
 const comfystats = require('./comfystats');
 const ollamastats = require('./ollamastats');
 const stratastats = require('./stratastats');
+const llamacppstats = require('./llamacppstats');   // llama.cpp server (AI_SCOPE-006)
 const lmapi = require('./lmapi');
 const procstats = require('./procstats');   // per-app process stats (AI_SCOPE-038 / 049)
 const proctop = require('./proctop');       // all processes, for the Processes scope (AI_SCOPE-023)
@@ -59,11 +60,12 @@ function lmPeak(r) {
   }
   return p;
 }
-const SCOPE_ROUTES = [['/api/bionic', 'bionic'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata']];
+const SCOPE_ROUTES = [['/api/bionic', 'bionic'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata'], ['/api/llamacpp', 'llamacpp']];
 const PKG_VERSION = require('./package.json').version;
 // App scopes whose processes procstats watches (key = scope id), for the Processes scope's AI processes lens.
 const AI_APPS = [{ id: 'bionic', name: 'Bionic', modelOnly: true }, { id: 'ollama', name: 'Ollama', modelOnly: true },
-                 { id: 'comfyui', name: 'ComfyUI' }, { id: 'strata', name: 'Strata', modelOnly: true }];
+                 { id: 'comfyui', name: 'ComfyUI' }, { id: 'strata', name: 'Strata', modelOnly: true },
+                 { id: 'llamacpp', name: 'llama.cpp', modelOnly: true }];
 function isLocal(req) {
   const a = (req.socket && req.socket.remoteAddress) || '';
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
@@ -204,6 +206,11 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(stratastats.getState(limit)));
   }
+  if (url.pathname === '/api/llamacpp') {
+    const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(llamacppstats.getState(limit)));
+  }
   if (url.pathname === '/api/bionic/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(lmapi.getState(hwstats.vramInfo())));
@@ -215,6 +222,13 @@ http.createServer((req, res) => {
   if (url.pathname === '/api/logo/strata') {   // Strata's mark (SVG): its install folder, else the running app, else our copy
     const theme = url.searchParams.get('theme');
     const svg = logos.getSvg('strata', theme) || stratastats.getLogo(theme) || logos.fallbackSvg('strata', theme);
+    if (!svg) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no logo'); }
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=3600' });
+    return res.end(svg);
+  }
+  if (url.pathname === '/api/logo/llamacpp') {   // llama.cpp's mark (SVG): the running server's web UI icon, else our copy
+    const theme = url.searchParams.get('theme');
+    const svg = llamacppstats.getLogo(theme) || logos.fallbackSvg('llamacpp', theme);
     if (!svg) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no logo'); }
     res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=3600' });
     return res.end(svg);

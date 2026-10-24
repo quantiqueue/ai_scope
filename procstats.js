@@ -43,14 +43,15 @@ function handleBlock(lines) {
       r.pids.push({ pid: pid, name: p[3] });
       if (p[4] === '') r.ramUnknown = true;   // the process refused OpenProcess: GPU numbers only
       r.ram += +p[4] || 0; r.ramPrivate += +p[5] || 0;
-      const prev = lastCpu[pid];
+      const ck = p[1] + ':' + pid;   // per key: one process can be watched under two keys (llama.cpp router + its model)
+      const prev = lastCpu[ck];
       if (cpu != null) {
         if (prev && now > prev.t) {
           // CPU time used since the last sample, as % of the whole CPU (all cores), like Task Manager
           const pct = 100 * ((cpu - prev.cpu) / 10000) / (now - prev.t) / (os.cpus().length || 1);
           r.cpu = (r.cpu || 0) + Math.max(0, pct);
         }
-        lastCpu[pid] = { t: now, cpu: cpu };
+        lastCpu[ck] = { t: now, cpu: cpu };
       }
     } else if (p[0] === 'G' && p.length >= 7) {
       const luid = p[3].toLowerCase();
