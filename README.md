@@ -2,7 +2,7 @@
 
 <h3 align="center">Monitor your on-prem AI environment with scopes</h3>
 
-<p align="center">Ollama · ComfyUI · llama.cpp · LM Studio's Bionic · Strata · Windows, macOS, Linux · free and open source</p>
+<p align="center">Ollama · llama.cpp · Strata and more · Windows, macOS, Linux · free and open source</p>
 
 <p align="center">
   <a href="https://github.com/quantiqueue/ai_scope/releases/latest"><img src="https://img.shields.io/github/v/release/quantiqueue/ai_scope?label=release&color=orange" alt="Release"></a>
@@ -14,6 +14,13 @@
 <p align="center"><img src="docs/demo-scope.gif" alt="AI_SCOPE monitoring ComfyUI and llama.cpp" width="100%"></p>
 
 <p align="center"><sub>AI_SCOPE monitoring ComfyUI and llama.cpp</sub></p>
+
+AI_SCOPE is a dashboard for the AI apps on your own PC. It shows what your local AI engines are doing right now: tokens per second, image steps, which model is loaded, and how much of your GPU and VRAM it takes. It also keeps a history of every request and run. It runs in your browser, and your data stays on your PC.
+
+- **Live and after the fact.** While something runs you see its speed, tokens and progress. Afterwards, every request and run is in a table with its speed and peak load.
+- **Each app's own hardware use.** GPU %, VRAM per graphics card, CPU and RAM for the app's own process, next to whole-PC **Hardware** and **Processes** scopes.
+- **Your own views.** Custom scopes put lenses from any app side by side, and every page can be rearranged.
+- **Light and private.** One install line, no admin rights, no account, no cloud, no telemetry. Settings and history are plain JSON files in `~/.ai_scope` ([where the data comes from](manual/DATA_SOURCE.md)).
 
 ## Install
 
