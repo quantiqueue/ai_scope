@@ -41,7 +41,9 @@ function ollamaHelpHtml(d) {
     '<li><b>Mac / Linux terminal</b>: <code>export OLLAMA_HOST=127.0.0.1:' + px.port + '</code>' + copyBtn('export OLLAMA_HOST=127.0.0.1:' + px.port) + ' then <code>ollama run qwen3.5:4b</code> (applies to that window only; add the line to <code>~/.zshrc</code> or <code>~/.bashrc</code> to make it permanent)</li>' +
     '<li><b>VS Code</b> (Continue, Cline, Copilot, …): in the extension&#39;s Ollama settings, change the address / API base from <code>http://localhost:11434</code> to <code>' + proxyUrl + '</code>' + copyBtn(proxyUrl) + '</li>' +
     '<li><b>Other apps and scripts</b>: set the Ollama URL to <code>' + proxyUrl + '</code>' + copyBtn(proxyUrl) + ', or <code>' + proxyUrl + '/v1</code>' + copyBtn(proxyUrl + '/v1') + ' for OpenAI-style clients (prompt speed and load time aren&#39;t available for those)</li>' +
-    '</ul>');
+    '</ul>' +
+    '<p>More (making it permanent, checking it works, troubleshooting): ' +
+    extLink('Configuring Ollama', 'https://github.com/quantiqueue/ai_scope/blob/main/manual/CONFIGURING_OLLAMA.md', 'The relay guide in the AI_SCOPE manual on GitHub') + '</p>');
 }
 
 // ---------- Current request ----------

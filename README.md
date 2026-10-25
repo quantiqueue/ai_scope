@@ -26,7 +26,7 @@ That's it: no admin rights, nothing to install first. The installer downloads th
 
 ## Scopes and lenses
 
-Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Strata's *Current request*, Ollama's *Requests*, a *GPU* tile). Every lens has a header tab with its title. See [How to scope](manual/HOW_TO_SCOPE.md) for using scopes, editing pages and lens settings, and building your own custom scopes, and [Configuring scopes](manual/CONFIGURING_SCOPES.md) for scope settings and Ollama request stats. Everything else is in the [manual](manual/README.md).
+Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Strata's *Current request*, Ollama's *Requests*, a *GPU* tile). Every lens has a header tab with its title. See [How to scope](manual/HOW_TO_SCOPE.md) for using scopes, editing pages and lens settings, and building your own custom scopes, [Configuring scopes](manual/CONFIGURING_SCOPES.md) for scope settings, and [Configuring Ollama](manual/CONFIGURING_OLLAMA.md) for Ollama request stats. Everything else is in the [manual](manual/README.md).
 
 ### Supported scopes
 
@@ -46,7 +46,7 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 - **Page doesn't load from another device**: start with `--host 0.0.0.0`, and allow the port through the firewall (on Windows, allow Node.js when the firewall asks, or add an inbound rule for TCP 9000).
 - **"Port 9000 is already in use"**: AI_SCOPE (or something else) is already running there. Close it (`ai_scope --stop` if it runs in the background), or use `--port 9100`.
 - **A scope says offline**: start that app (for Bionic, also start its local server on the Local Server screen; for Strata, the Strata desktop app; for llama.cpp, `llama serve -m <model.gguf>` or `llama-server`).
-- **No Ollama requests listed**: the app isn't using the relay on port 11435 (see [Configuring scopes](manual/CONFIGURING_SCOPES.md#ollama-request-stats-relay-on-port-11435)). In PowerShell, `set` doesn't work; use `$env:OLLAMA_HOST=...`.
+- **No Ollama requests listed**: the app isn't using the relay on port 11435 (see [Configuring Ollama](manual/CONFIGURING_OLLAMA.md)). In PowerShell, `set` doesn't work; use `$env:OLLAMA_HOST=...`.
 - **No GPU temperature or power**: only NVIDIA cards report them.
 - **Can't rename or move the AI_SCOPE folder**: stop AI_SCOPE first (`ai_scope --stop`, or close its console window / end *Node.js* in Task Manager).
 
