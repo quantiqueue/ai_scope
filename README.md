@@ -1,12 +1,19 @@
-![AI_SCOPE - Local AI monitor](docs/logo.svg)
+<p align="center"><img src="docs/logo.svg" alt="AI_SCOPE - Local AI monitor" width="100%"></p>
 
-[![Release](https://img.shields.io/github/v/release/quantiqueue/ai_scope)](https://github.com/quantiqueue/ai_scope/releases/latest) [![CI](https://github.com/quantiqueue/ai_scope/actions/workflows/ci.yml/badge.svg)](https://github.com/quantiqueue/ai_scope/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+<h3 align="center">Monitor your on-prem AI environment with scopes</h3>
 
-A locally-run orchestration kit for monitoring your on-prem AI environment with scopes.
+<p align="center">Ollama · ComfyUI · llama.cpp · LM Studio's Bionic · Strata · Windows, macOS, Linux · free and open source</p>
 
-![AI_SCOPE monitoring ComfyUI and llama.cpp](docs/demo-scope.gif)
+<p align="center">
+  <a href="https://github.com/quantiqueue/ai_scope/releases/latest"><img src="https://img.shields.io/github/v/release/quantiqueue/ai_scope?label=release&color=orange" alt="Release"></a>
+  <a href="https://github.com/quantiqueue/ai_scope/actions/workflows/ci.yml"><img src="https://github.com/quantiqueue/ai_scope/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
+  <a href="https://buymeacoffee.com/quantiqueue"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-ffdd00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"></a>
+</p>
 
-<p align="center"><em>AI_SCOPE monitoring ComfyUI and llama.cpp</em></p>
+<p align="center"><img src="docs/demo-scope.gif" alt="AI_SCOPE monitoring ComfyUI and llama.cpp" width="100%"></p>
+
+<p align="center"><sub>AI_SCOPE monitoring ComfyUI and llama.cpp</sub></p>
 
 ## Install
 
