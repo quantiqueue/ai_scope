@@ -4,9 +4,9 @@
 
 A locally-run orchestration kit for monitoring your on-prem AI environment with scopes.
 
-![AI_SCOPE running a custom scope for ComfyUI and Strata](docs/screenshot-custom-scope.png)
+![AI_SCOPE monitoring ComfyUI and llama.cpp](docs/demo-scope.gif)
 
-<p align="center"><em>AI_SCOPE Running a custom scope for ComfyUI and Strata</em></p>
+<p align="center"><em>AI_SCOPE monitoring ComfyUI and llama.cpp</em></p>
 
 ## Install
 
