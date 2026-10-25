@@ -24,7 +24,7 @@
     "url": "https://github.com/quantiqueue/ai_scope/issues"
   },
   "license": "MIT",
-  "author": "ferr",
+  "author": "quantiqueue",
   "main": "server.js",
   "bin": {
     "ai_scope": "bin/ai_scope.js"
