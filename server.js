@@ -17,6 +17,7 @@ const scopelayouts = require('./scopelayouts');   // edited layouts of the scope
 const scopes = require('./scopes');
 const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
 hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
+proctop.start();   // Processes is built in: its sampler stays warm (slow while nobody looks), AI_SCOPE-059
 scopes.init();      // starts the modules of every installed scope (scopes.json + data/installed.json)
 
 // Port/host come from the command line (bin/ai_scope.js sets these) or the environment.
@@ -168,7 +169,9 @@ http.createServer((req, res) => {
       sendJson(res, r.ok ? 200 : 400, r);
     });
   }
-  // Every process (Processes scope, built in; Windows only for now). Polling it keeps the sampler running.
+  // The last 5 minutes of samples, for the Processes lenses' lines (AI_SCOPE-059)
+  if (url.pathname === '/api/processes/history') return sendJson(res, 200, proctop.history());
+  // Every process (Processes scope, built in; Windows only for now). Polling it puts the sampler on its fast pace.
   if (url.pathname === '/api/processes') {
     const body = proctop.get();
     // AI processes lens (AI_SCOPE-023): each installed AI app scope with its own process(es), as matched for its

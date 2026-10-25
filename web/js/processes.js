@@ -1,7 +1,7 @@
 // AI_SCOPE dashboard - Processes scope (AI_SCOPE-023, built in): the top 5 processes by VRAM, GPU, CPU and RAM, one lens
 // each. Lens settings (cog): per app (same program added together) or per process; VRAM / GPU: which graphics card.
-// Data: /api/processes (proctop.js; Windows only for now). The server samples all processes only while it's asked,
-// so the source polls only while one of its lenses is on screen.
+// Data: /api/processes (proctop.js; Windows only for now). The server's sampler is always warm but samples slowly
+// while nobody asks, so the source polls only while one of its lenses is on screen (that puts it on its fast pace).
 
 defineSource('processes', '/api/processes', 'processes', 2500, true);
 
@@ -10,6 +10,7 @@ const TOP_N = 5;
 const pctText = v => (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + '%';
 const gb2 = b => { const g = b / 1073741824; return (g >= 1 ? g.toFixed(1) : g.toFixed(2)) + 'GB'; };
 const rate2 = b => b >= 1e9 ? (b / 1e9).toFixed(1) + 'GB/s' : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + 'MB/s' : b >= 1e3 ? Math.round(b / 1e3) + 'KB/s' : '0';
+// rate: needs two samples (CPU %, GPU %, I/O), so it isn't in the sampler's first block (AI_SCOPE-059).
 // value(p, card) of one process; shown when at least min (GB columns: 0.005 GB, so nothing shows as 0.00). sum: how per-app rows add up (GPU % is capped at 100).
 const PROC_METRICS = {
   vram: { floor: 0.5 * 1073741824, name: 'Top VRAM', col: 'VRAM', card: true, min: 0.005 * 1073741824, fmt: gb2,
@@ -21,15 +22,15 @@ const PROC_METRICS = {
     description: 'The 5 processes using the most shared GPU memory (system RAM the graphics card uses when its VRAM is full) on one graphics card. Spill here slows a model down.',
     colTip: 'System RAM used as GPU memory. Windows can report the same shared memory on every card a process uses.',
     value: (p, c) => p.gpus[c] ? p.gpus[c].shared : 0 },
-  gpu: { floor: 10, name: 'Top GPU', col: 'GPU', card: true, min: 0.05, fmt: pctText, cap: 100,
+  gpu: { rate: true, floor: 10, name: 'Top GPU', col: 'GPU', card: true, min: 0.05, fmt: pctText, cap: 100,
     description: 'The 5 processes using the most of one graphics card (busiest engine, like Task Manager).',
     value: (p, c) => p.gpus[c] && p.gpus[c].util || 0 },
-  cpu: { floor: 10, name: 'Top CPU', col: 'CPU', min: 0.05, fmt: pctText, cap: 100,
+  cpu: { rate: true, floor: 10, name: 'Top CPU', col: 'CPU', min: 0.05, fmt: pctText, cap: 100,
     description: 'The 5 processes using the most CPU (share of the whole CPU, all cores).',
     value: p => p.cpu || 0 },
   // AI_SCOPE-030: Windows' per-process I/O counters count ALL I/O (disk, network, devices), so it's "I/O", not "disk".
   // Ranked and drawn by read + write; split = the two columns shown.
-  io: { floor: 1e6, name: 'Top I/O', col: 'I/O', min: 1e3, fmt: rate2,
+  io: { rate: true, floor: 1e6, name: 'Top I/O', col: 'I/O', min: 1e3, fmt: rate2,
     description: 'The 5 processes reading and writing the most (MB/s): disk, but also network and devices — Windows counts all of a process\'s I/O together. Shows which app is loading a model.',
     colTip: 'All I/O of the process: disk, network and devices together (Windows doesn\'t separate disk per process without admin rights).',
     value: p => (p.ioRead || 0) + (p.ioWrite || 0),
@@ -69,13 +70,26 @@ function procIconHtml(r) {
 }
 // ---------- 5-minute history (sparkline per row, AI_SCOPE-023 item 6) ----------
 // Kept in this browser from the samples it polls (the server samples only while a Processes lens is on screen anyway):
-// the last 5 minutes of /api/processes samples, oldest first. Lines start empty and fill as samples come in.
+// the last 5 minutes of /api/processes samples, oldest first. Filled from the server's own history
+// (/api/processes/history, AI_SCOPE-059) when the page opens or comes back after a gap (tab hidden), then from the polls.
 const PROC_HIST_MS = 5 * 60 * 1000;
-let procHist = [];   // [{ at, procs }]
+let procHist = [], procHistLoading = false;   // [{ at, procs }]
+function addProcSamples(samples) {
+  const seen = new Set(procHist.map(h => h.at));
+  samples.forEach(s => { if (s && s.at && !seen.has(s.at)) { procHist.push({ at: s.at, procs: s.procs }); seen.add(s.at); } });
+  procHist.sort((a, b) => a.at - b.at);
+  const last = procHist.length ? procHist[procHist.length - 1].at : 0;
+  while (procHist.length && procHist[0].at < last - PROC_HIST_MS) procHist.shift();
+}
 function recordProcSample(d) {
-  if (!d || !d.at || (procHist.length && procHist[procHist.length - 1].at >= d.at)) return;
-  procHist.push({ at: d.at, procs: d.procs });
-  while (procHist.length && procHist[0].at < d.at - PROC_HIST_MS) procHist.shift();
+  if (!d || !d.at || d.partial || (procHist.length && procHist[procHist.length - 1].at >= d.at)) return;
+  const gap = !procHist.length || d.at - procHist[procHist.length - 1].at > 2 * (d.every || 5000) + 1000;
+  addProcSamples([d]);
+  if (gap && !procHistLoading) {   // missing samples: fetch what the server kept (the lines catch up on the next poll)
+    procHistLoading = true;
+    fetch('/api/processes/history', { cache: 'no-store' }).then(r => r.json())
+      .then(h => { if (h && h.samples) addProcSamples(h.samples); }).catch(() => {}).then(() => { procHistLoading = false; });
+  }
 }
 // A row's value in every kept sample: the same process (per process) or all processes of that exe (per app); null = not running then.
 function rowSeries(r, m, st) {
@@ -88,11 +102,13 @@ function rowSeries(r, m, st) {
   });
 }
 // Line scaled to the row's own highest value (+25 % headroom), but at least m.floor (so a process idling at 0.1 % isn't drawn as big swings).
-function sparkHtml(series, m) {
+// x by time, not by sample number: samples are FAST apart while someone looks and SLOW apart otherwise (AI_SCOPE-059).
+function sparkX(times, i) { const t0 = times[0], t1 = times[times.length - 1]; return t1 > t0 ? 100 * (times[i] - t0) / (t1 - t0) : 100; }
+function sparkHtml(series, m, times) {
   if (series.filter(v => v != null).length < 2) return '<td class="pspark"></td>';
   const top = Math.max(m.floor, 1.25 * Math.max(...series.filter(v => v != null)));   // headroom: a steady value sits at 80 %, not on the edge
-  const n = series.length, pts = [];
-  series.forEach((v, i) => { if (v != null) pts.push([100 * i / (n - 1), 100 - 100 * v / top]); });
+  const pts = [];
+  series.forEach((v, i) => { if (v != null) pts.push([sparkX(times, i), 100 - 100 * v / top]); });
   const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
   return '<td class="pspark"><div class="pspk"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><path class="area" d="' + d +
     ' L' + pts[pts.length - 1][0].toFixed(1) + ' 100 L' + pts[0][0].toFixed(1) + ' 100 Z"></path><path class="line" d="' + d + '"></path>' +
@@ -101,9 +117,11 @@ function sparkHtml(series, m) {
 // Hover on a row's line: the value at that time (like the Hardware tiles).
 document.addEventListener('mousemove', e => {
   const box = e.target.closest && e.target.closest('.pspk'); if (!box || !box._series) return;
-  const s = box._series, r = box.getBoundingClientRect();
-  const i = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (s.length - 1));
-  const x = s.length < 2 ? 100 : 100 * i / (s.length - 1);
+  const s = box._series, r = box.getBoundingClientRect(), times = box._times;
+  const fx = 100 * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  let i = 0;   // the sample nearest the mouse (by time)
+  for (let k = 1; k < s.length; k++) if (Math.abs(sparkX(times, k) - fx) < Math.abs(sparkX(times, i) - fx)) i = k;
+  const x = s.length < 2 ? 100 : sparkX(times, i);
   const g = box.querySelector('.guide'), tip = box.querySelector('.ptip');
   g.setAttribute('x1', x); g.setAttribute('x2', x); g.style.display = '';
   tip.hidden = false; tip.style.left = x + '%';
@@ -151,23 +169,23 @@ Object.keys(PROC_METRICS).forEach(key => {
       else if (d.error) msg = escH(d.error);
       else if (!d.at) msg = 'Starting…';
       else if (m.card && d.procs.length && d.procs[0].gpus.length <= st.card) msg = 'GPU ' + (st.card + 1) + ' not found on this computer.';
+      else if (d.partial && m.rate) msg = 'Measuring…';   // first block: memory only (AI_SCOPE-059)
       else {
         rows = topRows(d.procs, m, st);
         if (!rows.length) msg = m.card ? 'No process is using ' + (gpus.length > 1 ? 'GPU ' + (st.card + 1) : 'the GPU') + ' right now.' : 'Nothing to show yet.';
       }
       // Always TOP_N rows tall (message and blank filler rows count), so lenses side by side keep the same height.
-      const series = rows.map(r => rowSeries(r, m, st));
+      const series = rows.map(r => rowSeries(r, m, st)), histTimes = procHist.map(h => h.at);
       const ncol = m.split ? 2 + m.split.length : 3;
       const valueCells = r => r.parts ? r.parts.map(v => '<td>' + m.fmt(v) + '</td>').join('') : '<td' + (r.tip ? ' title="' + escH(r.tip) + '"' : '') + '>' + m.fmt(r.value) + '</td>';
       const trs = msg ? ['<tr class="pmsg"><td colspan="' + ncol + '">' + msg + '</td></tr>']
-        : rows.map((r, i) => '<tr><td>' + procNameHtml(r, st) + '</td>' + sparkHtml(series[i], m) + valueCells(r) + '</tr>');
+        : rows.map((r, i) => '<tr><td>' + procNameHtml(r, st) + '</td>' + sparkHtml(series[i], m, histTimes) + valueCells(r) + '</tr>');
       while (trs.length < TOP_N) trs.push('<tr class="pfill" aria-hidden="true"><td colspan="' + ncol + '">&nbsp;</td></tr>');
       const html = trs.join('');
       const body = L.$('rows');
       if (body._html !== html) {
         body._html = html; body.innerHTML = html;
-        const times = procHist.map(h => h.at);
-        body.querySelectorAll('.pspk').forEach((box, i) => { box._series = series[i]; box._times = times; box._fmt = m.fmt; });
+        [...body.rows].forEach((tr, i) => { const box = tr.querySelector('.pspk'); if (box) { box._series = series[i]; box._times = histTimes; box._fmt = m.fmt; } });   // row i = rows[i] (a row without a line has no box)
       }
     },
   });

@@ -29,7 +29,7 @@ One **Disk** tile per physical disk, named like Task Manager ("Disk 1 (C:)"): **
 
 ## Processes scope
 
-Built in, Windows only for now. Read from Windows' performance counters (the same numbers as Task Manager), every 5 s, and only while a Processes lens is on screen.
+Built in, Windows only for now. Read from Windows (the same numbers as Task Manager: its process list for CPU, RAM and I/O, its GPU performance counters for VRAM and GPU %): every 5 s while a Processes lens is on screen, every 30 s otherwise. The sampler starts with AI_SCOPE and keeps running, so the lenses show numbers as soon as you open them (a few seconds after AI_SCOPE starts) and their 5-minute lines are already filled.
 
 - **AI processes**: one row per installed AI scope (Bionic, Ollama, ComfyUI, Strata) with the VRAM, GPU, CPU and RAM of its own process: the one that runs the model (Bionic, Ollama, Strata) or ComfyUI's python. VRAM is all graphics cards added up and GPU the busiest card; hover for each card.
 - **Top I/O**: the 5 processes reading and writing the most (MB/s, Read and Write columns) — shows which app is loading a model. Windows counts *all* of a process's I/O here (disk, network and devices together); a per-process disk-only number needs admin rights.

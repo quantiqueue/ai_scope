@@ -7,23 +7,30 @@
 #                                            bytes/s of ALL the process's I/O (disk, network, devices - AI_SCOPE-030)
 #   I|path|base64png                         the exe's icon (32 px), once per exe path (after a block, 40 at a time)
 #   G|pid|luid|dedicated|shared|util         one line per process and graphics card it uses (util = busiest engine type)
-# then "---". One PDH query with wildcard counters over all processes (AI_SCOPE-023 probe on a test PC: ~1 s to set up,
-# 2.5 s for the first collect - up to 6 s when the PC is busy - then 0.4 s per collect for ~340 processes). Don't use Get-Counter (8.7 s per read) or
-# .NET PerformanceCounter (~25 s on first use) - see AI_SCOPE-037. Exe names come from a Toolhelp snapshot.
+#   T|phase|ms[|how]                         start-up timings, once per start (AI_SCOPE-059): begin (Unix ms when the script
+#                                            began), types (load / compile the C#, how = cache|compiled|memory), counters (open the
+#                                            query + add the counters), collect1 (first collect), cycle1 (building the first block)
+#   W|partial                                first block only (AI_SCOPE-059): printed right after the first collect, so only the
+#                                            plain values (working set, GPU memory) are in; CPU %, GPU % and I/O need a second sample
+# then "---". Per process name, CPU time, working set and I/O bytes come from ONE NtQuerySystemInformation call per cycle
+# (SystemProcessInformation, what Task Manager uses; no process handles needed), rates by diffing two cycles. AI_SCOPE-059:
+# this replaced four "Process V2" PDH wildcard counters, which were nearly all of the cost (each ~1 s to add, ~1 s on the
+# first collect, ~0.2 s per collect after that). The GPU numbers stay on one PDH query with wildcard counters (GPU Process
+# Memory, GPU Engine: ~1 ms per collect). Don't use Get-Counter (8.7 s per read) or .NET PerformanceCounter (~25 s on
+# first use) - see AI_SCOPE-037.
+# The C# below is compiled once per version into __DLL__ (AI_SCOPE-059; proctop.js names it after a hash of this file)
+# and later starts only load that DLL, instead of Add-Type compiling it on every start.
 $ErrorActionPreference = 'SilentlyContinue'
-Add-Type -TypeDefinition @'
+$sw = [Diagnostics.Stopwatch]::StartNew()
+[Console]::Out.Write('T|begin|' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + "`n"); [Console]::Out.Flush()
+$src = @'
 using System; using System.Collections.Generic; using System.Globalization; using System.Runtime.InteropServices; using System.Text; using System.Text.RegularExpressions;
 public static class AiScopeTop {
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageNameW(IntPtr h, uint flags, StringBuilder name, ref uint size);
-  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct Entry { public uint dwSize, cntUsage, th32ProcessID; public IntPtr th32DefaultHeapID;
-    public uint th32ModuleID, cntThreads, th32ParentProcessID; public int pcPriClassBase; public uint dwFlags;
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile; }
   [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
   [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h, out uint code);
-  [DllImport("kernel32.dll")] static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32FirstW(IntPtr snap, ref Entry e);
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32NextW(IntPtr snap, ref Entry e);
+  [DllImport("ntdll.dll")] static extern int NtQuerySystemInformation(int cls, IntPtr buf, int len, out int ret);
   [DllImport("pdh.dll", CharSet = CharSet.Unicode)] static extern uint PdhOpenQuery(string src, IntPtr user, out IntPtr q);
   [DllImport("pdh.dll", CharSet = CharSet.Unicode)] static extern uint PdhAddEnglishCounter(IntPtr q, string path, IntPtr user, out IntPtr c);
   [DllImport("pdh.dll")] static extern uint PdhCollectQueryData(IntPtr q);
@@ -33,13 +40,16 @@ public static class AiScopeTop {
     uint c; bool ok = GetExitCodeProcess(h, out c); CloseHandle(h); return ok && c == 259; }
 
   static IntPtr query = IntPtr.Zero;
-  static IntPtr[] c = new IntPtr[7];   // dedicated, shared, engine util, cpu, working set, I/O read B/s, I/O write B/s
+  static IntPtr[] c = new IntPtr[3];   // dedicated, shared, engine util (per process and card)
+  public static long AddMs, CollectMs;   // start-up timings (AI_SCOPE-059)
   public static bool Open() {
+    System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
     if (PdhOpenQuery(null, IntPtr.Zero, out query) != 0) return false;
-    string[] paths = { "\\GPU Process Memory(*)\\Dedicated Usage", "\\GPU Process Memory(*)\\Shared Usage", "\\GPU Engine(*)\\Utilization Percentage",
-      "\\Process V2(*)\\% Processor Time", "\\Process V2(*)\\Working Set", "\\Process V2(*)\\IO Read Bytes/sec", "\\Process V2(*)\\IO Write Bytes/sec" };
+    string[] paths = { "\\GPU Process Memory(*)\\Dedicated Usage", "\\GPU Process Memory(*)\\Shared Usage", "\\GPU Engine(*)\\Utilization Percentage" };
     for (int i = 0; i < paths.Length; i++) if (PdhAddEnglishCounter(query, paths[i], IntPtr.Zero, out c[i]) != 0) c[i] = IntPtr.Zero;
+    AddMs = sw.ElapsedMilliseconds; sw.Reset(); sw.Start();
     PdhCollectQueryData(query);
+    CollectMs = sw.ElapsedMilliseconds;
     return true;
   }
   // instance name -> value (valid values only)
@@ -60,12 +70,38 @@ public static class AiScopeTop {
     } finally { Marshal.FreeHGlobal(buf); }
     return res;
   }
-  static Dictionary<int, string> Names() {
-    Dictionary<int, string> names = new Dictionary<int, string>();
-    IntPtr s = CreateToolhelp32Snapshot(2, 0); if (s == IntPtr.Zero || s == new IntPtr(-1)) return names;
-    Entry e = new Entry(); e.dwSize = (uint)Marshal.SizeOf(typeof(Entry));
-    if (Process32FirstW(s, ref e)) { do { names[(int)e.th32ProcessID] = e.szExeFile; } while (Process32NextW(s, ref e)); }
-    CloseHandle(s); return names;
+  // ---- Every process in one call (AI_SCOPE-059): SYSTEM_PROCESS_INFORMATION entries, read by offset ----
+  class Snap { public long Cpu, Create, Rd, Wr; }   // CPU time (user + kernel, 100 ns), creation time (tells a reused PID apart), I/O bytes
+  static Dictionary<int, Snap> prevSnap = null; static long prevTicks = 0;
+  static IntPtr spiBuf = IntPtr.Zero; static int spiLen = 0;
+  // pid -> name, pid -> working set, pid -> counters. false if Windows refused (then the cycle has no per-process numbers).
+  static bool Snapshot(Dictionary<int, string> inst, Dictionary<int, double> ws, Dictionary<int, Snap> now) {
+    for (int tries = 0; tries < 6; tries++) {
+      if (spiBuf == IntPtr.Zero) { spiLen = 1 << 20; spiBuf = Marshal.AllocHGlobal(spiLen); }
+      int ret; int st = NtQuerySystemInformation(5, spiBuf, spiLen, out ret);   // 5 = SystemProcessInformation
+      if (st == unchecked((int)0xC0000004)) {   // STATUS_INFO_LENGTH_MISMATCH: more processes than room
+        Marshal.FreeHGlobal(spiBuf); spiLen = Math.Max(spiLen * 2, ret + 65536); spiBuf = Marshal.AllocHGlobal(spiLen); continue;
+      }
+      if (st != 0) return false;
+      bool x64 = IntPtr.Size == 8;
+      // offsets: 32 CreateTime, 40 UserTime, 48 KernelTime, 56 ImageName (UNICODE_STRING); then by pointer size:
+      int oNameBuf = x64 ? 64 : 60, oPid = x64 ? 80 : 68, oWs = x64 ? 144 : 104, oRd = x64 ? 232 : 160;   // oRd: ReadTransferCount, + 8 = WriteTransferCount
+      long p = spiBuf.ToInt64();
+      while (true) {
+        IntPtr e = new IntPtr(p);
+        int next = Marshal.ReadInt32(e, 0);
+        int pid = (int)Marshal.ReadIntPtr(e, oPid).ToInt64();
+        int nlen = Marshal.ReadInt16(e, 56) & 0xFFFF; IntPtr nbuf = Marshal.ReadIntPtr(e, oNameBuf);
+        string name = pid == 0 ? "Idle" : nbuf != IntPtr.Zero && nlen > 0 ? Marshal.PtrToStringUni(nbuf, nlen / 2) : pid == 4 ? "System" : "";
+        Snap s = new Snap(); s.Create = Marshal.ReadInt64(e, 32); s.Cpu = Marshal.ReadInt64(e, 40) + Marshal.ReadInt64(e, 48);
+        s.Rd = Marshal.ReadInt64(e, oRd); s.Wr = Marshal.ReadInt64(e, oRd + 8);
+        inst[pid] = name; ws[pid] = (double)Marshal.ReadIntPtr(e, oWs).ToInt64(); now[pid] = s;
+        if (next <= 0) break;
+        p += next;
+      }
+      return true;
+    }
+    return false;
   }
   // pid -> exe name it had when its path was looked up (a reused PID gets looked up again); exe paths whose icon was sent
   static Dictionary<int, string> seen = new Dictionary<int, string>();
@@ -94,26 +130,33 @@ public static class AiScopeTop {
     } catch { return null; }
   }
   static readonly Regex GpuInst = new Regex("^pid_(\\d+)_luid_0x([0-9a-fA-F]+)_0x([0-9a-fA-F]+)_phys_\\d+(?:_eng_\\d+_engtype_(.*))?$");
-  static readonly Regex ProcInst = new Regex("^(.*):(\\d+)$");
   static string F(double v) { return v.ToString("R", CultureInfo.InvariantCulture); }
   static void AddTo(Dictionary<string, double> d, string k, double v) { double o; d[k] = (d.TryGetValue(k, out o) ? o : 0) + v; }
 
-  public static string Cycle() {
+  // first: the block right after Open()'s collect (no new collect; rates - CPU %, I/O, GPU engine % - need a second cycle)
+  public static string Cycle(bool first) {
     if (query == IntPtr.Zero) return "";
-    PdhCollectQueryData(query);
-    Dictionary<int, string> names = Names();
+    if (!first) PdhCollectQueryData(query);
     int cores = Math.Max(1, Environment.ProcessorCount);
     StringBuilder sb = new StringBuilder();
-    // CPU + working set per process ("Process V2" instances are "<name>:<pid>", Windows 10 1709+)
+    if (first) sb.Append("W|partial\n");
+    // Name, working set, CPU % (of the whole CPU, all cores) and I/O bytes/s per process, from one snapshot + the previous one
     Dictionary<int, double> cpu = new Dictionary<int, double>(), ws = new Dictionary<int, double>(), ior = new Dictionary<int, double>(), iow = new Dictionary<int, double>();
     Dictionary<int, string> inst = new Dictionary<int, string>();
-    foreach (KeyValuePair<string, double> kv in Read(c[3])) { Match m = ProcInst.Match(kv.Key); if (!m.Success) continue; int pid = int.Parse(m.Groups[2].Value); cpu[pid] = kv.Value / cores; inst[pid] = m.Groups[1].Value; }
-    foreach (KeyValuePair<string, double> kv in Read(c[4])) { Match m = ProcInst.Match(kv.Key); if (!m.Success) continue; int pid = int.Parse(m.Groups[2].Value); ws[pid] = kv.Value; inst[pid] = m.Groups[1].Value; }
-    foreach (KeyValuePair<string, double> kv in Read(c[5])) { Match m = ProcInst.Match(kv.Key); if (m.Success) ior[int.Parse(m.Groups[2].Value)] = kv.Value; }
-    foreach (KeyValuePair<string, double> kv in Read(c[6])) { Match m = ProcInst.Match(kv.Key); if (m.Success) iow[int.Parse(m.Groups[2].Value)] = kv.Value; }
+    Dictionary<int, Snap> now = new Dictionary<int, Snap>();
+    long ticks = System.Diagnostics.Stopwatch.GetTimestamp();
+    if (Snapshot(inst, ws, now)) {
+      double dt = prevSnap == null ? 0 : (ticks - prevTicks) / (double)System.Diagnostics.Stopwatch.Frequency;
+      if (!first && dt > 0.2) foreach (KeyValuePair<int, Snap> kv in now) {
+        Snap o; if (!prevSnap.TryGetValue(kv.Key, out o) || o.Create != kv.Value.Create) continue;   // new process (or a reused PID): no rate yet
+        cpu[kv.Key] = (kv.Value.Cpu - o.Cpu) / (dt * 1e7 * cores) * 100;
+        ior[kv.Key] = (kv.Value.Rd - o.Rd) / dt; iow[kv.Key] = (kv.Value.Wr - o.Wr) / dt;
+      }
+      prevSnap = now; prevTicks = ticks;
+    }
     foreach (KeyValuePair<int, string> kv in inst) {
-      int pid = kv.Key; if (pid == 0 || kv.Value == "_Total" || kv.Value == "Idle") continue;
-      string name; if (!names.TryGetValue(pid, out name) || string.IsNullOrEmpty(name)) name = kv.Value;
+      int pid = kv.Key; if (pid == 0 || kv.Value == "Idle") continue;
+      string name = kv.Value; if (string.IsNullOrEmpty(name)) continue;
       double cv, wv; bool hc = cpu.TryGetValue(pid, out cv), hw = ws.TryGetValue(pid, out wv);
       string path = "", was;
       if (!seen.TryGetValue(pid, out was) || was != name) {
@@ -148,12 +191,45 @@ public static class AiScopeTop {
     return sb.ToString();
   }
 }
-'@ -ReferencedAssemblies System.Drawing
+'@
+function Ready { return [bool]('AiScopeTop' -as [type]) }
+$dll = '__DLL__'
+$tTypes = $sw.ElapsedMilliseconds; $how = 'cache'
+if ($dll -and (Test-Path -LiteralPath $dll)) { try { Add-Type -Path $dll -ErrorAction Stop } catch {} }
+if (-not (Ready) -and $dll) {
+  $how = 'compiled'
+  # First start of this version: compile into the cache. To a name of our own first, then rename - another AI_SCOPE
+  # may be compiling the same file right now.
+  $tmp = $dll -replace '\.dll$', ('-' + $PID + '.dll')
+  try {
+    Add-Type -TypeDefinition $src -ReferencedAssemblies System.Drawing -OutputAssembly $tmp -OutputType Library -ErrorAction Stop
+    if (-not (Test-Path -LiteralPath $dll)) { Move-Item -LiteralPath $tmp -Destination $dll -ErrorAction Stop }
+  } catch {}
+  if (-not (Ready)) { foreach ($f in @($dll, $tmp)) { if (-not (Ready) -and (Test-Path -LiteralPath $f)) { try { Add-Type -Path $f -ErrorAction Stop } catch {} } } }
+  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }   # fails while loaded; proctop.js tidies up later
+}
+if (-not (Ready)) { $how = 'memory'; Add-Type -TypeDefinition $src -ReferencedAssemblies System.Drawing }   # no cache: compile in memory, as before
+$tTypes = $sw.ElapsedMilliseconds - $tTypes
 if (-not [AiScopeTop]::Open()) { exit 1 }
-$wait = 1000   # first numbers: CPU % and GPU % need two samples, 1 s apart is enough (then every __EVERY__ ms)
+# First block straight away (AI_SCOPE-059): memory values are valid after one collect, so Top RAM / VRAM / shared don't wait
+# for the second sample. No icons after it, so the full block isn't held up by them.
+$t = $sw.ElapsedMilliseconds; $first = [AiScopeTop]::Cycle($true); $t = $sw.ElapsedMilliseconds - $t
+[Console]::Out.Write('T|types|' + $tTypes + '|' + $how + "`nT|counters|" + [AiScopeTop]::AddMs + "`nT|collect1|" + [AiScopeTop]::CollectMs +
+  "`nT|cycle1|" + $t + "`n" + $first + "---`n"); [Console]::Out.Flush()
+# Pace (AI_SCOPE-059): ms between samples, from the control file proctop.js writes (fast while a Processes lens is looked
+# at, slow otherwise). Read every 250 ms while waiting; a faster pace than the current wait takes a sample at once.
+$ctl = '__CTL__'; $every = __EVERY__
+function Pace { try { $v = [int]([IO.File]::ReadAllText($ctl).Trim()); if ($v -ge 1000) { return $v } } catch {}; return $every }
+$wait = 1000   # first numbers: CPU % and GPU % need two samples, 1 s apart is enough (then every $every ms)
 while ($true) {
   if (-not [AiScopeTop]::Alive(__PARENT__)) { exit }
-  Start-Sleep -Milliseconds $wait; $wait = __EVERY__
-  [Console]::Out.Write([AiScopeTop]::Cycle() + "---`n"); [Console]::Out.Flush()
+  $slept = 0
+  while ($slept -lt $wait) {
+    Start-Sleep -Milliseconds 250; $slept += 250
+    $e = Pace
+    if ($e -ne $every) { $faster = $e -lt $every; $every = $e; if ($faster) { $wait = [Math]::Min($wait, [Math]::Max(1000, $slept)) } }   # rates need >= 1 s
+  }
+  $wait = $every
+  [Console]::Out.Write([AiScopeTop]::Cycle($false) + "---`n"); [Console]::Out.Flush()
   $icons = [AiScopeTop]::Icons(40); if ($icons) { [Console]::Out.Write($icons); [Console]::Out.Flush() }   # read with the next block
 }
