@@ -1,0 +1,8 @@
+# AI_SCOPE manual
+
+Back to the [README](../README.md).
+
+- [Running AI_SCOPE](RUNNING_AI_SCOPE.md): after installing, start / stop / update / uninstall, command-line options, network access and host names.
+- [How to scope](HOW_TO_SCOPE.md): the scopes, editing pages and lens settings, Disk tiles, the Processes and llama.cpp scopes, custom scopes.
+- [Configuring scopes](CONFIGURING_SCOPES.md): the Ollama request-stats relay and the settings each scope asks for when installed.
+- [Where the data comes from](DATA_SOURCE.md): what each scope reads, and where AI_SCOPE saves history.

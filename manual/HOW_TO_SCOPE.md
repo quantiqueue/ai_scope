@@ -1,6 +1,6 @@
 # How to scope
 
-Back to the [README](README.md).
+Back to the [README](../README.md) · [Manual](README.md)
 
 ## Supported scopes
 
@@ -20,22 +20,49 @@ Back to the [README](README.md).
 - **While something runs**, each *Current request / Current job* card says what it's doing ("Running — reading prompt", "Running — sampling (+2 queued)") and shows a **System load** row (whole-computer GPU, VRAM, CPU and RAM). On Windows, ComfyUI's *Current job* card shows a **ComfyUI process** row instead, and the Bionic, Ollama, Strata and llama.cpp *Current request* cards a **Bionic / Ollama / Strata / llama.cpp process** row: the GPU %, VRAM (per card), CPU and RAM used by the app's own process (for these, the process that runs the model: llama-server for Bionic and Ollama, strata.exe for Strata, llama.exe or llama-server.exe for llama.cpp), read from Windows' GPU performance counters. Their *Loaded in memory* / *Loaded model* tables also show how much of the model sits on each graphics card. When idle it tells you the next step ("Load a model in Strata to see live stats.").
 - The request and run tables have a **Peak load** column: the highest GPU % and VRAM while each one ran (hover for CPU and RAM too).
 - Model and publisher names link to their Hugging Face / Ollama / LM Studio catalog pages (opens a new tab).
-- Request, run and installed-model tables show 5 rows per page (change it with the lens's cog: Rows per page).
+- Request, run and installed-model tables show 5 rows per page (change it with the lens's cog: **Rows per page**, see [Lens settings](#lens-settings-cog)).
 - Scopes are listed in **`scopes.json`** (name, description, icon, the server modules that collect its data, and the settings asked at install). Installed scopes and their settings are saved in `~/.ai_scope/installed.json`.
+
+## Editing pages and lens settings
+
+Every page can be rearranged: the built-in Hardware and Processes scopes, the app scopes (Bionic, Ollama, ComfyUI, Strata, llama.cpp) and your custom scopes.
+
+- Click the **pencil** (top right of the page) to edit. While editing:
+  - **+ Add lens** (top of the page) adds a lens at the top; the **+** on the left or right of a lens adds one right there. On a scope's own page the Add lens dialog offers that scope's lenses; on a custom scope it lists the lenses of every installed scope, grouped by scope. A lens can be added more than once.
+  - **Drag** a lens by its grip to move it. A line shows where it will land: a vertical line puts it in that row, a horizontal line between rows starts a new row.
+  - **×** removes a lens; the **cog** next to it opens the lens's settings (see below).
+- **Save** with the save icon, or **Cancel**. Unsaved changes stay while you switch tabs, but are lost if the page reloads.
+- On a scope's own page, **Reset to default** brings back its built-in layout. Until you save a page it shows that default, which on Hardware and Processes follows your graphics cards and disks; a saved page keeps its lenses (a card that's gone shows "GPU n not found").
+- Saved pages are kept in `~/.ai_scope/scope-layouts.json` (scope pages) and `~/.ai_scope/custom-scopes.json` (custom scopes), so every browser and the app window see the same ones. Lenses added in a newer AI_SCOPE version don't appear on a page you saved: add them in edit mode, or Reset to default.
+
+### Lens settings (cog)
+
+The cog shows in edit mode, in each lens's edit bar. Every lens has:
+
+- **Width**: Quarter, Half or Full of the page. The page is 4 columns wide (2 below about 1100 px, where Quarter shows as half; 1 on a phone).
+- **Columns** (tables): show or hide each column; the first column always shows.
+
+Some lenses also have:
+
+- **Rows per page** (request, run and installed-model tables; default 5).
+- **Show process stats** (the *Current request* / *Current job* cards): the app's process row, or System load (on by default).
+- Their own settings, e.g. the Hardware GPU lens's card and GPU usage / VRAM / both, the Disk tile's disk, and the Processes lenses' rows (per app or per process), graphics card and dwm.exe (see [Processes scope](#processes-scope)).
+
+The change is saved with the page when you save.
 
 ## Disk tiles (Hardware)
 
-One **Disk** tile per physical disk, named like Task Manager ("Disk 1 (C:)"): **active time** (how busy the disk was) as the big number, read and write speed, and a 5-minute chart with a read line and a dashed write line, scaled to the busiest moment (hover for the values at a time). Read from Windows' disk counters every 2 s (Linux: `/proc/diskstats`). The request and run tables' **Peak load** hover also shows the highest disk read while each ran. In a custom scope, pick the disk with the lens's cog.
+One **Disk** tile per physical disk, named like Task Manager ("Disk 1 (C:)"): **active time** (how busy the disk was) as the big number, read and write speed, and a 5-minute chart with a read line and a dashed write line, scaled to the busiest moment (hover for the values at a time). Read from Windows' disk counters every 2 s (Linux: `/proc/diskstats`). The request and run tables' **Peak load** hover also shows the highest disk read while each ran. Pick the disk with the lens's cog (edit mode).
 
 ## Processes scope
 
 Built in, Windows only for now. Read from Windows (the same numbers as Task Manager: its process list for CPU, RAM and I/O, its GPU performance counters for VRAM and GPU %): every 5 s while a Processes lens is on screen, every 30 s otherwise. The sampler starts with AI_SCOPE and keeps running, so the lenses show numbers as soon as you open them (a few seconds after AI_SCOPE starts) and their 5-minute lines are already filled.
 
-- **AI processes**: one row per installed AI scope (Bionic, Ollama, ComfyUI, Strata) with the VRAM, GPU, CPU and RAM of its own process: the one that runs the model (Bionic, Ollama, Strata) or ComfyUI's python. VRAM is all graphics cards added up and GPU the busiest card; hover for each card.
+- **AI processes**: one row per installed AI scope (Bionic, Ollama, ComfyUI, Strata, llama.cpp) with the VRAM, GPU, CPU and RAM of its own process: the one that runs the model (Bionic, Ollama, Strata, llama.cpp) or ComfyUI's python. VRAM is all graphics cards added up and GPU the busiest card; hover for each card.
 - **Top I/O**: the 5 processes reading and writing the most (MB/s, Read and Write columns) — shows which app is loading a model. Windows counts *all* of a process's I/O here (disk, network and devices together); a per-process disk-only number needs admin rights.
-- **Top CPU, Top RAM, Top GPU, Top VRAM, Top shared GPU memory**: the 5 processes using the most, with the program's icon, a 5-minute line (hover for the value at a time; kept while the page is open) and the value. GPU, VRAM and shared GPU memory are per graphics card.
-- **Cog** settings: **Rows** — per app (all processes of a program added together, e.g. "chrome.exe ×27") or per process; **Show the Windows desktop process (dwm.exe)** on the GPU lenses — off by default, because Windows counts the window surfaces dwm draws under dwm *and* under the app that made them, so its number is mostly other apps' memory again. For the same reason the VRAM rows can add up to more than the card's total on the Hardware page.
-- Settings chosen on the Processes page are saved in `~/.ai_scope/lens-settings.json`.
+- **Top CPU, Top RAM, Top GPU, Top VRAM, Top shared GPU memory**: the 5 processes using the most, with the program's icon, a 5-minute line (hover for the value at a time) and the value. Right after AI_SCOPE starts, the CPU, GPU and I/O lenses say *Measuring…* for a second or two. GPU, VRAM and shared GPU memory are per graphics card.
+- **Cog** settings (edit mode, see [Lens settings](#lens-settings-cog)): **Rows** — per app (all processes of a program added together, e.g. "chrome.exe ×27") or per process; **Show the Windows desktop process (dwm.exe)** on the GPU lenses — off by default, because Windows counts the window surfaces dwm draws under dwm *and* under the app that made them, so its number is mostly other apps' memory again. For the same reason the VRAM rows can add up to more than the card's total on the Hardware page.
+- Changes to the Processes page are saved with the page in `~/.ai_scope/scope-layouts.json`.
 
 ## llama.cpp scope
 
@@ -53,12 +80,8 @@ For a llama.cpp server: `llama serve -m <model.gguf>` (the `llama` launcher, por
 A custom scope is your own page made of lenses from any installed scope, e.g. ComfyUI's current job next to Strata's current request and your GPU tiles.
 
 - **Create**: Scopes page (**+**) → **Create Custom Scope**, give it a name. It opens as a new tab, ready to edit.
-- **Edit**: click the **pencil** (top right of the page).
-  - **+ Add lens** (top) adds a lens at the top of the page; the **+** on the left or right of a lens adds one right there. The Add lens dialog lists the lenses of every installed scope, grouped by scope.
-  - **Drag** a lens by its grip to move it. A line shows where it will land: a vertical line puts it in that row, a horizontal line between rows starts a new row.
-  - **×** removes a lens.
-  - Save with the **save** icon, or **Cancel**. Unsaved changes stay while you switch tabs.
-- **Lens settings**: lenses that have settings show a **cog** in the top-right corner of the lens (e.g. the GPU lens: which card, and GPU usage, VRAM or both). In edit mode the change is saved with the page; otherwise it's saved right away.
+- **Edit** with the **pencil**, like any page (see [Editing pages and lens settings](#editing-pages-and-lens-settings)); the Add lens dialog lists the lenses of every installed scope. A new, empty custom scope opens in edit mode. There's no Reset to default.
+- **Lens settings**: the **cog** in each lens's edit bar (see [Lens settings](#lens-settings-cog)).
 - Each lens on a custom scope shows its scope as a chip (logo + name); click it to open that scope.
 - **Rename** or **remove** a custom scope with its **Settings** / **Remove** on the Scopes page (removing it doesn't affect the scopes it borrows lenses from).
 - Custom scopes are saved in `~/.ai_scope/custom-scopes.json`, so every browser and the app window see the same ones.

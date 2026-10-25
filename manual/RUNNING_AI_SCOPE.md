@@ -1,6 +1,6 @@
 # Running AI_SCOPE
 
-Back to the [README](README.md).
+Back to the [README](../README.md) · [Manual](README.md)
 
 ## After installing
 

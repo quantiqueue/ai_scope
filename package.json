@@ -55,6 +55,7 @@
     "hostcheck.js",
     "logos.js",
     "README.md",
+    "manual/",
     "LICENSE"
   ],
   "engines": {

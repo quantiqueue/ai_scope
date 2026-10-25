@@ -1,6 +1,6 @@
 # Configuring scopes
 
-Back to the [README](README.md).
+Back to the [README](../README.md) · [Manual](README.md)
 
 ## Ollama request stats (relay on port 11435)
 

@@ -1,6 +1,6 @@
 # Where the data comes from
 
-Back to the [README](README.md).
+Back to the [README](../README.md) · [Manual](README.md)
 
 | App | Source | Notes |
 |---|---|---|
@@ -9,4 +9,5 @@ Back to the [README](README.md).
 | ComfyUI | API at `http://127.0.0.1:8188` (or 8000) | Runs are saved to `~/.ai_scope/comfy-runs.jsonl`. |
 | Strata | The Strata desktop app at `http://127.0.0.1:47831` (its own monitor data) | The Strata app must be running. Requests are saved to `~/.ai_scope/strata-requests.jsonl`. |
 | llama.cpp | The server's `/props`, `/models`, `/slots` and (with `--metrics`) `/metrics` at `http://127.0.0.1:9931` (`llama serve`) or `:8080` (`llama-server`) | Request history is estimated from the slots (llama.cpp keeps no per-request timings); exact for requests that ran alone when the server has `--metrics`. Requests are saved to `~/.ai_scope/llamacpp-requests.jsonl`. |
+| Processes (Windows) | Windows' process list (`NtQuerySystemInformation`, the same as Task Manager) for CPU, RAM and I/O + Windows GPU performance counters for VRAM and GPU % per process | Sampled every 5 s while a Processes lens is on screen, every 30 s otherwise; the last 5 minutes are kept in memory for the lenses' lines. |
 | Hardware | Node `os` + `nvidia-smi` (comes with the NVIDIA driver), or Windows GPU counters for AMD/Intel | GPU temperature and power are NVIDIA only. Disks: Windows' `PhysicalDisk` counters, Linux `/proc/diskstats`. |
