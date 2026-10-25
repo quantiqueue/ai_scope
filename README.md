@@ -64,8 +64,12 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 - **No GPU temperature or power**: only NVIDIA cards report them.
 - **Can't rename or move the AI_SCOPE folder**: stop AI_SCOPE first (`ai_scope --stop`, or close its console window / end *Node.js* in Task Manager).
 
-## License
+## Support AI_SCOPE
 
-[MIT](LICENSE)
+AI_SCOPE is free and [MIT-licensed](LICENSE). I build it, test it and pay for the resources myself, and I keep testing it on a variety of hardware and operating systems to make sure it works on yours. A coffee helps me add more features, fixes and support.
 
-The app logos shown in AI_SCOPE (and the fallback copies in `assets/logos`) belong to their projects and are used only to show which app a scope watches. AI_SCOPE is not affiliated with or endorsed by these projects.
+<a href="https://buymeacoffee.com/quantiqueue"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" height="50"></a>
+
+Contact me via [GitHub](https://github.com/quantiqueue).
+
+<sub>The app logos shown in AI_SCOPE (and the fallback copies in `assets/logos`) belong to their projects and are used only to show which app a scope watches. AI_SCOPE is not affiliated with or endorsed by these projects.</sub>
