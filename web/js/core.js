@@ -1,5 +1,5 @@
 // AI_SCOPE dashboard - shared code: installed scopes, table paging, formatting helpers.
-// Loaded first; the scope files (hardware, comfyui, ollama, lmstudio, strata) and shell.js build on it.
+// Loaded first; the scope files (hardware, comfyui, ollama, bionic, strata) and shell.js build on it.
 
 // ---------- Scopes (catalog: scopes.json; install state: data/installed.json) ----------
 // Filled in by the server when it sends the page; refreshed from /api/scopes.
@@ -12,30 +12,47 @@ let CUSTOM = window.AI_SCOPE_CUSTOM || [];   // [{ id: 'c-...', name, lenses: [{
 const CUSTOM_HOOKS = [];                     // called after the list changes (custom.js rebuilds the pages)
 function customById(id) { return CUSTOM.find(x => x.id === id); }
 function setCustom(list) { CUSTOM = list || []; CUSTOM_HOOKS.forEach(f => f()); }
+// Saved layouts of the scope pages (AI_SCOPE-020): { scopeId: { lenses: [{ lens, settings, row? }] } } (scope-layouts.json).
+// A scope without one shows its default (defineScopeLayout in lens.js). Inlined into index.html; refreshed by shell.js.
+let SCOPE_LAYOUTS = window.AI_SCOPE_LAYOUTS || {};
+const LAYOUT_HOOKS = [];                     // called after SCOPE_LAYOUTS changes (layout.js re-renders the pages)
+function setScopeLayouts(v) { SCOPE_LAYOUTS = v || {}; LAYOUT_HOOKS.forEach(f => f()); }
+// The server's system ('win32', 'linux', 'darwin'), for options that only apply on one system.
+const SERVER_OS = window.AI_SCOPE_OS || '';
 // A tab can show an installed scope or a custom scope.
 function canOpen(id) { return isInstalled(id) || !!customById(id); }
 
+// ---------- Changes to the server (AI_SCOPE-021) ----------
+// Every POST goes through here: JSON body + the X-AI-Scope header, which the server requires (a web page can't send
+// them cross-site). Returns the JSON answer.
+async function postJson(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Scope': '1' }, body: JSON.stringify(body || {}) });
+  return r.json();
+}
+
 // ---------- Paging for request tables ----------
-const PAGE_SIZE = 15;
+const PAGE_SIZE_DEFAULT = 15;
 const pages = {};      // table key -> current page (0-based)
 const pagerReload = {}; // table key -> function that re-renders the table
 // Returns the slice of row HTML for the current page and updates the pager below the table.
-// key = which table (each lens copy has its own key, so its own page); pagerId = the pager's id or element.
-function paginate(key, rowsHtml, pagerId) {
-  const n = Math.max(1, Math.ceil(rowsHtml.length / PAGE_SIZE));
+// key = which table (each lens copy has its own key, so its own page); pagerId = the pager's id or element;
+// size = rows per page (the request / run / installed-model tables' "Rows per page" setting, AI_SCOPE-020), default PAGE_SIZE_DEFAULT.
+function paginate(key, rowsHtml, pagerId, size) {
+  const per = Math.max(1, Math.min(500, parseInt(size, 10) || PAGE_SIZE_DEFAULT));
+  const n = Math.max(1, Math.ceil(rowsHtml.length / per));
   let p = Math.min(pages[key] || 0, n - 1);
   pages[key] = p;
   const el = typeof pagerId === 'string' ? document.getElementById(pagerId) : pagerId;   // id or element (lenses pass their own)
-  el.hidden = rowsHtml.length <= PAGE_SIZE;
+  el.hidden = rowsHtml.length <= per;
   if (!el.hidden) {
-    const from = p * PAGE_SIZE + 1, to = Math.min(rowsHtml.length, (p + 1) * PAGE_SIZE);
+    const from = p * per + 1, to = Math.min(rowsHtml.length, (p + 1) * per);
     const html = '<span>' + from + '–' + to + ' of ' + rowsHtml.length + '</span>' +
       '<button type="button" data-pager="' + key + '" data-dir="-1"' + (p === 0 ? ' disabled' : '') + '>‹ Newer</button>' +
       '<span>Page ' + (p + 1) + ' / ' + n + '</span>' +
       '<button type="button" data-pager="' + key + '" data-dir="1"' + (p >= n - 1 ? ' disabled' : '') + '>Older ›</button>';
     if (el._html !== html) { el._html = html; el.innerHTML = html; }   // only redraw when it changes, so clicks aren't lost
   }
-  return rowsHtml.slice(p * PAGE_SIZE, (p + 1) * PAGE_SIZE);
+  return rowsHtml.slice(p * per, (p + 1) * per);
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-pager]');
@@ -83,7 +100,7 @@ function fmtUntil(ms) {
 }
 const ONONE = '—';
 const featTags = f => f && f.length ? f.map(x => '<span class="tag">' + escH(x) + '</span>').join('') : ONONE;
-// LM Studio log timestamps are local "YYYY-MM-DD HH:MM:SS"
+// Bionic (LM Studio-format) log timestamps are local "YYYY-MM-DD HH:MM:SS"
 function lmTs(ts) {
   const m = /^(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+)$/.exec(ts || '');
   return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : null;
@@ -93,6 +110,16 @@ const EXT_ICON = '<svg class="extico" viewBox="0 0 24 24" fill="none" stroke="cu
 function extLink(text, url, title) {
   return url ? '<a class="ext" href="' + escH(url) + '" target="_blank" rel="noopener" title="' + escH(title || url) + ' (opens in a new tab)">' + escH(text) + EXT_ICON + '</a>' : escH(text);
 }
+// Model names are shown at most NAME_MAX characters long (AI_SCOPE-053): longer ones end in "…" and show in full on hover.
+const NAME_MAX = 30;
+function cutName(s) { s = String(s == null ? '' : s); return s.length > NAME_MAX ? s.slice(0, NAME_MAX - 1) + '…' : s; }
+// HTML for a model name in a table cell (escaped; a span with the full name as its tooltip when cut).
+// tip: tooltip to use instead of the full name (e.g. ComfyUI's file name, which includes it).
+function nameHtml(s, tip) { s = String(s == null ? '' : s); const c = cutName(s); return c === s ? escH(s) : '<span title="' + escH(tip || s) + '">' + escH(c) + '</span>'; }
+// Same for an element filled with textContent (the cards' Model box).
+function setName(el, s) { s = String(s == null ? '' : s); const c = cutName(s); el.textContent = c; el.title = c === s ? '' : s; }
+// A model name that links somewhere (extLink with the name cut; the full name goes first in the link's tooltip).
+function nameLink(s, url, title) { s = String(s == null ? '' : s); const c = cutName(s); return c === s ? extLink(s, url, title) : extLink(c, url, s + ' — ' + (title || url)); }
 // Per-browser preferences (open tabs, theme, chosen filters).
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },

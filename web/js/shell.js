@@ -30,11 +30,15 @@ function ensurePanel(sc) {
 }
 SCOPES.forEach(ensurePanel);
 
-const DEFAULT_SCOPE = 'lmstudio';
+const DEFAULT_SCOPE = 'bionic';
 const installedIds = () => SCOPES.filter(x => x.installed).map(x => x.id).concat(CUSTOM.map(c => c.id));   // + custom scopes
 // AI_SCOPE-022: the SYSTEM scope is now "hardware" - rename it in this browser's saved tabs, and follow old #system links.
 ['aiscope.openTabs', 'aiscope.seenScopes'].forEach(k => { const v = store.get(k, null); if (Array.isArray(v) && v.includes('system')) store.set(k, v.map(x => x === 'system' ? 'hardware' : x)); });
 if (location.hash === '#system') history.replaceState(null, '', '#hardware');
+// AI_SCOPE-035: the "LM Studio" scope is now "bionic" (it was watching LM Studio's Bionic). Same for saved tabs and old #lmstudio links.
+// (Revisit when the LM Studio desktop app gets its own scope, AI_SCOPE-036.)
+['aiscope.openTabs', 'aiscope.seenScopes'].forEach(k => { const v = store.get(k, null); if (Array.isArray(v) && v.includes('lmstudio')) store.set(k, v.map(x => x === 'lmstudio' ? 'bionic' : x)); });
+if (location.hash === '#lmstudio') history.replaceState(null, '', '#bionic');
 // Which tabs are open, in what order (per browser). Default: all installed scopes (and custom scopes).
 let openTabs = store.get('aiscope.openTabs', installedIds()).filter(canOpen);
 // Drop tabs of removed scopes; scopes installed since this browser last looked (e.g. from another device) open once.
@@ -376,6 +380,8 @@ setInterval(async () => {
     if (JSON.stringify(list) !== JSON.stringify(SCOPES)) applyScopes(list);
     const custom = await (await fetch('/api/custom-scopes', { cache: 'no-store' })).json();
     if (JSON.stringify(custom) !== JSON.stringify(CUSTOM)) applyCustom(custom);
+    const layouts = await (await fetch('/api/scope-layouts', { cache: 'no-store' })).json();   // scope pages edited elsewhere (AI_SCOPE-020)
+    if (JSON.stringify(layouts) !== JSON.stringify(SCOPE_LAYOUTS)) setScopeLayouts(layouts);
   } catch (e) {}
 }, 5000);
 
@@ -394,8 +400,7 @@ function dlgBusy(btnText) {
   b.disabled = true; b.textContent = btnText;
 }
 async function postScope(action, body) {
-  const r = await fetch('/api/scopes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return r.json();
+  return postJson('/api/scopes/' + action, body);
 }
 function fieldHtml(f, edit) {
   const v = edit ? f.value : f.default;
@@ -467,8 +472,7 @@ function openRemove(id) {
 
 // ---- Custom scopes: create / settings (name) / remove, in the same dialog ----
 async function postCustom(action, body) {
-  const r = await fetch('/api/custom-scopes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return r.json();
+  return postJson('/api/custom-scopes/' + action, body);
 }
 // id = null: create a new custom scope (then open it, in edit mode since it's empty); else rename it.
 function openCustomName(id) {

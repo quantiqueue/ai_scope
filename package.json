@@ -1,13 +1,14 @@
 {
   "name": "ai_scope",
-  "version": "0.2.0",
-  "description": "AI_SCOPE: local dashboard for monitoring AI tools (LM Studio, Ollama, ComfyUI, CPU/GPU/VRAM)",
+  "version": "0.3.0",
+  "description": "AI_SCOPE: local dashboard for monitoring AI tools (Bionic, Ollama, ComfyUI, Strata, CPU/GPU/VRAM)",
   "keywords": [
     "ai",
     "llm",
     "dashboard",
     "monitor",
     "lmstudio",
+    "bionic",
     "ollama",
     "comfyui",
     "gpu",
@@ -23,7 +24,7 @@
     "url": "https://github.com/quantiqueue/ai_scope/issues"
   },
   "license": "MIT",
-  "author": "ferr",
+  "author": "quantiqueue",
   "main": "server.js",
   "bin": {
     "ai_scope": "bin/ai_scope.js"
@@ -38,13 +39,24 @@
     "customscopes.js",
     "paths.js",
     "hwstats.js",
+    "diskstats.js",
+    "diskstats.ps1",
     "lmstats.js",
     "lmapi.js",
     "comfystats.js",
     "ollamastats.js",
     "stratastats.js",
+    "llamacppstats.js",
+    "procstats.js",
+    "procstats.ps1",
+    "procnix.js",
+    "proctop.js",
+    "proctop.ps1",
+    "scopelayouts.js",
+    "hostcheck.js",
     "logos.js",
     "README.md",
+    "manual/",
     "LICENSE"
   ],
   "engines": {

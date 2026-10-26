@@ -12,6 +12,10 @@
 const http = require('http');
 const fs = require('fs');
 const hwstats = require('./hwstats');
+const procstats = require('./procstats');   // Strata's model process: VRAM per card, GPU %, CPU, RAM (Windows; AI_SCOPE-051)
+// The engine (python, serve/server.py) listens on the instance's private port (e.g. 18500) and runs the model in a child
+// strata.exe. AI_SCOPE only uses that port to find the process (netstat); it never talks to the key-protected engine.
+const MODEL_PROCS = ['strata.exe'];
 const paths = require('./paths');                       // data folder: ~/.ai_scope
 
 const DEFAULT_URL = 'http://127.0.0.1:47831';
@@ -119,6 +123,8 @@ function poll() {
       return;
     }
     online = true; lastError = null; native = d; fetchedAt = Date.now();
+    const enginePorts = d.instances.map(function (i) { return +i.port; }).filter(function (p) { return p > 0 && p < 65536; });
+    if (enginePorts.length) procstats.watch('strata', enginePorts, MODEL_PROCS); else procstats.unwatch('strata');
     collectRequests(d.instances);
     if ((!logo.light || !logo.dark) && Date.now() - logo.tried > 60000) fetchLogos();
   });
@@ -170,6 +176,8 @@ function getState(limit) {
                 current: null, loaded: null, totals: null, average: null, installed: [],
                 totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse() };
   if (!d) return out;
+  // Strata's model process(es) (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded
+  out.process = procstats.get('strata'); out.processSupported = procstats.supported();
   out.version = d.version || null;
   out.engineVersion = (d.engineInfo && d.engineInfo.version) || (d.engine && d.engine.version) || null;
   out.updateNotice = (d.engine && d.engine.updateNotice) || null;
@@ -233,6 +241,7 @@ function start(settings) {
 }
 function stop() {
   if (timer) { clearInterval(timer); timer = null; }
+  procstats.unwatch('strata');
   online = false; native = null; lastError = null;
 }
 

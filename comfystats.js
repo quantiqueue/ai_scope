@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const hwstats = require('./hwstats');
 const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
+const procstats = require('./procstats');   // ComfyUI's own GPU/VRAM/CPU/RAM (Windows; AI_SCOPE-038)
 
 const AUTO_URLS = ['http://127.0.0.1:8188', 'http://127.0.0.1:8000'];
 let CANDIDATES = AUTO_URLS;   // set from the scope's install settings in start()
@@ -176,7 +177,7 @@ function detect(cb) {
     if (i >= CANDIDATES.length) return cb(false);
     const url = CANDIDATES[i++].replace(/\/$/, '');
     getJson(url + '/queue', 2000, function (err) {
-      if (!err) { base = url; return cb(true); }
+      if (!err) { base = url; procstats.watch('comfyui', portsOf([url])); return cb(true); }
       next();
     });
   })();
@@ -318,6 +319,12 @@ function getModels(vram) {
   };
 }
 
+// Port(s) ComfyUI listens on, for finding its process (procstats.js).
+function portsOf(urls) {
+  return urls.map(function (u) { try { const x = new URL(u); return +(x.port || (x.protocol === 'https:' ? 443 : 80)); } catch (e) { return 0; } })
+    .filter(function (n) { return n > 0; });
+}
+
 // settings: { url (empty = auto-detect 8188, then 8000) }
 let timers = [];
 let runsLoaded = false;
@@ -325,6 +332,7 @@ function start(settings) {
   stop();
   CANDIDATES = settings && settings.url ? [settings.url] : AUTO_URLS;
   if (!runsLoaded) { runsLoaded = true; loadRuns(); }
+  procstats.watch('comfyui', portsOf(CANDIDATES));
   poll();
   timers.push(setInterval(poll, 2000));
   timers.push(setInterval(fetchHistory, 10000));
@@ -333,6 +341,7 @@ function start(settings) {
 function stop() {
   timers.forEach(function (t) { clearInterval(t); clearTimeout(t); });
   timers = [];
+  procstats.unwatch('comfyui');
   base = null; online = false; current = null; pending = 0; lastError = null;
 }
 
@@ -359,6 +368,8 @@ function getState(limit) {
       progress: current.progress,
     } : null,
     average: avg,
+    // ComfyUI's own processes (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or if not found
+    process: online ? procstats.get('comfyui') : null,
     totalRuns: runs.length,
     runs: runs.slice(-limit).reverse(),
   };

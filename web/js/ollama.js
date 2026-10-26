@@ -41,14 +41,17 @@ function ollamaHelpHtml(d) {
     '<li><b>Mac / Linux terminal</b>: <code>export OLLAMA_HOST=127.0.0.1:' + px.port + '</code>' + copyBtn('export OLLAMA_HOST=127.0.0.1:' + px.port) + ' then <code>ollama run qwen3.5:4b</code> (applies to that window only; add the line to <code>~/.zshrc</code> or <code>~/.bashrc</code> to make it permanent)</li>' +
     '<li><b>VS Code</b> (Continue, Cline, Copilot, …): in the extension&#39;s Ollama settings, change the address / API base from <code>http://localhost:11434</code> to <code>' + proxyUrl + '</code>' + copyBtn(proxyUrl) + '</li>' +
     '<li><b>Other apps and scripts</b>: set the Ollama URL to <code>' + proxyUrl + '</code>' + copyBtn(proxyUrl) + ', or <code>' + proxyUrl + '/v1</code>' + copyBtn(proxyUrl + '/v1') + ' for OpenAI-style clients (prompt speed and load time aren&#39;t available for those)</li>' +
-    '</ul>');
+    '</ul>' +
+    '<p>More (making it permanent, checking it works, troubleshooting): ' +
+    extLink('Configuring Ollama', 'https://github.com/quantiqueue/ai_scope/blob/main/manual/CONFIGURING_OLLAMA.md', 'The relay guide in the AI_SCOPE manual on GitHub') + '</p>');
 }
 
 // ---------- Current request ----------
 defineLens({
   id: 'ollama.current', scope: 'ollama', size: 'wide',
   name: 'Current request',
-  description: 'What Ollama is answering right now (through the AI_SCOPE relay): speed, tokens and system load.',
+  description: 'What Ollama is answering right now (through the AI_SCOPE relay): speed, tokens and the model process\'s GPU, VRAM, CPU and RAM use.',
+  settings: [PROC_STATS_FIELD],
   markup: nowCardMarkup([
     { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
     { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
@@ -59,7 +62,7 @@ defineLens({
     $('dot').className = 'dot' + (cur ? ' live' : d.online ? '' : ' off');
     if (!d.online) {
       $('title').textContent = 'Ollama is not running';
-      $('model').textContent = ONONE;
+      setName($('model'), ONONE);
       show('tpsBox', false); show('tokBox', false); show('timeBox', false);
       $('foot').textContent = d.error || '';
       $('detail').textContent = '';
@@ -69,7 +72,7 @@ defineLens({
       // state line: what the request is doing (the lens title is in the header tab)
       const doing = { loading:'loading model', prompt:'reading prompt', thinking:'thinking', gen:'generating' }[cur.phase] || 'working';
       $('title').textContent = 'Running — ' + doing + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
-      $('model').textContent = cur.model;
+      setName($('model'), cur.model);
       show('tpsBox', true); show('tokBox', true); show('timeBox', true);
       $('tpsLabel').textContent = 'Current gen tok/s';   // the phase (loading / reading prompt / thinking) is on the state line
       $('tps').textContent = (cur.phase === 'gen' || cur.phase === 'thinking') && cur.liveTps != null ? fmtTps(cur.liveTps) : '…';
@@ -78,11 +81,12 @@ defineLens({
       $('detail').textContent = cur.endpoint + ' via AI_SCOPE relay';   // details next to the state on the top line
       $('foot').textContent = '';
       $('foot').classList.remove('warn');
-      setSysLoad($('load'), true);
+      // Ollama's model process when known (Windows); hidden on Windows without one, whole-computer System load elsewhere
+      setSysLoad($('load'), L.settings.procStats !== false && (!(d.processSupported && !d.process)), d.process, 'Ollama');
     } else {
       const a = d.average;
       $('title').textContent = 'Idle — no request running';
-      $('model').textContent = a ? a.model : ONONE;
+      setName($('model'), a ? a.model : ONONE);
       show('tpsBox', !!a); show('tokBox', false); show('timeBox', false);
       $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
       $('tps').textContent = a ? fmtTps(a.genTps) : ONONE;
@@ -109,7 +113,7 @@ defineLens({
       const g = m.gpuPct;
       const proc = g == null ? ONONE : g >= 100 ? '100% GPU' : g <= 0 ? '100% CPU' : (100 - g) + '% CPU / ' + g + '% GPU';
       const until = fmtUntil(m.expiresAt);
-      return '<tr><td class="model">' + escH(m.name) + (m.quant ? '<span class="na"> · ' + escH(m.quant) + '</span>' : '') + '</td>' +
+      return '<tr><td class="model">' + nameHtml(m.name) + (m.quant ? '<span class="na"> · ' + escH(m.quant) + '</span>' : '') + '</td>' +
         '<td>' + escH(m.params || ONONE) + '</td>' +
         '<td title="' + fmtBytes(m.sizeVram) + ' on GPU">' + fmtBytes(m.size) + '</td>' +
         '<td>' + (m.context ? fmtNum(m.context) + (m.maxContext ? '<span class="na"> / ' + fmtNum(m.maxContext) + '</span>' : '') : ONONE) + '</td>' +
@@ -119,7 +123,8 @@ defineLens({
     $('empty').hidden = d.loaded.length > 0;
     $('empty').textContent = d.online ? 'No model loaded. Ollama loads a model on the first request and unloads it after it has been idle (5 min by default).' : 'Ollama is offline.';
     const spill = d.loaded.some(m => m.gpuPct != null && m.gpuPct < 100);
-    $('hint').textContent = spill ? '— part of a model is running on the CPU, so generation will be slower' : '';
+    const where = d.loaded.length ? procVramText(d.process) : '';   // per-card VRAM of the model process (Windows, AI_SCOPE-050)
+    $('hint').textContent = [where, spill ? 'part of a model is running on the CPU, so generation will be slower' : ''].filter(Boolean).map((t, i) => (i ? '' : '— ') + t).join(' · ');
   },
 });
 
@@ -128,6 +133,7 @@ defineLens({
   id: 'ollama.requests', scope: 'ollama', size: 'full',
   name: 'Requests',
   description: 'Finished requests sent through the AI_SCOPE relay: speeds, tokens, load time, first token, peak load.',
+  settings: [PER_PAGE_FIELD],
   markup: tableLensMarkup({ title:'Requests', pager:true,
     headExtra: '\n      <button class="helpbtn" data-k="helpBtn" type="button" title="Why only these requests? How to set it up" aria-expanded="false">?</button>',
     before: '\n      <div class="relaywarn" data-k="warn" hidden><span data-k="warnText"></span> <button type="button" class="linkbtn" data-k="warnHelp">How to set up the relay</button></div>' +
@@ -163,7 +169,7 @@ defineLens({
       const statusTag = r.status === 'ok' ? '' : '<span class="status ' + (r.status === 'aborted' ? 'interrupted' : 'error') + '" title="' + escH(r.error || '') + '">' + escH(r.status) + '</span> ';
       return '<tr' + (isNew ? ' class="new"' : '') + '>' +
         '<td>' + escH(fmtWhen(r.start)) + '</td>' +
-        '<td class="model" title="' + escH(r.endpoint) + '">' + statusTag + escH(r.model) + '</td>' +
+        '<td class="model" title="' + escH(r.endpoint) + '">' + statusTag + nameHtml(r.model) + '</td>' +
         '<td class="tps"' + approx + '>' + fmtTps(r.genTps) + '</td>' +
         '<td title="' + (r.thinkTokens ? fmtNum(r.thinkTokens) + ' of these were thinking tokens' : '') + '">' + fmtNum(r.genTokens) + '</td>' +
         '<td>' + fmtTps(r.promptTps) + '</td>' +
@@ -171,7 +177,7 @@ defineLens({
         '<td>' + (r.loadMs != null ? fmtSec(r.loadMs) : ONONE) + '</td>' +
         '<td>' + fmtSec(r.ttftMs) + '</td>' +
         '<td>' + fmtSec(r.totalMs) + '</td>' + peakCell(r.peak) + '</tr>';
-    }), $('pager')).join('');
+    }), $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
 });
@@ -181,15 +187,16 @@ defineLens({
   id: 'ollama.installed', scope: 'ollama', size: 'full',
   name: 'Installed models',
   description: 'Models installed in Ollama, with size, features, VRAM fit and max context.',
-  markup: tableLensMarkup({ title:'Installed models', foot:'',
+  settings: [PER_PAGE_FIELD],
+  markup: tableLensMarkup({ title:'Installed models', pager:true, foot:'',
     cols:['Model', 'Publisher', 'Arch', 'Params', 'Quant', 'Size', 'Features', 'VRAM fit', 'Max context', 'Modified'] }),
   render(L, d) {
     const $ = L.$, vt = d.vramTotal;
     $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' models · ' + fmtBytes(d.installed.reduce((a, m) => a + (m.size || 0), 0)) + ' on disk' +
       (vt ? ' · fit is weights vs ' + vramWord(d) + ' (context adds more)' : '') : '';
     const fitText = { fits:'fits', tight:'tight', spills:'partly CPU' };
-    $('rows').innerHTML = d.installed.map(m =>
-      '<tr><td class="model">' + extLink(m.name, m.libraryUrl || m.modelUrl, m.libraryUrl ? 'Ollama library page' : 'Hugging Face repo') +
+    $('rows').innerHTML = paginate(L.key, d.installed.map(m =>
+      '<tr><td class="model">' + nameLink(m.name, m.libraryUrl || m.modelUrl, m.libraryUrl ? 'Ollama library page' : 'Hugging Face repo') +
         (m.libraryUrl && m.modelUrl ? '<a class="tag" href="' + escH(m.modelUrl) + '" target="_blank" rel="noopener" title="Original model on Hugging Face' + (m.baseName ? ': ' + escH(m.baseName) : '') + ' (opens in a new tab)">HF' + EXT_ICON + '</a>' : '') +
         (m.loaded ? '<span class="tag">loaded</span>' : '') + '</td>' +
       '<td>' + (m.publisher ? extLink(m.publisher, m.publisherUrl, 'Publisher on Hugging Face') : ONONE) + '</td>' +
@@ -198,7 +205,7 @@ defineLens({
       '<td>' + featTags(m.features) + '</td>' +
       '<td>' + fitPill(m, fitText) + '</td>' +
       '<td>' + (m.maxContext ? fmtNum(m.maxContext) : ONONE) + '</td>' +
-      '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>').join('');
+      '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>'), $('pager'), L.settings.perPage).join('');
   },
 });
 
@@ -220,4 +227,4 @@ document.getElementById('oHeadHelpBtn').addEventListener('click', e => {
   box.hidden = !box.hidden;
   e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
 });
-mountScopePage('ollama', ['ollama.current', 'ollama.loaded', 'ollama.requests', 'ollama.installed']);
+defineScopeLayout('ollama', () => layoutOf([{ lens: 'ollama.current', settings: { width: 'full' } }, 'ollama.loaded', 'ollama.requests', 'ollama.installed']));

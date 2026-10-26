@@ -56,7 +56,7 @@
     <h1>ComfyUI &mdash; Workflow Runs</h1>
     <span class="meta" id="cMeta">Loading&hellip;</span>
   </div>
-  <div class="wrap" data-lenses><!-- ComfyUI lenses (web/js/comfyui.js) --></div>
+  <div class="wrap"><div class="cgrid" data-cgrid><!-- ComfyUI lenses (web/js/comfyui.js, layout.js) --></div></div>
 </section>
 
 <section class="panel" data-panel="ollama">
@@ -65,7 +65,7 @@
     <span class="meta" id="oMeta"><span id="oMetaA">Loading&hellip;</span><button class="helpbtn" id="oHeadHelpBtn" type="button" title="How to send requests through the AI_SCOPE relay" aria-expanded="false" hidden>?</button><span id="oMetaB"></span></span>
   </div>
   <div class="wrap"><div class="card helpcard" id="oHeadHelp" hidden></div></div>
-  <div class="wrap" data-lenses><!-- Ollama lenses (web/js/ollama.js) --></div>
+  <div class="wrap"><div class="cgrid" data-cgrid><!-- Ollama lenses (web/js/ollama.js, layout.js) --></div></div>
 </section>
 
 <section class="panel" data-panel="strata">
@@ -73,7 +73,15 @@
     <h1>Strata &mdash; Model &amp; Requests</h1>
     <span class="meta" id="sMeta">Loading&hellip;</span>
   </div>
-  <div class="wrap" data-lenses><!-- Strata lenses (web/js/strata.js) --></div>
+  <div class="wrap"><div class="cgrid" data-cgrid><!-- Strata lenses (web/js/strata.js, layout.js) --></div></div>
+</section>
+
+<section class="panel" data-panel="llamacpp">
+  <div class="section-head">
+    <h1>llama.cpp &mdash; Model &amp; Requests</h1>
+    <span class="meta" id="lcMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap"><div class="cgrid" data-cgrid><!-- llama.cpp lenses (web/js/llamacpp.js, layout.js) --></div></div>
 </section>
 
 <section class="panel" data-panel="hardware">
@@ -81,28 +89,37 @@
     <h1>Hardware</h1>
     <span class="meta" id="hwMeta">Loading&hellip;</span>
   </div>
-  <div class="wrap">
-    <div class="tiles" data-lenses><!-- Hardware lenses (web/js/hardware.js) --></div>
-  </div>
+  <div class="wrap"><div class="cgrid" data-cgrid><!-- Hardware lenses (web/js/hardware.js, layout.js) --></div></div>
 </section>
 
-<section class="panel" data-panel="lmstudio">
+<section class="panel" data-panel="processes">
+  <div class="section-head">
+    <h1>Processes</h1>
+    <span class="meta" id="pMeta">Loading&hellip;</span>
+  </div>
+  <div class="wrap"><div class="cgrid" data-cgrid><!-- Processes lenses (web/js/processes.js, layout.js) --></div></div>
+</section>
+
+<section class="panel" data-panel="bionic">
 <div class="section-head">
-  <h1>LM Studio &mdash; Models &amp; Requests</h1>
+  <h1>Bionic &mdash; Models &amp; Requests</h1>
   <span class="meta" id="meta">Loading&hellip;</span>
 </div>
-<div class="wrap" data-lenses><!-- LM Studio lenses (web/js/lmstudio.js) --></div>
+<div class="wrap"><div class="cgrid" data-cgrid><!-- Bionic lenses (web/js/bionic.js, layout.js) --></div></div>
 </section>
-<script>window.AI_SCOPE_SCOPES = /*__SCOPES__*/[]; window.AI_SCOPE_CUSTOM = /*__CUSTOM__*/[];</script>
+<script>window.AI_SCOPE_SCOPES = /*__SCOPES__*/[]; window.AI_SCOPE_CUSTOM = /*__CUSTOM__*/[]; window.AI_SCOPE_LAYOUTS = /*__LAYOUTS__*/{}; window.AI_SCOPE_OS = /*__OS__*/'';</script>
 <!-- Client code, plain scripts in this order: shared helpers, one file per scope, then the shell (tabs, theme, gallery). -->
 <script src="/js/core.js"></script>
 <script src="/js/lens.js"></script>
 <script src="/js/hardware.js"></script>
+<script src="/js/processes.js"></script>
 <script src="/js/comfyui.js"></script>
 <script src="/js/ollama.js"></script>
-<script src="/js/lmstudio.js"></script>
+<script src="/js/bionic.js"></script>
 <script src="/js/strata.js"></script>
+<script src="/js/llamacpp.js"></script>
 <script src="/js/shell.js"></script>
+<script src="/js/layout.js"></script>
 <script src="/js/custom.js"></script>
 </body>
 </html>

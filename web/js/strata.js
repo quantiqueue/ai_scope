@@ -13,7 +13,8 @@ defineSource('strata', '/api/strata?limit=100');
 defineLens({
   id: 'strata.current', scope: 'strata', size: 'wide',
   name: 'Current request',
-  description: 'What Strata is answering right now: speed, tokens, prompt, context and system load.',
+  description: 'What Strata is answering right now: speed, tokens, prompt, context and the model process\'s GPU, VRAM, CPU and RAM use.',
+  settings: [PROC_STATS_FIELD],
   markup: nowCardMarkup([
     { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
     { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
@@ -27,7 +28,7 @@ defineLens({
     $('dot').className = 'dot' + (cur ? ' live' : d.online ? '' : ' off');
     if (!d.online) {
       $('title').textContent = 'Strata is not running';
-      $('model').textContent = ONONE;
+      setName($('model'), ONONE);
       boxes.forEach(b => show(b, false));
       $('foot').textContent = d.error || '';
       setSysLoad($('load'), false);
@@ -37,7 +38,7 @@ defineLens({
       const doing = cur.phaseText ? cur.phaseText.charAt(0).toLowerCase() + cur.phaseText.slice(1)
         : { loading:'loading model', reading:'reading prompt', thinking:'thinking', generating:'generating' }[cur.phase] || 'working';
       $('title').textContent = 'Running — ' + doing + (cur.queued ? ' (+' + cur.queued + ' queued)' : '');
-      $('model').textContent = cur.model;
+      setName($('model'), cur.model);
       boxes.forEach(b => show(b, true));
       const reading = cur.phase === 'reading' || cur.phase === 'loading';
       $('tpsLabel').textContent = cur.phase === 'loading' ? 'Loading model' : reading ? 'Prompt tok/s' : cur.phase === 'thinking' ? 'Thinking · tok/s' : 'Current gen tok/s';
@@ -52,11 +53,12 @@ defineLens({
       $('ctxBar').style.width = cur.contextUsed != null && cur.contextMax ? Math.min(100, 100 * cur.contextUsed / cur.contextMax) + '%' : '0';
       $('time').textContent = fmtSec(cur.elapsedMs);
       $('foot').textContent = '';   // the state is on the top line (an empty foot line is hidden)
-      setSysLoad($('load'), true);
+      // Strata's model process (strata.exe) when known (Windows); hidden on Windows without one, whole-computer System load elsewhere
+      setSysLoad($('load'), L.settings.procStats !== false && (!(d.processSupported && !d.process)), d.process, 'Strata');
     } else {
       const a = d.average, l = d.loaded;
       $('title').textContent = l && l.phase === 'unavailable' ? 'Engine not answering' : l ? 'Idle — no request running' : 'No model loaded';
-      $('model').textContent = l ? l.label : a ? a.model : ONONE;
+      setName($('model'), l ? l.label : a ? a.model : ONONE);
       boxes.forEach(b => show(b, false));
       show('tpsBox', !!a);
       $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
@@ -79,7 +81,7 @@ defineLens({
     cols:['Model', 'Variant', 'Context', 'KV cache', 'GPUs', 'Experts in VRAM', 'Free VRAM', 'Speculation', 'Loaded'] }),
   render(L, d) {
     const $ = L.$, l = d.loaded;
-    $('rows').innerHTML = l ? '<tr><td class="model">' + escH(l.label) + '</td>' +
+    $('rows').innerHTML = l ? '<tr><td class="model">' + nameHtml(l.label) + '</td>' +
       '<td>' + escH(l.variant || ONONE) + '</td>' +
       '<td>' + (l.context ? fmtNum(l.context) : ONONE) + '</td>' +
       '<td>' + escH(l.kv ? l.kv.toUpperCase() : ONONE) + '</td>' +
@@ -91,7 +93,8 @@ defineLens({
       '<td title="' + escH(l.loadedAt || '') + '">' + (l.loadedAt ? escH(fmtWhen(Date.parse(l.loadedAt))) : ONONE) + '</td></tr>' : '';
     $('empty').hidden = !!l;
     $('empty').textContent = d.online ? 'No model loaded. Load one in Strata (Models).' : 'Strata is offline. Start the Strata app to see its model and requests.';
-    $('hint').textContent = l && l.error ? '— ' + l.error : '';
+    const where = l ? procVramText(d.process) : '';   // per-card VRAM of the model process (Windows, AI_SCOPE-051)
+    $('hint').textContent = [where, l && l.error ? l.error : ''].filter(Boolean).map((t, i) => (i ? '' : '— ') + t).join(' · ');
   },
 });
 
@@ -100,6 +103,7 @@ defineLens({
   id: 'strata.requests', scope: 'strata', size: 'full',
   name: 'Requests',
   description: 'Finished requests: tokens, reused prompt, speeds, first token, hit rate, duration, peak load.',
+  settings: [PER_PAGE_FIELD],
   markup: tableLensMarkup({ title:'Requests', pager:true,
     cols:['Finished', 'Model', 'Prompt', 'Reused', 'Output', 'Gen tok/s', 'Prompt tok/s', 'First token', 'Hit rate', 'Duration', 'Peak load'] }),
   render(L, d) {
@@ -117,7 +121,7 @@ defineLens({
       const status = r.finish && r.finish !== 'stop' && r.finish !== 'length' ? '<span class="status interrupted" title="finish: ' + escH(r.finish) + '">' + escH(r.finish) + '</span> ' : '';
       return '<tr' + (isNew ? ' class="new"' : '') + '>' +
         '<td>' + escH(fmtWhen(r.end)) + '</td>' +
-        '<td class="model">' + status + escH(r.model) + '</td>' +
+        '<td class="model">' + status + nameHtml(r.model) + '</td>' +
         '<td>' + fmtNum(r.promptTokens) + '</td>' +
         '<td title="Prompt tokens reused from the conversation cache (not read again)">' + fmtNum(r.reused) + '</td>' +
         '<td>' + fmtNum(r.outputTokens) + '</td>' +
@@ -126,7 +130,7 @@ defineLens({
         '<td>' + (r.firstTokenMs != null ? fmtSec(r.firstTokenMs) : ONONE) + '</td>' +
         '<td title="Share of needed experts already in VRAM (the rest came from RAM)">' + fmtPct(r.hitRate) + '</td>' +
         '<td>' + fmtSec(r.durationMs) + '</td>' + peakCell(r.peak) + '</tr>';
-    }), $('pager')).join('');
+    }), $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
 });
@@ -137,20 +141,21 @@ defineLens({
   id: 'strata.installed', scope: 'strata', size: 'full',
   name: 'Installed models',
   description: 'Models installed in Strata, with size on disk, memory needed and Strata\'s own fit verdict.',
-  markup: tableLensMarkup({ title:'Installed models',
+  settings: [PER_PAGE_FIELD],
+  markup: tableLensMarkup({ title:'Installed models', pager:true,
     cols:['Model', 'Variant', 'On disk', 'Context', 'Memory needed', 'On this PC (Strata)', 'Status'] }),
   render(L, d) {
     const $ = L.$;
     $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' model' + (d.installed.length > 1 ? 's' : '') + ' · ' +
       fmtNum(Math.round(d.installed.reduce((a, m) => a + (m.diskGb || 0), 0))) + ' GB on disk · fit as judged by Strata for this PC' : '';
-    $('rows').innerHTML = d.installed.map(m =>
-      '<tr><td class="model">' + escH(m.name) + (m.loaded ? '<span class="tag">loaded</span>' : '') + (m.images ? '<span class="tag">images</span>' : '') + '</td>' +
+    $('rows').innerHTML = paginate(L.key, d.installed.map(m =>
+      '<tr><td class="model">' + nameHtml(m.name) + (m.loaded ? '<span class="tag">loaded</span>' : '') + (m.images ? '<span class="tag">images</span>' : '') + '</td>' +
       '<td>' + escH(m.variant) + '</td>' +
       '<td>' + (m.diskGb != null ? m.diskGb.toFixed(1) + ' GB' : ONONE) + '</td>' +
       '<td>' + (m.context ? fmtNum(m.context) : ONONE) + '</td>' +
       '<td>' + (m.memoryGb != null ? m.memoryGb.toFixed(1) + ' GB' : ONONE) + '</td>' +
       '<td title="' + escH(m.fitSummary || '') + '">' + (m.onThisPc ? '<span class="fit ' + (m.onThisPc === 'fits' ? 'fits' : /does not fit/.test(m.onThisPc) ? 'spills' : 'tight') + '">' + escH(m.onThisPc) + '</span>' : ONONE) + '</td>' +
-      '<td>' + (m.missingParts ? '<span class="status error">' + m.missingParts + ' parts missing</span>' : m.ready ? 'ready' : 'not ready') + '</td></tr>').join('');
+      '<td>' + (m.missingParts ? '<span class="status error">' + m.missingParts + ' parts missing</span>' : m.ready ? 'ready' : 'not ready') + '</td></tr>'), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = d.installed.length > 0;
     $('empty').textContent = d.online ? 'No models installed in Strata.' : 'Strata is offline.';
   },
@@ -163,4 +168,4 @@ subscribeSource('strata', (d, err) => {
   meta.textContent = (d.online ? 'connected to ' + d.url + (d.version ? ' · Strata ' + d.version : '') + (d.engineVersion ? ' · engine ' + d.engineVersion : '')
     : 'Strata offline') + ' · ' + d.totalRequests + ' requests saved · updates every 2 s';
 });
-mountScopePage('strata', ['strata.current', 'strata.loaded', 'strata.requests', 'strata.installed']);
+defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.loaded', 'strata.requests', 'strata.installed']));

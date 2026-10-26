@@ -1,7 +1,7 @@
 // App logos for the tabs and Scopes page, read at runtime from the apps' own install folders. When an app's logo
 // can't be read (app not installed here, moved, new format), a copy kept in assets/logos/ is used instead (see the
 // README there); only if that is missing too -> 404, and the UI falls back to the scope's SVG icon.
-// Override paths with OLLAMA_ICON / LMSTUDIO_ICON / COMFY_ASAR / STRATA_BRAND (folder). No dependencies; conservative JS.
+// Override paths with OLLAMA_ICON / BIONIC_EXE / COMFY_ASAR / STRATA_BRAND (folder). No dependencies; conservative JS.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -10,7 +10,8 @@ const os = require('os');
 const PROGRAMS = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs');
 const SOURCES = {
   ollama:   { type: 'ico',  file: process.env.OLLAMA_ICON   || path.join(PROGRAMS, 'Ollama', 'app.ico') },
-  lmstudio: { type: 'ico',  file: process.env.LMSTUDIO_ICON || path.join(PROGRAMS, 'Bionic', 'resources', 'icon.ico') },
+  // Bionic's icon is the one inside Bionic.exe (its resources\icon.ico is still the old LM Studio icon).
+  bionic:   { type: 'exe',  file: process.env.BIONIC_EXE    || path.join(PROGRAMS, 'Bionic', 'Bionic.exe') },
   comfyui:  { type: 'asar', file: process.env.COMFY_ASAR    || path.join(PROGRAMS, 'Comfy Desktop', 'resources', 'app.asar'),
               entry: ['assets', 'Comfy_Logo_x256.png'] },
   // Strata ships its mark as SVG in two versions: dark bars for light backgrounds, light bars for dark backgrounds.
@@ -39,6 +40,56 @@ function pngFromIco(buf) {
     if (!best || w > best.w || (w === best.w && size < best.size)) best = { w: w, size: size, off: off };
   }
   return best ? buf.slice(best.off, best.off + best.size) : null;
+}
+
+// Largest PNG icon embedded in a Windows .exe (its RT_ICON resources). Only the PE headers and the resource
+// section are read, not the whole file (Bionic.exe is ~225 MB).
+function pngFromExe(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const read = function (len, pos) { const b = Buffer.alloc(len); const n = fs.readSync(fd, b, 0, len, pos); return b.slice(0, n); };
+    const dos = read(64, 0);
+    if (dos.length < 64 || dos.toString('latin1', 0, 2) !== 'MZ') return null;
+    const peOff = dos.readUInt32LE(0x3c);
+    const hdr = read(4096, peOff);
+    if (hdr.length < 248 || hdr.toString('latin1', 0, 4) !== 'PE\0\0') return null;
+    const nSec = hdr.readUInt16LE(6), optSize = hdr.readUInt16LE(20), opt = 24;
+    const magic = hdr.readUInt16LE(opt);
+    const dd = opt + (magic === 0x20b ? 112 : magic === 0x10b ? 96 : -1);
+    if (dd < opt) return null;
+    const rsrcRva = hdr.readUInt32LE(dd + 16);
+    if (!rsrcRva) return null;
+    let sec = null;
+    for (let i = 0; i < nSec; i++) {
+      const o = opt + optSize + 40 * i;
+      if (o + 40 > hdr.length) break;
+      const va = hdr.readUInt32LE(o + 12), vsize = Math.max(hdr.readUInt32LE(o + 8), hdr.readUInt32LE(o + 16));
+      if (rsrcRva >= va && rsrcRva < va + vsize) sec = { va: va, raw: hdr.readUInt32LE(o + 20), size: hdr.readUInt32LE(o + 16) };
+    }
+    if (!sec || sec.size > 64 * 1024 * 1024) return null;
+    const res = read(sec.size, sec.raw), root = rsrcRva - sec.va;
+    const entries = function (off) {   // resource directory -> [{ id, off, dir }]
+      const out = [], n = res.readUInt16LE(off + 12) + res.readUInt16LE(off + 14);
+      for (let i = 0; i < n; i++) {
+        const e = off + 16 + 8 * i, name = res.readUInt32LE(e), to = res.readUInt32LE(e + 4);
+        out.push({ id: name & 0x80000000 ? null : name, off: root + (to & 0x7fffffff), dir: !!(to & 0x80000000) });
+      }
+      return out;
+    };
+    let best = null;
+    entries(root).filter(function (t) { return t.id === 3 && t.dir; }).forEach(function (t) {          // RT_ICON
+      entries(t.off).forEach(function (icon) {
+        if (!icon.dir) return;
+        const leaf = entries(icon.off)[0];                                                             // first language
+        if (!leaf || leaf.dir) return;
+        const start = res.readUInt32LE(leaf.off) - sec.va, size = res.readUInt32LE(leaf.off + 4);
+        if (start < 0 || start + size > res.length || size < 24 || res.readUInt32BE(start) !== 0x89504e47) return;   // PNG icons only
+        const w = res.readUInt32BE(start + 16);
+        if (!best || w > best.w || (w === best.w && size < best.size)) best = { w: w, start: start, size: size };
+      });
+    });
+    return best ? Buffer.from(res.slice(best.start, best.start + best.size)) : null;
+  } catch (e) { return null; } finally { fs.closeSync(fd); }
 }
 
 // One file from an Electron .asar archive (header: 16 bytes + JSON index; file offsets are relative to the data start).
@@ -93,6 +144,7 @@ function liveLogo(id) {
   let png = null;
   try {
     if (src.type === 'ico') png = pngFromIco(fs.readFileSync(src.file));
+    else if (src.type === 'exe') png = /\.ico$/i.test(src.file) ? pngFromIco(fs.readFileSync(src.file)) : pngFromExe(src.file);
     else png = fileFromAsar(src.file, src.entry);
     if (png && png.readUInt32BE(0) !== 0x89504e47) png = null;
   } catch (e) { png = null; }

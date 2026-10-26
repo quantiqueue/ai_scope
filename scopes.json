@@ -11,19 +11,28 @@
       "settings": []
     },
     {
-      "id": "lmstudio",
-      "name": "LM Studio",
+      "id": "processes",
+      "name": "Processes",
+      "desc": "Top processes by VRAM, GPU, CPU and RAM (Windows)",
+      "builtin": true,
+      "modules": [],
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 6h13M8 12h13M8 18h13\"/><path d=\"M3 6h.01M3 12h.01M3 18h.01\"/></svg>",
+      "settings": []
+    },
+    {
+      "id": "bionic",
+      "name": "Bionic",
       "desc": "Loaded and installed models, plus token performance for recent requests",
       "logo": true,
       "modules": ["lmstats", "lmapi"],
       "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 3v18h18\"/><path d=\"M7 15l4-4 3 3 5-6\"/></svg>",
       "settings": [
-        { "key": "home", "label": "LM Studio folder", "type": "folder", "default": "~/.lmstudio", "required": true, "mustExist": true,
-          "help": "LM Studio's data folder. Request stats are read from its server logs." },
+        { "key": "home", "label": "Data folder", "type": "folder", "default": "~/.lmstudio", "required": true, "mustExist": true,
+          "help": "Bionic's data folder (it uses LM Studio's .lmstudio folder). Request stats are read from its server logs." },
         { "key": "url", "label": "Server URL", "type": "url", "default": "", "placeholder": "Auto-detect (127.0.0.1:1234, then :1235)",
-          "help": "LM Studio's local server (Developer tab). Leave empty to auto-detect." },
-        { "key": "modelsDir", "label": "Models folder", "type": "folder", "default": "", "placeholder": "Default: the models folder inside the LM Studio folder", "mustExist": true,
-          "help": "Only needed if you moved your models (My Models → Models directory)." }
+          "help": "Bionic's local server (Local Server screen). Leave empty to auto-detect." },
+        { "key": "modelsDir", "label": "Models folder", "type": "folder", "default": "", "placeholder": "Default: the models folder inside the data folder", "mustExist": true,
+          "help": "Only needed if you moved Bionic's models folder somewhere else." }
       ]
     },
     {
@@ -62,6 +71,18 @@
       "settings": [
         { "key": "url", "label": "Strata app URL", "type": "url", "default": "", "placeholder": "Default: http://127.0.0.1:47831",
           "help": "The Strata desktop app's local address (shown in Strata under Connect an app, without /v1). Leave empty for the default." }
+      ]
+    },
+    {
+      "id": "llamacpp",
+      "name": "llama.cpp",
+      "desc": "Live slots, the loaded model and token performance from a llama.cpp server (llama serve or llama-server)",
+      "logo": true,
+      "modules": ["llamacppstats"],
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z\"/><path d=\"M9 10h6M9 14h4\"/></svg>",
+      "settings": [
+        { "key": "url", "label": "Server URL", "type": "url", "default": "", "placeholder": "Auto-detect (127.0.0.1:9931, then :8080)",
+          "help": "Where llama serve (port 9931) or llama-server (port 8080) is listening. Leave empty to auto-detect. Needs the /slots endpoint (on by default)." }
       ]
     }
   ]

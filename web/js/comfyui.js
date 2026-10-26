@@ -13,7 +13,8 @@ defineSource('comfyui.models', '/api/comfy/models', 'comfyui', 5000);
 defineLens({
   id: 'comfyui.current', scope: 'comfyui', size: 'wide',
   name: 'Current job',
-  description: 'The workflow ComfyUI is running: model, step progress, speed, elapsed time and system load.',
+  description: 'The workflow ComfyUI is running: model, step progress, speed, elapsed time and ComfyUI\'s own GPU, VRAM, CPU and RAM use.',
+  settings: [PROC_STATS_FIELD],
   markup: nowCardMarkup([
     { box:'progBox', label:'Progress', labelK:'progLabel', k:'prog', bar:'bar' },
     { box:'rateBox', label:'Speed', k:'rate', small:true },
@@ -25,7 +26,7 @@ defineLens({
     const show = (k, on) => { $(k).hidden = !on; };
     if (!d.online) {
       $('title').textContent = 'ComfyUI is not running';
-      $('model').textContent = '—';
+      setName($('model'), '—');
       show('progBox', false); show('rateBox', false); show('timeBox', false);
       $('foot').textContent = d.error || '';
       $('detail').textContent = '';
@@ -35,7 +36,7 @@ defineLens({
       // "starting" until ComfyUI reports a progress bar, then "sampling", or the node's own label (e.g. "Remesh DC")
       const pr = cur.progress, doing = !pr ? 'starting' : pr.label && pr.label !== 'Steps' ? pr.label : 'sampling';
       $('title').textContent = 'Running — ' + doing + (d.pending ? ' (+' + d.pending + ' queued)' : '');
-      $('model').textContent = cur.summary.models.join(' + ') || 'unknown';
+      setName($('model'), cur.summary.models.join(' + ') || 'unknown');
       const p = cur.progress;
       show('progBox', true); show('rateBox', true); show('timeBox', true);
       $('progLabel').textContent = p && p.label ? p.label : 'Steps';
@@ -45,7 +46,7 @@ defineLens({
       $('timeLabel').textContent = 'Elapsed';
       $('time').textContent = fmtDur(cur.elapsedMs);
       const sm = cur.summary;
-      setSysLoad($('load'), true);
+      setSysLoad($('load'), L.settings.procStats !== false, d.process, 'ComfyUI');   // ComfyUI's own GPU / VRAM / CPU / RAM when known (Windows), else whole computer
       // workflow details next to the state on the top line (the step count is already in the Steps box)
       $('detail').textContent = [sm.width ? sm.width + '×' + sm.height + (sm.batch > 1 ? ' ×' + sm.batch : '') : null,
         sm.sampler, sm.loras.length ? 'LoRA: ' + sm.loras.join(', ') : null].filter(Boolean).join(' · ');
@@ -53,7 +54,7 @@ defineLens({
     } else {
       const a = d.average;
       $('title').textContent = 'Idle — no workflow running' + (d.pending ? ' (' + d.pending + ' queued)' : '');
-      $('model').textContent = a ? a.model : '—';
+      setName($('model'), a ? a.model : '—');
       show('progBox', false); show('rateBox', false); show('timeBox', !!a);
       $('timeLabel').textContent = a ? 'Avg run time (last ' + a.runs + ' runs)' : 'Avg run time';
       $('time').textContent = a ? fmtDur(a.avgMs) : '—';
@@ -69,6 +70,7 @@ defineLens({
   id: 'comfyui.runs', scope: 'comfyui', size: 'full',
   name: 'Runs',
   description: 'Finished workflow runs: model, size, steps, sampler, run time, peak load, status and images.',
+  settings: [PER_PAGE_FIELD],
   markup: tableLensMarkup({ title:'Runs', hint:'', pager:true,
     foot: '\n      <div class="err" data-k="err" hidden></div>',
     cols:['Finished', 'Model', 'Size', 'Steps', 'Sampler', 'Run time', 'Peak load', 'Status', 'Images'] }),
@@ -83,7 +85,7 @@ defineLens({
         (r.imageCount > 3 ? '<span class="more">+' + (r.imageCount - 3) + '</span>' : '');
       return '<tr' + (isNew ? ' class="new"' : '') + '>' +
         '<td>' + escH(fmtWhen(r.end)) + '</td>' +
-        '<td class="model" title="' + escH(s.loras.length ? 'LoRA: ' + s.loras.join(', ') : '') + '">' + escH(s.models.join(' + ') || '—') + '</td>' +
+        '<td class="model" title="' + escH(s.loras.length ? 'LoRA: ' + s.loras.join(', ') : '') + '">' + nameHtml(s.models.join(' + ') || '—') + '</td>' +
         '<td>' + (s.width ? s.width + '×' + s.height + (s.batch > 1 ? ' ×' + s.batch : '') : '—') + '</td>' +
         '<td>' + (s.steps != null ? s.steps : '—') + '</td>' +
         '<td>' + escH(s.sampler || '—') + '</td>' +
@@ -91,7 +93,7 @@ defineLens({
         peakCell(r.peak) +
         '<td><span class="status ' + escH(r.status) + '" title="' + escH(r.error || '') + '">' + escH(r.status) + '</span></td>' +
         '<td><div class="thumbs">' + (thumbs || '<span class="more">—</span>') + '</div></td></tr>';
-    }), $('pager')).join('');
+    }), $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
 });
@@ -105,6 +107,7 @@ defineLens({
   id: 'comfyui.installed', scope: 'comfyui', source: 'comfyui.models', size: 'full',
   name: 'Installed models',
   description: 'Model files in ComfyUI\'s folders, filterable by type, with VRAM fit, runs, last used and average run time.',
+  settings: [PER_PAGE_FIELD],
   markup: tableLensMarkup({ title:'Installed models', pager:true,
     before: '\n    <div class="chips" data-k="chips"></div>',
     cols:['Model', 'Publisher', 'Type', 'Size', 'VRAM fit', 'Runs', 'Last used', 'Avg run time', 'Added'] }),
@@ -139,7 +142,7 @@ defineLens({
     $('empty').textContent = d.online ? 'Loading model list…' : 'ComfyUI is offline.';
     const fitText = { fits:'fits', tight:'tight', spills:'offloads' };
     const rows = list.map(m =>
-      '<tr><td class="model" title="' + escH(m.file) + '">' + escH(m.name) + '</td>' +
+      '<tr><td class="model" title="' + escH(m.file) + '">' + nameHtml(m.name, m.file) + '</td>' +
       '<td>' + escH(m.publisher || ONONE) + '</td>' +
       '<td>' + escH(cmType(m.folder)) + '</td>' +
       '<td>' + fmtBytes(m.size) + '</td>' +
@@ -148,7 +151,7 @@ defineLens({
       '<td>' + (m.lastUsed ? escH(fmtWhen(m.lastUsed)) : ONONE) + '</td>' +
       '<td>' + (m.avgMs ? fmtDur(m.avgMs) : ONONE) + '</td>' +
       '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>');
-    $('rows').innerHTML = paginate(L.key, rows, $('pager')).join('');
+    $('rows').innerHTML = paginate(L.key, rows, $('pager'), L.settings.perPage).join('');
   },
 });
 
@@ -158,4 +161,4 @@ subscribeSource('comfyui', (d, err) => {
   if (err) { meta.textContent = 'Could not reach AI_SCOPE server: ' + err.message; return; }
   meta.textContent = (d.online ? 'connected to ' + d.url : 'ComfyUI offline') + ' · ' + d.totalRuns + ' runs saved · updates every 2 s';
 });
-mountScopePage('comfyui', ['comfyui.current', 'comfyui.runs', 'comfyui.installed']);
+defineScopeLayout('comfyui', () => layoutOf([{ lens: 'comfyui.current', settings: { width: 'full' } }, 'comfyui.runs', 'comfyui.installed']));

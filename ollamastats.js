@@ -7,10 +7,16 @@
 // Settings (Ollama URL, relay port) come from the scope's install settings in start().
 // No dependencies; conservative JS for older Node versions.
 'use strict';
+const hostAllowed = require('./hostcheck').hostAllowed;
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const hwstats = require('./hwstats');
+const procstats = require('./procstats');   // Ollama's model process: VRAM per card, GPU %, CPU, RAM (Windows; AI_SCOPE-050)
+// Ollama (0.40 on snow) runs each loaded model in a child llama-server.exe of `ollama serve`; older versions used ollama_llama_server.exe.
+// 'ollama runner': newer Ollama builds run each model as `ollama runner …` (same binary) - matched by name + first
+// argument on Linux / macOS (AI_SCOPE-052; not seen on a test machine yet). Exe names: Windows (.exe ignored elsewhere).
+const MODEL_PROCS = ['llama-server.exe', 'ollama_llama_server.exe', 'ollama runner'];
 const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
 const StringDecoder = require('string_decoder').StringDecoder;
 
@@ -265,6 +271,12 @@ function finish(rec, aborted) {
 let proxySrv = null;
 function startProxy() {
   const srv = proxySrv = http.createServer(function (req, res) {
+    // DNS-rebinding guard (AI_SCOPE-021): the relay rewrites Host for Ollama, which would hide a foreign name from
+    // Ollama's own check - so check it here first.
+    if (!hostAllowed(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'AI_SCOPE relay: unknown host name (see AI_SCOPE_ALLOWED_HOSTS)' }));
+    }
     const ep = req.url.split('?')[0];
     let rec = null;
     if (req.method === 'POST') { lastRelayAt = Date.now(); res.on('close', function () { lastRelayAt = Date.now(); }); }   // any model call (also embeddings)
@@ -344,6 +356,8 @@ function getState(limit, vram) {
       return Object.assign({ fit: f ? f.fit : null, fitGpus: f ? f.gpus || null : null, loaded: loaded.some(function (l) { return l.name === m.name; }) }, m, sourceOf(m));
     }).sort(function (a, b) { return (b.loaded - a.loaded) || ((b.size || 0) - (a.size || 0)); }),
     current: currentRequest(), average: average(), directUse: directUse,
+    // Ollama's model process(es) (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded
+    process: online ? procstats.get('ollama') : null, processSupported: procstats.supported(),
     totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),
   };
 }
@@ -361,11 +375,13 @@ function start(settings) {
   tagsAt = 0;
   if (!requestsLoaded) { requestsLoaded = true; loadRequests(); }
   startProxy();
+  procstats.watch('ollama', [+(UP.port || (UP.protocol === 'https:' ? 443 : 80))], MODEL_PROCS);
   poll();
   timer = setInterval(poll, 2000);
 }
 function stop() {
   if (timer) { clearInterval(timer); timer = null; }
+  procstats.unwatch('ollama');
   if (proxySrv) { try { proxySrv.close(); if (proxySrv.closeAllConnections) proxySrv.closeAllConnections(); } catch (e) {} proxySrv = null; }
   proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null };
   online = false; loaded = []; lastError = null;

@@ -11,6 +11,7 @@
 const os = require('os');
 const execFile = require('child_process').execFile;
 const spawn = require('child_process').spawn;
+const diskstats = require('./diskstats');   // read / write per physical disk (AI_SCOPE-030)
 
 const INTERVAL_MS = 2000;
 const HISTORY = 150; // 150 x 2 s = 5 minutes
@@ -22,6 +23,7 @@ let lastCpu = null;
 let gpuMode = null;   // 'nvidia' | 'windows' | 'mixed' | 'none'
 let nvCards = [];     // latest nvidia-smi readings: [{ id, name, vendor, source, util, vramUsed, vramTotal }]
 let winCards = [];    // cards read from Windows counters: [{ id, luid, name, vendor, source, util, vramUsed, vramTotal }]
+let dxgiList = [];    // every DXGI adapter (name, LUID, vendor) - also used to find the LUID of NVIDIA cards (procstats.js)
 let winAggregate = false; // fallback: no DXGI, so all counter adapters are summed into one card
 let nvBusy = false;
 
@@ -108,6 +110,24 @@ const PS_DXGI =
   "    return sb.ToString(); } }\n" +
   "'@;" +
   "[AiScopeDxgi]::List()";
+
+// NVIDIA cards come from nvidia-smi, which has no LUID. Match each to a DXGI adapter by name (in order, so two
+// identical cards pair up by enumeration order), so per-process counters (keyed by LUID) map to the right card.
+function matchNvidiaLuids() {
+  const used = {};
+  const nv = dxgiList.filter(function (a) { return a.vendorId === NVIDIA; });
+  nvCards.forEach(function (c) {
+    const want = String(c.name || '').trim().toLowerCase();
+    let a = nv.filter(function (x) { return !used[x.luid] && x.name.trim().toLowerCase() === want; })[0];
+    if (!a) a = nv.filter(function (x) { return !used[x.luid]; })[0];
+    if (a) { used[a.luid] = true; c.luid = a.luid; }
+  });
+}
+// LUID of each card, in the same order as info.gpus / samples' gpus[] ('<high8>_<low8>', or null if unknown).
+function cardLuids() { return allCards().map(function (c) { return c.luid || null; }); }
+// Per-process GPU numbers are keyed per card (AI_SCOPE-052): Windows by LUID (GPU counters), Linux by the NVIDIA card
+// id 'nv<index>' (nvidia-smi); in the Hardware card order. null = no per-process numbers for that card.
+function cardKeys() { return process.platform === 'win32' ? cardLuids() : allCards().map(function (c) { return c.source === 'nvidia' ? c.id : null; }); }
 
 function readDxgi(cb) {
   run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_DXGI], 20000, function (err, out) {
@@ -245,6 +265,8 @@ function detectGpu(cb) {
     if (process.platform !== 'win32') { setMode(); return cb(); }
     readDxgi(function (adapters) {
       if (adapters) {
+        dxgiList = adapters;
+        matchNvidiaLuids();
         const cards = pickCards(adapters).filter(function (a) { return !nvCards.length || a.vendorId !== NVIDIA; });
         winCards = cards.map(function (a, i) {
           return { id: 'win' + i, luid: a.luid, name: a.name, vendor: vendorName(a.vendorId), source: 'windows',
@@ -308,6 +330,12 @@ function sample() {
                                             temp: c.temp == null ? null : c.temp, power: c.power == null ? null : c.power,
                                             powerLimit: c.powerLimit == null ? null : c.powerLimit }; }),
   };
+  // Disks (AI_SCOPE-030): read / write bytes per second and active time % per physical disk; names in info.disks
+  const disks = diskstats.get();
+  if (disks) {
+    s.disks = disks.map(function (d) { return { id: d.id, read: Math.round(d.read), write: Math.round(d.write), active: d.active == null ? null : Math.round(d.active * 10) / 10 }; });
+    diskNames = {}; disks.forEach(function (d) { diskNames[d.id] = d.name; }); diskOrder = disks.map(function (d) { return d.id; });
+  }
   if (s.cpu != null) {
     history.push(s);
     if (history.length > HISTORY) history.shift();
@@ -315,10 +343,12 @@ function sample() {
   pollGpu(); // async; result lands in the next sample
 }
 
+let diskNames = {}, diskOrder = [];
 let started = false;
 function start() {
   if (started) return;
   started = true;
+  diskstats.start();
   cpuPercent();
   detectGpu(function () {
     const cards = allCards();
@@ -337,13 +367,15 @@ function getStats() {
       gpuName: cards.length ? cards.map(function (c) { return c.name; }).join(' + ') : null,
       gpuSource: gpuMode,
       gpus: cards.map(function (c) { return { id: c.id, name: c.name, vendor: c.vendor, source: c.source, vramTotal: c.vramTotal }; }),
+      disks: diskOrder.map(function (id) { return { id: id, name: diskNames[id] }; }),   // physical disks (AI_SCOPE-030)
+      disksSupported: diskstats.supported(),
     },
     intervalMs: INTERVAL_MS,
     history: history,
   };
 }
 
-// ---- VRAM fit for the model lists (LM Studio, Ollama, ComfyUI) ----
+// ---- VRAM fit for the model lists (Bionic, Ollama, ComfyUI) ----
 // Card sizes, biggest first, e.g. { cards: [16 GB, 8 GB], largest: 16 GB, total: 24 GB }; null if unknown.
 function vramInfo() {
   const sizes = allCards().map(function (c) { return c.vramTotal; }).filter(function (v) { return v > 0; })
@@ -352,7 +384,7 @@ function vramInfo() {
   return { cards: sizes, largest: sizes[0], total: sizes.reduce(function (a, b) { return a + b; }, 0) };
 }
 // A model "fits" when it fits on the largest single card. If it only fits split across cards
-// (and the app can split, like llama.cpp-based LM Studio / Ollama), returns fit 'multi' with the
+// (and the app can split, like llama.cpp-based Bionic / Ollama), returns fit 'multi' with the
 // number of cards needed. Returns { fit, gpus } or null.
 function vramFit(size, vram, canSplit) {
   if (!vram || !size) return null;
@@ -369,7 +401,7 @@ function vramFit(size, vram, canSplit) {
 }
 
 // ---- Peak whole-PC load while a request/run was going (from the 2 s samples, last 5 minutes) ----
-// Returns { gpu, vramUsed, vramTotal, cpu, ramUsed, ramTotal, partial } or null when no sample falls in
+// Returns { gpu, vramUsed, vramTotal, cpu, ramUsed, ramTotal, diskRead (bytes/s, all disks), partial } or null when no sample falls in
 // [t0, t1]. partial = the request started before the oldest kept sample, so only its last 5 min count.
 function peakBetween(t0, t1) {
   if (t0 == null || t1 == null || !history.length) return null;
@@ -379,6 +411,8 @@ function peakBetween(t0, t1) {
     if (s.t < t0 || s.t > t1) return;
     if (!p) p = { gpu: null, vramUsed: null, vramTotal: s.vramTotal, cpu: null, ramUsed: null, ramTotal: s.ramTotal };
     p.gpu = mx(p.gpu, s.gpu); p.vramUsed = mx(p.vramUsed, s.vramUsed); p.cpu = mx(p.cpu, s.cpu); p.ramUsed = mx(p.ramUsed, s.ramUsed);
+    // disk read (AI_SCOPE-030): all disks together, bytes per second
+    if (s.disks) p.diskRead = mx(p.diskRead, s.disks.reduce(function (a, d) { return a + (d.read || 0); }, 0));
   });
   if (!p) return null;
   ['gpu', 'cpu'].forEach(function (k) { if (p[k] != null) p[k] = Math.round(p[k]); });
@@ -387,5 +421,5 @@ function peakBetween(t0, t1) {
 }
 function oldestSample() { return history.length ? history[0].t : null; }
 
-module.exports = { start: start, getStats: getStats, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
+module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, cardKeys: cardKeys, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
                    _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards } };

@@ -186,9 +186,7 @@
   .now-grid .k { font-size:.78rem; color:var(--muted); }
   .now-grid .v { font-size:1.6rem; font-weight:650; font-variant-numeric:tabular-nums; }
   .now-grid .v.model { font-size:1.05rem; font-family: ui-monospace, Consolas, monospace; font-weight:600; }
-  .tiles { display:grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 496px), 1fr)); gap:16px; }
-  .tgroup { display:grid; grid-template-columns: 1fr 1fr; gap:16px; min-width:0; } /* CPU+RAM, then GPU n + VRAM n side by side */
-  .tiles > .lens, .tgroup > .lens { min-width:0; display:grid; } /* a lens wrapper behaves like the tile/group inside it */
+  .tgroup { display:grid; grid-template-columns: 1fr 1fr; gap:16px; min-width:0; } /* the GPU lens's GPU + VRAM tiles side by side */
   @media (max-width: 560px) { .tgroup { grid-template-columns: 1fr; } }
   .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 18px 12px; min-width:0; }
   .tile .v { font-size:2rem; font-weight:650; font-variant-numeric:tabular-nums; margin-top:4px; }
@@ -200,6 +198,11 @@
   .spark svg { width:100%; height:100%; display:block; overflow:visible; }
   .spark .line { fill:none; stroke:var(--accent); stroke-width:2; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
   .spark .area { fill:var(--accent); opacity:.12; }
+  /* Disk tile (AI_SCOPE-030): read = accent line, write = amber dashed line, with a small legend under the chart */
+  .spark .wline { stroke:var(--mid); stroke-dasharray:4 3; }
+  .dlegend { display:inline-flex; align-items:center; gap:4px; }
+  .dlegend i { display:inline-block; width:10px; height:2px; background:var(--accent); vertical-align:middle; }
+  .dlegend i.wr { background:var(--mid); margin-left:6px; }
   .spark .guide { stroke:var(--muted); stroke-width:1; opacity:.6; vector-effect:non-scaling-stroke; }
   .spark .tip { position:absolute; top:-26px; transform:translateX(-50%); background:var(--text); color:var(--bg);
                 font-size:.72rem; padding:2px 6px; border-radius:4px; white-space:nowrap; pointer-events:none; }
@@ -296,7 +299,7 @@
   @media (max-width: 640px) { .cgrid { grid-template-columns:minmax(0, 1fr); } .lf-wide { grid-column:auto; } }
   .cgrid .blockhead { margin-top:0; }
   .cgrid .now { margin-bottom:0; }
-  .cgrid .lens-wide > .tgroup, .cgrid .lens { min-width:0; }
+  .cgrid .lens > .tgroup, .cgrid .lens { min-width:0; }
   .panel.editing .lframe { outline:1px dashed var(--line); outline-offset:6px; border-radius:10px; }
   .lframe.dragging { opacity:.35; }
   .ltools { display:flex; align-items:center; gap:8px; margin:0 0 8px; font-size:.75rem; color:var(--muted); }
@@ -350,7 +353,7 @@
   .lhead > .hint { font-size:.78rem; color:var(--muted); padding-bottom:6px; }
   .lhead > .helpbtn { margin-bottom:5px; }
   .lhead + .card, .lhead + .tile { border-top-left-radius:0; }
-  .wrap > .lens:first-child > .lhead:first-child, .tilebox > .lhead, .cgrid .lhead { margin-top:0; }
+  .tilebox > .lhead, .cgrid .lhead { margin-top:0; }
   .tilebox { min-width:0; }
   .lhead .temp { margin-left:auto; padding-bottom:6px; font-size:.75rem; font-weight:600; color:var(--muted); font-variant-numeric:tabular-nums; }
   .lhead .temp.warm { color:var(--mid); }
@@ -386,3 +389,47 @@
   .now-detail { text-transform:none; letter-spacing:0; font-weight:400; color:var(--muted); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .now-detail:empty { display:none; }
   .now-detail::before { content:'·'; margin-right:8px; }
+
+
+/* Processes scope (AI_SCOPE-023): top-5 tables */
+.ptop td:last-child, .ptop th:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+.ptop td .pn { color:var(--muted); }
+/* Always 5 rows tall (AI_SCOPE-023): a message row and blank filler rows keep equal heights side by side */
+.ptop tr.pmsg td { text-align:left; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:0; }
+.ptop tr.pfill td, .ptop tr.pmsg td { border-bottom-color:transparent; }   /* keep the 1px, so heights match data rows */
+/* Process icon left of the name (AI_SCOPE-023) */
+.ptop .pname { display:inline-flex; align-items:center; gap:8px; min-width:0; vertical-align:top; }   /* top: the icon must not make rows taller than the filler rows */
+.ptop .picon { width:16px; height:16px; flex:none; object-fit:contain; color:var(--muted); }
+/* Fixed columns: a long process name is cut with "…" instead of widening the table (no sideways scrollbar) */
+.ptop table { table-layout:fixed; width:100%; }
+.ptop td:first-child { overflow:hidden; }
+.ptop .pname { max-width:100%; }
+.ptop .plabel { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+/* AI processes lens (AI_SCOPE-023): full width at the top of the Processes page, numbers right-aligned */
+.papps table { table-layout:auto; }
+.papps td:nth-child(n+2), .papps th:nth-child(n+2) { text-align:right; width:12%; }
+.papps tr.poff td { color:var(--muted); }
+.papps tr.poff .picon { opacity:.6; }
+/* 5-minute line per row (AI_SCOPE-023 item 6) */
+.ptop:not(.papps) th:nth-child(2) { width:22%; }
+.ptop:not(.papps) th:last-child { width:84px; }
+.ptop.psplit th:nth-child(3), .ptop.psplit td:nth-child(3) { width:72px; text-align:right; font-variant-numeric:tabular-nums; }   /* Top I/O: Read + Write (AI_SCOPE-030) */
+.ptop.psplit th:last-child { width:72px; }
+.ptop.psplit th:nth-child(2) { width:18%; }
+.ptop td.pspark { padding-top:6px; padding-bottom:6px; }
+.pspk { position:relative; height:20px; }
+.pspk svg { width:100%; height:100%; display:block; overflow:visible; }
+.pspk .line { fill:none; stroke:var(--accent); stroke-width:1.5; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+.pspk .area { fill:var(--accent); opacity:.12; }
+.pspk .guide { stroke:var(--muted); stroke-width:1; opacity:.6; vector-effect:non-scaling-stroke; }
+.pspk .ptip { position:absolute; bottom:24px; transform:translateX(-50%); background:var(--text); color:var(--bg); font-size:.7rem;
+  padding:2px 6px; border-radius:4px; white-space:nowrap; pointer-events:none; z-index:3; }
+/* Edit mode on scope pages (AI_SCOPE-020): the edit hint sits with the buttons; the page's own status line hides meanwhile */
+.cs-tools .lhint { margin-right:4px; }
+.panel.editing:not(.custom) .section-head > .meta { display:none; }
+/* Columns setting of table lenses (AI_SCOPE-020): a checkbox per column; the first is always shown */
+.modal .lcols { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:6px; }
+.modal .lcol { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:.85rem; font-weight:400; cursor:pointer; }
+.modal .lcol input { width:auto; margin:0; padding:0; accent-color:var(--accent); }
+.modal .lcol.fixed { opacity:.5; cursor:default; }
+.modal .flabel { display:block; font-size:.8rem; font-weight:600; margin-bottom:5px; }

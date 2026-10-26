@@ -1,15 +1,17 @@
-// LM Studio model status from its REST API: installed models + loaded instances.
-// Uses /api/v1/models (LM Studio 0.4+), falls back to /api/v0/models.
-// Port: LMSTUDIO_URL env, else tries 1234, then 1235. No dependencies; conservative JS.
+// Model status from the LM Studio server REST API (used by Bionic's local server): installed models + loaded instances.
+// Uses /api/v1/models, falls back to /api/v0/models. Used by the Bionic scope; the file name stays generic for AI_SCOPE-036.
+// Port: the scope's Server URL setting, else tries 1234, then 1235. No dependencies; conservative JS.
 'use strict';
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const vramFit = require('./hwstats').vramFit;  // VRAM fit vs the largest card
+const procstats = require('./procstats');      // Bionic's model process: VRAM per card, GPU %, CPU, RAM (Windows; AI_SCOPE-049)
+const MODEL_PROCS = ['llama-server.exe'];       // Bionic runs each loaded model in a child llama-server.exe (AI_SCOPE-037)
 const os = require('os');
 
 // ---------- where each model came from (Hugging Face repo / LM Studio hub) ----------
-// LM Studio stores downloads as <models>/<publisher>/<repo>/<file>, where publisher/repo is the Hugging Face repo.
+// Bionic (like LM Studio) stores downloads as <models>/<publisher>/<repo>/<file>, where publisher/repo is the Hugging Face repo.
 // Folders are set from the scope's install settings in start().
 let MODEL_DIRS = [];
 let HUB_DIR = null;
@@ -66,7 +68,7 @@ let online = false;
 let apiVersion = null;
 let lastError = null;
 let models = [];          // installed models, normalized
-let raw = null;           // last raw response (for /api/lmstudio/raw debugging)
+let raw = null;           // last raw response (for /api/bionic/raw debugging)
 let lastLoadedKeys = '';
 
 function getJson(url, cb) {
@@ -139,8 +141,14 @@ function normV0(d) {
   });
 }
 
+// Port(s) of the server URL(s), for finding Bionic's processes (procstats.js).
+function portsOf(urls) {
+  return urls.map(function (u) { try { const x = new URL(u); return +(x.port || (x.protocol === 'https:' ? 443 : 80)); } catch (e) { return 0; } })
+    .filter(function (n) { return n > 0; });
+}
+
 function tryBase(list, i, cb) {
-  if (i >= list.length) return cb(new Error('LM Studio server not reachable (tried ' + list.join(', ') + ')'));
+  if (i >= list.length) return cb(new Error('Bionic\'s local server not reachable (tried ' + list.join(', ') + ')'));
   getJson(list[i] + '/api/v1/models', function (err, d) {
     if (!err && d && d.models) return cb(null, list[i], 'v1', d);
     getJson(list[i] + '/api/v0/models', function (err2, d2) {
@@ -155,15 +163,16 @@ function poll() {
   tryBase(list, 0, function (err, b, ver, d) {
     if (err) { online = false; lastError = err.message; models = []; return; }
     base = b; online = true; apiVersion = ver; lastError = null; raw = d;
+    procstats.watch('bionic', portsOf([b]), MODEL_PROCS);
     models = ver === 'v1' ? normV1(d) : normV0(d);
     if (Date.now() - reposAt > 60000) scanRepos();
     models.forEach(function (m) { const s = sourceFor(m); m.modelUrl = s.modelUrl; m.publisherUrl = s.publisherUrl; m.source = s.source; m.modified = s.modified; });
     const keys = models.filter(function (m) { return m.instances.length; }).map(function (m) { return m.key; }).join(',');
-    if (keys !== lastLoadedKeys) { lastLoadedKeys = keys; console.log('[lmstudio] loaded: ' + (keys || 'none')); }
+    if (keys !== lastLoadedKeys) { lastLoadedKeys = keys; console.log('[bionic] loaded: ' + (keys || 'none')); }
   });
 }
 
-// vram: hwstats.vramInfo() (card sizes); LM Studio (llama.cpp) can split a model across cards.
+// vram: hwstats.vramInfo() (card sizes); Bionic (llama.cpp) can split a model across cards.
 function getState(vram) {
   const loaded = [];
   models.forEach(function (m) {
@@ -176,6 +185,9 @@ function getState(vram) {
   return {
     online: online, url: base, apiVersion: apiVersion, error: lastError, vramTotal: vram ? vram.largest : null, vramCards: vram ? vram.cards.length : 0,
     loaded: loaded,
+    // Bionic's model process(es) (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded
+    process: online ? procstats.get('bionic') : null,
+    processSupported: procstats.supported(),
     installed: models.map(function (m) {
       const f = vramFit(m.size, vram, true);
       return { key: m.key, name: m.name, publisher: m.publisher, modelUrl: m.modelUrl, publisherUrl: m.publisherUrl, source: m.source, modified: m.modified, type: m.type, arch: m.arch, params: m.params,
@@ -185,8 +197,10 @@ function getState(vram) {
   };
 }
 function getRaw() { return raw; }
+// How many models Bionic reports loaded right now, or null when its server isn't reachable.
+function loadedCount() { return online ? models.filter(function (m) { return m.instances.length; }).length : null; }
 
-// settings: { url (empty = auto-detect), home (LM Studio folder), modelsDir (empty = <home>/models) }
+// settings: { url (empty = auto-detect), home (data folder, ~/.lmstudio), modelsDir (empty = <home>/models) }
 let timer = null;
 function start(settings) {
   settings = settings || {};
@@ -196,9 +210,10 @@ function start(settings) {
   CANDIDATES = settings.url ? [settings.url] : AUTO_URLS;
   base = null; reposAt = 0;
   stopTimer();
-  poll(); timer = setInterval(poll, 10000); // each poll adds 2 lines to LM Studio's server log
+  procstats.watch('bionic', portsOf(CANDIDATES), MODEL_PROCS);
+  poll(); timer = setInterval(poll, 10000); // each poll adds 2 lines to Bionic's server log
 }
 function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
-function stop() { stopTimer(); online = false; base = null; models = []; raw = null; lastError = null; lastLoadedKeys = ''; }
+function stop() { stopTimer(); procstats.unwatch('bionic'); online = false; base = null; models = []; raw = null; lastError = null; lastLoadedKeys = ''; }
 
-module.exports = { start: start, stop: stop, getState: getState, getRaw: getRaw };
+module.exports = { start: start, stop: stop, getState: getState, getRaw: getRaw, loadedCount: loadedCount };

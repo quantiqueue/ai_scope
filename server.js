@@ -9,10 +9,15 @@ const logos = require('./logos');
 const comfystats = require('./comfystats');
 const ollamastats = require('./ollamastats');
 const stratastats = require('./stratastats');
+const llamacppstats = require('./llamacppstats');   // llama.cpp server (AI_SCOPE-006)
 const lmapi = require('./lmapi');
+const procstats = require('./procstats');   // per-app process stats (AI_SCOPE-038 / 049)
+const proctop = require('./proctop');       // all processes, for the Processes scope (AI_SCOPE-023)
+const scopelayouts = require('./scopelayouts');   // edited layouts of the scope pages (AI_SCOPE-020)
 const scopes = require('./scopes');
 const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
 hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
+proctop.start();   // Processes is built in: its sampler stays warm (slow while nobody looks), AI_SCOPE-059
 scopes.init();      // starts the modules of every installed scope (scopes.json + data/installed.json)
 
 // Port/host come from the command line (bin/ai_scope.js sets these) or the environment.
@@ -39,7 +44,7 @@ function sendWebFile(res, name, type) {
 }
 
 // Which scope each data endpoint belongs to: endpoints of scopes that aren't installed answer 404.
-// Peak whole-PC load per LM Studio request. Its log rows are re-read on every poll, so peaks are cached
+// Peak whole-PC load per Bionic request. Its log rows are re-read on every poll, so peaks are cached
 // in memory by row. The log timestamp is written when the request finishes (1 s resolution).
 const lmPeaks = new Map();
 function lmPeak(r) {
@@ -56,12 +61,30 @@ function lmPeak(r) {
   }
   return p;
 }
-const SCOPE_ROUTES = [['/api/requests', 'lmstudio'], ['/api/lmstudio/', 'lmstudio'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata']];
+const SCOPE_ROUTES = [['/api/bionic', 'bionic'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata'], ['/api/llamacpp', 'llamacpp']];
 const PKG_VERSION = require('./package.json').version;
+// App scopes whose processes procstats watches (key = scope id), for the Processes scope's AI processes lens.
+const AI_APPS = [{ id: 'bionic', name: 'Bionic', modelOnly: true }, { id: 'ollama', name: 'Ollama', modelOnly: true },
+                 { id: 'comfyui', name: 'ComfyUI' }, { id: 'strata', name: 'Strata', modelOnly: true },
+                 { id: 'llamacpp', name: 'llama.cpp', modelOnly: true }];
 function isLocal(req) {
   const a = (req.socket && req.socket.remoteAddress) || '';
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
 }
+// ---------- Request checks (AI_SCOPE-021) ----------
+// 1. Host check on every request (DNS-rebinding guard, hostcheck.js; the Ollama relay uses it too).
+// 2. Every state-changing POST needs the X-AI-Scope header and (with a body) Content-Type: application/json. A web page
+//    can't send either cross-site without a CORS preflight, which this server never allows. Other devices on the
+//    network may still change things (user, 2026-10-24); /api/stop stays this-PC-only.
+// 3. Every answer forbids being shown inside another site's frame (clickjacking: a hidden AI_SCOPE under a fake button)
+//    and content-type sniffing.
+const hostAllowed = require('./hostcheck').hostAllowed;
+function postAllowed(req, withBody) {
+  if (!req.headers['x-ai-scope']) return false;
+  return !withBody || /^application\/json\b/i.test(String(req.headers['content-type'] || ''));
+}
+const NOT_ALLOWED = { ok: false, error: 'Request refused (missing X-AI-Scope header or JSON content type)' };
+
 let iconBuf = null;
 function sendIcon(res) {
   if (!iconBuf) { try { iconBuf = fs.readFileSync(path.join(__dirname, 'assets', 'ai_scope.ico')); } catch (e) { iconBuf = Buffer.alloc(0); } }
@@ -83,11 +106,20 @@ function readJson(req, cb) {
 function pageHtml() {
   const html = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8');
   const js = v => JSON.stringify(v).replace(/</g, '\\u003c');
-  return html.split('/*__SCOPES__*/[]').join(js(scopes.list())).split('/*__CUSTOM__*/[]').join(js(customscopes.list()));
+  return html.split('/*__SCOPES__*/[]').join(js(scopes.list())).split('/*__CUSTOM__*/[]').join(js(customscopes.list()))
+    .split('/*__LAYOUTS__*/{}').join(js(scopelayouts.list())).split("/*__OS__*/''").join(js(process.platform));
 }
 
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (!hostAllowed(req)) {   // AI_SCOPE-021: not a name of this machine (DNS rebinding)
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    return res.end('AI_SCOPE: unknown host name. Open AI_SCOPE by this computer\'s name or address, or add the name to AI_SCOPE_ALLOWED_HOSTS.');
+  }
+  if (req.method === 'POST' && url.pathname !== '/api/stop' && !postAllowed(req, true)) return sendJson(res, 403, NOT_ALLOWED);
   if (url.pathname === '/__boot') {
     res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
     return res.end(BOOT_ID);
@@ -127,6 +159,32 @@ http.createServer((req, res) => {
       sendJson(res, r.ok ? 200 : 400, r);
     });
   }
+  // Scope page layouts (AI_SCOPE-020): list, save { scope, lenses }, reset { scope }. Answers carry the new list.
+  if (url.pathname === '/api/scope-layouts' && req.method === 'GET') return sendJson(res, 200, scopelayouts.list());
+  const lAction = /^\/api\/scope-layouts\/(save|reset)$/.exec(url.pathname);
+  if (lAction && req.method === 'POST') {
+    return readJson(req, body => {
+      const r = !body ? { ok: false, error: 'Bad request' } : lAction[1] === 'save' ? scopelayouts.set(body, scopes.list().map(sc => sc.id)) : scopelayouts.reset(body);
+      r.layouts = scopelayouts.list();
+      sendJson(res, r.ok ? 200 : 400, r);
+    });
+  }
+  // The last 5 minutes of samples, for the Processes lenses' lines (AI_SCOPE-059)
+  if (url.pathname === '/api/processes/history') return sendJson(res, 200, proctop.history());
+  // Every process (Processes scope, built in; Windows only for now). Polling it puts the sampler on its fast pace.
+  if (url.pathname === '/api/processes') {
+    const body = proctop.get();
+    // AI processes lens (AI_SCOPE-023): each installed AI app scope with its own process(es), as matched for its
+    // Current request card (procstats, AI_SCOPE-038/049-051). Bionic / Ollama count the model process only.
+    body.apps = AI_APPS.filter(a => scopes.isInstalled(a.id)).map(a => ({ id: a.id, name: a.name, modelOnly: a.modelOnly, process: procstats.get(a.id) }));
+    return sendJson(res, 200, body);
+  }
+  if (url.pathname.indexOf('/api/process-icon/') === 0) {   // exe icon for the Processes lenses
+    const png = proctop.icon(url.pathname.slice('/api/process-icon/'.length));
+    if (!png) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no icon'); }
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'max-age=86400' });
+    return res.end(png);
+  }
   const owner = SCOPE_ROUTES.filter(r => url.pathname.indexOf(r[0]) === 0)[0];
   if (owner && !scopes.isInstalled(owner[1])) return sendJson(res, 404, { error: 'Scope not installed: ' + owner[1] });
   if (url.pathname === '/api/comfy') {
@@ -151,17 +209,29 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(stratastats.getState(limit)));
   }
-  if (url.pathname === '/api/lmstudio/models') {
+  if (url.pathname === '/api/llamacpp') {
+    const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(llamacppstats.getState(limit)));
+  }
+  if (url.pathname === '/api/bionic/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(lmapi.getState(hwstats.vramInfo())));
   }
-  if (url.pathname === '/api/lmstudio/raw') {
+  if (url.pathname === '/api/bionic/raw') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(lmapi.getRaw(), null, 2));
   }
   if (url.pathname === '/api/logo/strata') {   // Strata's mark (SVG): its install folder, else the running app, else our copy
     const theme = url.searchParams.get('theme');
     const svg = logos.getSvg('strata', theme) || stratastats.getLogo(theme) || logos.fallbackSvg('strata', theme);
+    if (!svg) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no logo'); }
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=3600' });
+    return res.end(svg);
+  }
+  if (url.pathname === '/api/logo/llamacpp') {   // llama.cpp's mark (SVG): the running server's web UI icon, else our copy
+    const theme = url.searchParams.get('theme');
+    const svg = llamacppstats.getLogo(theme) || logos.fallbackSvg('llamacpp', theme);
     if (!svg) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no logo'); }
     res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=3600' });
     return res.end(svg);
@@ -173,14 +243,19 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(hwstats.getStats()));
   }
-  if (url.pathname === '/api/requests') {
+  if (url.pathname === '/api/bionic') {   // Bionic's requests (from its server logs)
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
     let body;
     try {
       body = lmstats.getLatestRequests(limit);
       body.rows.forEach(r => { r.peak = lmPeak(r); });
       body.current = lmstats.getCurrentRequest();
+      // A model unloaded mid-request (or its llama-server ended) leaves no "stop processing" line in the log, so the
+      // request would look like it's running until the log has been silent for 2 min. Bionic's API knows better.
+      if (body.current && lmapi.loadedCount() === 0) body.current = null;
       body.average = lmstats.getAverage(body.rows);
+      body.process = procstats.get('bionic');   // Bionic's model process (AI_SCOPE-049)
+      body.processSupported = procstats.supported();
     }
     catch (e) { body = { rows: [], error: String(e && e.message || e) }; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
