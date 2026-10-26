@@ -68,7 +68,7 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 
 ## Support AI_SCOPE
 
-AI_SCOPE is free and [MIT-licensed](LICENSE). I build it, test it and pay for the resources myself, and I keep testing it on a variety of hardware and operating systems to make sure it works on yours. A coffee helps me add more features, fixes and support.
+AI_SCOPE is free and [MIT-licensed](LICENSE). I build it, test it and pay for the resources myself, and I keep testing it on a variety of hardware and operating systems to make sure it works on yours. A coffee helps me add more features and continue to support issues.
 
 <a href="https://buymeacoffee.com/quantiqueue"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" height="50"></a>
 
