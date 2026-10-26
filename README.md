@@ -62,6 +62,7 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 - **A scope says offline**: start that app (for Bionic, also start its local server on the Local Server screen; for Strata, the Strata desktop app; for llama.cpp, `llama serve -m <model.gguf>` or `llama-server`).
 - **No Ollama requests listed**: the app isn't using the relay on port 11435 (see [Configuring Ollama](manual/CONFIGURING_OLLAMA.md)). In PowerShell, `set` doesn't work; use `$env:OLLAMA_HOST=...`.
 - **No GPU temperature or power**: only NVIDIA cards report them.
+- **Fewer lenses on a Mac or Linux PC**: lenses a system can't fill are left out, e.g. per-process GPU numbers on a Mac or on Linux without an NVIDIA card. See [How to scope](manual/HOW_TO_SCOPE.md#processes-scope).
 - **Can't rename or move the AI_SCOPE folder**: stop AI_SCOPE first (`ai_scope --stop`, or close its console window / end *Node.js* in Task Manager).
 
 ## Support AI_SCOPE

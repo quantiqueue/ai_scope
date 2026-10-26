@@ -50,9 +50,13 @@ Some lenses also have:
 
 The change is saved with the page when you save.
 
+## Hardware on each system
+
+CPU and RAM tiles work everywhere. GPU and VRAM tiles come from `nvidia-smi` for NVIDIA cards (Windows and Linux) and from Windows' own counters for AMD and Intel cards on Windows; temperature and power draw are NVIDIA only. A Mac shows no GPU or Disk tiles yet.
+
 ## Disk tiles (Hardware)
 
-One **Disk** tile per physical disk, named like Task Manager ("Disk 1 (C:)"): **active time** (how busy the disk was) as the big number, read and write speed, and a 5-minute chart with a read line and a dashed write line, scaled to the busiest moment (hover for the values at a time). Read from Windows' disk counters every 2 s (Linux: `/proc/diskstats`). The request and run tables' **Peak load** hover also shows the highest disk read while each ran. Pick the disk with the lens's cog (edit mode).
+One **Disk** tile per physical disk, named like Task Manager ("Disk 1 (C:)"): **active time** (how busy the disk was) as the big number, read and write speed, and a 5-minute chart with a read line and a dashed write line, scaled to the busiest moment (hover for the values at a time). Read from Windows' disk counters every 2 s (Linux: `/proc/diskstats`; not on macOS yet). The request and run tables' **Peak load** hover also shows the highest disk read while each ran. Pick the disk with the lens's cog (edit mode).
 
 ## Processes scope
 
@@ -66,8 +70,8 @@ Lenses a system can't fill don't appear on the page or in the Add lens dialog. T
 
 - **AI processes**: one row per installed AI scope (Bionic, Ollama, ComfyUI, Strata, llama.cpp) with the VRAM, GPU, CPU and RAM of its own process: the one that runs the model (Bionic, Ollama, Strata, llama.cpp) or ComfyUI's python. VRAM is all graphics cards added up and GPU the busiest card; hover for each card.
 - **Top I/O**: the 5 processes reading and writing the most (MB/s, Read and Write columns) — shows which app is loading a model. On Windows this is *all* of a process's I/O (disk, network and devices together; a per-process disk-only number needs admin rights); on Linux it's disk reads and writes.
-- **Top CPU, Top RAM, Top GPU, Top VRAM, Top shared GPU memory**: the 5 processes using the most, with the program's icon, a 5-minute line (hover for the value at a time) and the value. Right after AI_SCOPE starts, the CPU, GPU and I/O lenses say *Measuring…* for a second or two. GPU, VRAM and shared GPU memory are per graphics card.
-- **Cog** settings (edit mode, see [Lens settings](#lens-settings-cog)): **Rows** — per app (all processes of a program added together, e.g. "chrome.exe ×27") or per process; **Show the Windows desktop process (dwm.exe)** on the GPU lenses — off by default, because Windows counts the window surfaces dwm draws under dwm *and* under the app that made them, so its number is mostly other apps' memory again. For the same reason the VRAM rows can add up to more than the card's total on the Hardware page.
+- **Top CPU, Top RAM, Top GPU, Top VRAM, Top shared GPU memory**: the 5 processes using the most, with the program's icon (Windows; a plain icon elsewhere), a 5-minute line (hover for the value at a time) and the value. Right after AI_SCOPE starts, the CPU, GPU and I/O lenses say *Measuring…* for a second or two. GPU, VRAM and shared GPU memory are per graphics card.
+- **Cog** settings (edit mode, see [Lens settings](#lens-settings-cog)): **Rows** — per app (all processes of a program added together, e.g. "chrome.exe ×27") or per process; **Show the Windows desktop process (dwm.exe)** on the GPU lenses (Windows only) — off by default, because Windows counts the window surfaces dwm draws under dwm *and* under the app that made them, so its number is mostly other apps' memory again. For the same reason the VRAM rows can add up to more than the card's total on the Hardware page.
 - Changes to the Processes page are saved with the page in `~/.ai_scope/scope-layouts.json`.
 
 ## llama.cpp scope
