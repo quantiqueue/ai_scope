@@ -6,7 +6,7 @@ AI_SCOPE isn't tied to particular app versions. It reads what the apps already o
 
 This page is not a list of supported versions. It records the app versions each AI_SCOPE release was **last checked with**: a known-good point to compare against if something stops working. Some of what AI_SCOPE reads isn't promised by the apps (Bionic's server-log lines, the Strata desktop app's monitor data, ComfyUI's log and queue endpoints, how Ollama and llama.cpp run their models in separate processes), so now and then an app update can change it and break part of a scope.
 
-## AI_SCOPE 0.3.0 (in development)
+## AI_SCOPE 0.3.0
 
 **Checked on:** Windows 11 Pro 24H2 (build 26100), NVIDIA GeForce RTX 5060 Ti + RTX 3060 Ti (driver 617.42), Node.js 18.8. Checked 2026-10-26.
 
