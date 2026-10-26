@@ -18,7 +18,7 @@ This page is not a list of supported versions. It records the app versions each 
 | Strata | 0.2.1 (desktop app; Strata Control 0.1.46.2, engine 0.1.48) | The desktop app's monitor data at `http://127.0.0.1:47831`; the model runs in `strata.exe`. |
 | llama.cpp | `llama` 0.7.0-dev (build b11706) | `llama serve`, including router mode and `--metrics`. Plain `llama-server` builds use the same API. |
 
-**Linux and macOS:** the per-app process stats and the Processes scope on Linux and macOS are new in 0.3.0 and haven't been tested on real Linux or Mac machines yet.
+**Linux and macOS:** checked in a Linux virtual machine and with simulated macOS system output.
 
 ## If a scope stops working after an app update
 
