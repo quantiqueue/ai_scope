@@ -7,3 +7,4 @@ Back to the [README](../README.md).
 - [Configuring scopes](CONFIGURING_SCOPES.md): the settings each scope asks for when installed.
 - [Configuring Ollama](CONFIGURING_OLLAMA.md): the relay that records Ollama's request stats — setup per tool, making it permanent, checking it works, troubleshooting.
 - [Where the data comes from](DATA_SOURCE.md): what each scope reads, and where AI_SCOPE saves history.
+- [Compatibility](COMPATIBILITY.md): the app versions each AI_SCOPE release was last checked with, and what to do when a scope breaks after an app update.
