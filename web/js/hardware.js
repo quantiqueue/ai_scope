@@ -212,9 +212,9 @@ function setSysLoad(id, on, proc, app) {   // id or element (lenses pass their o
     mem.push(g.vramUsed != null ? item('VRAM' + n, pct(g.vramUsed, g.vramTotal), GB(g.vramUsed) + (g.vramTotal ? ' / ' + GB(g.vramTotal) : '') + ' GB') : blank);
   });
   if (mine) {
-    const noAccess = 'Windows did not allow reading this process\'s CPU and RAM';
+    const noAccess = 'The system did not allow reading this process\'s CPU and RAM';
     top.push(mine.cpu != null ? item('CPU', mine.cpu, mine.cpu.toFixed(0) + '%', 'Share of the whole CPU (all cores)') : mine.ram == null ? item('CPU', null, '—', noAccess) : blank);
-    mem.push(mine.ram != null ? item('MEM', pct(mine.ram, s.ramTotal), GB(mine.ram) + ' / ' + GB(s.ramTotal) + ' GB', 'RAM in use (working set); committed: ' + GB(mine.ramPrivate) + ' GB')
+    mem.push(mine.ram != null ? item('MEM', pct(mine.ram, s.ramTotal), GB(mine.ram) + ' / ' + GB(s.ramTotal) + ' GB', (SERVER_OS === 'win32' ? 'RAM in use (working set); committed: ' : SERVER_OS === 'linux' ? 'RAM in use (resident); private: ' : 'RAM in use (resident): ') + GB(mine.ramPrivate) + ' GB')
       : item('MEM', null, '—', noAccess));
   } else {
     top.push(s.cpu != null ? item('CPU', s.cpu, s.cpu.toFixed(0) + '%') : blank);

@@ -5,13 +5,18 @@
 // (each read well under 1 ms), plus OpenProcess/GetProcessMemoryInfo/GetProcessTimes for RAM and CPU.
 // An app's processes = the process listening on its port + all its child processes (e.g. Bionic's model runs
 // in a child llama-server.exe). PIDs are looked up again every 15 s, because they change when the app restarts.
-// Other platforms: get() returns null and callers fall back to whole-computer load. No dependencies; conservative JS.
+// Linux / macOS (AI_SCOPE-052): the same numbers from procnix.js - processes from /proc or `ps`, the port owner from
+// /proc/net/tcp or `lsof` (falling back to the process name when the owner belongs to another user, e.g. Ollama's
+// `ollama` service user), NVIDIA VRAM / GPU % per process from nvidia-smi on Linux; macOS has no per-process GPU numbers.
+// Elsewhere get() returns null and callers fall back to whole-computer load. No dependencies; conservative JS.
 'use strict';
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const spawn = require('child_process').spawn;
 const hwstats = require('./hwstats');
+const procnix = require('./procnix');
+const NIX = procnix.supported();
 
 const WATCH_FILE = path.join(os.tmpdir(), 'ai_scope-procwatch-' + process.pid + '.txt');
 // The filled-in script is run from a temp file: passed with -EncodedCommand it outgrew Windows' 32,767-character
@@ -65,7 +70,81 @@ function handleBlock(lines) {
   Object.keys(fresh).forEach(function (k) { if (fresh[k].pids.length) results[k] = fresh[k]; });
 }
 
+// ---------- Linux / macOS (AI_SCOPE-052) ----------
+const NIX_EVERY = 2000, NIX_RESOLVE = 10000, NIX_RESOLVE_MISSING = 4000;
+// Model runners that several apps start (Bionic, Ollama and a llama.cpp server all run llama-server): when an app is
+// found by name only, these only count if one of their parent processes is named after the app.
+const GENERIC = { 'llama-server': 1, 'python': 1, 'python3': 1, 'node': 1 };
+let nixTimer = null, nixBusy = false, nixResolvedAt = 0;
+const nixFam = {};    // key -> [pids] (looked up again every NIX_RESOLVE, sooner while an app has none)
+const nixPrev = {};   // key:pid -> { t, cpu (s), start } for CPU % between two looks
+function nixResolve(snap, owners, key, w) {
+  let roots = [];
+  w.ports.forEach(function (p) { roots = roots.concat(owners[p] || []); });
+  let fam = procnix.family(snap, roots);
+  if (w.names.length) fam = fam.filter(function (pid) { return procnix.matches(snap.procs[pid], w.names); });
+  if (roots.length || !w.names.length) return fam;
+  // Port owner not visible (another user's process): match by name
+  const all = Object.keys(snap.procs).map(Number).filter(function (pid) { return procnix.matches(snap.procs[pid], w.names); });
+  const app = key.split('-')[0].toLowerCase();
+  const underApp = function (pid) {
+    for (let p = snap.procs[snap.procs[pid].ppid], n = 0; p && n < 20; p = snap.procs[p.ppid], n++) if (String(p.name).toLowerCase().indexOf(app) >= 0) return true;
+    return false;
+  };
+  return all.filter(function (pid) { return !GENERIC[String(snap.procs[pid].name).toLowerCase().replace(/\.exe$/, '')] || underApp(pid); });
+}
+function nixTick() {
+  if (nixBusy || !Object.keys(watches).length) return;
+  nixBusy = true;
+  procnix.snapshot(function (snap) {
+    if (!snap) { nixBusy = false; return; }
+    const now = Date.now(), keys = Object.keys(watches);
+    const compute = function () {
+      procnix.nvidia(function (gpu) {
+        const cores = os.cpus().length || 1;
+        keys.forEach(function (k) {
+          const pids = (nixFam[k] || []).filter(function (pid) { return snap.procs[pid]; });
+          if (!pids.length) { delete results[k]; return; }
+          const r = { at: now, pids: [], luids: {}, cpu: null, ram: 0, ramPrivate: null };
+          pids.forEach(function (pid) {
+            const p = snap.procs[pid], ck = k + ':' + pid, prev = nixPrev[ck];
+            r.pids.push({ pid: pid, name: p.name });
+            r.ram += p.rss || 0;
+            if (p.priv != null) r.ramPrivate = (r.ramPrivate || 0) + p.priv;
+            if (prev && prev.start === p.start && now > prev.t) r.cpu = (r.cpu || 0) + Math.max(0, 100 * (p.cpu - prev.cpu) / ((now - prev.t) / 1000) / cores);
+            nixPrev[ck] = { t: now, cpu: p.cpu, start: p.start };
+            const g = gpu && gpu[pid];
+            if (g) Object.keys(g).forEach(function (card) {
+              const x = r.luids[card] || (r.luids[card] = { vram: 0, shared: 0, util: null });
+              x.vram += g[card].vram; if (g[card].util != null) x.util = Math.min(100, (x.util || 0) + g[card].util);
+            });
+          });
+          if (r.ramPrivate == null) r.ramPrivate = r.ram;   // macOS: no private / resident split
+          results[k] = r;
+        });
+        Object.keys(results).forEach(function (k) { if (!watches[k]) delete results[k]; });
+        Object.keys(nixPrev).forEach(function (ck) { if (!snap.procs[ck.split(':').pop()]) delete nixPrev[ck]; });
+        nixBusy = false;
+      });
+    };
+    const missing = keys.some(function (k) { return !(nixFam[k] && nixFam[k].length); });
+    if (now - nixResolvedAt < (missing ? NIX_RESOLVE_MISSING : NIX_RESOLVE)) return compute();
+    let ports = [];
+    keys.forEach(function (k) { watches[k].ports.forEach(function (p) { if (ports.indexOf(p) < 0) ports.push(p); }); });
+    procnix.portOwners(ports, function (owners) {
+      nixResolvedAt = now;
+      keys.forEach(function (k) { nixFam[k] = nixResolve(snap, owners, k, watches[k]); });
+      Object.keys(nixFam).forEach(function (k) { if (!watches[k]) delete nixFam[k]; });
+      compute();
+    });
+  });
+}
+
 function startLoop() {
+  if (NIX) {
+    if (!nixTimer && Object.keys(watches).length) { nixTimer = setInterval(nixTick, NIX_EVERY); nixResolvedAt = 0; nixTick(); }
+    return;
+  }
   if (ps || process.platform !== 'win32' || !Object.keys(watches).length) return;
   const luids = hwstats.cardLuids().filter(Boolean);
   if (!luids.length) { if (!restartTimer) restartTimer = setTimeout(function () { restartTimer = null; startLoop(); }, 5000); return; }  // cards not detected yet
@@ -100,7 +179,7 @@ function startLoop() {
     });
   });
 }
-function stopLoop() { if (ps) { try { ps.kill(); } catch (e) {} ps = null; } }
+function stopLoop() { if (ps) { try { ps.kill(); } catch (e) {} ps = null; } if (nixTimer) { clearInterval(nixTimer); nixTimer = null; } }
 process.on('exit', function () { stopLoop(); try { fs.unlinkSync(WATCH_FILE); } catch (e) {} try { fs.unlinkSync(SCRIPT_FILE); } catch (e) {} });
 
 // Watch an app's processes: key (e.g. 'comfyui'), the port(s) it listens on, and optionally the exe names to count
@@ -112,23 +191,24 @@ function watch(key, ports, names) {
   const w = watches[key];
   if (w && w.ports.join(',') === ports.join(',') && w.names.join(',') === names.join(',')) return;
   watches[key] = { ports: ports, names: names };
-  writeWatchFile();
+  if (NIX) nixResolvedAt = 0; else writeWatchFile();   // look the app up again now
   startLoop();
 }
 function unwatch(key) {
   if (!watches[key]) return;
   delete watches[key]; delete results[key];
-  writeWatchFile();
+  if (!NIX) writeWatchFile();
   if (!Object.keys(watches).length) stopLoop();
 }
 
-// Latest numbers for an app, or null (not Windows, app not found, or no fresh sample). gpus[] follows the
-// Hardware card order (info.gpus); a card the app doesn't use is { vram: 0, shared: 0, util: 0 }.
+// Latest numbers for an app, or null (unsupported system, app not found, or no fresh sample). gpus[] follows the
+// Hardware card order (info.gpus); a card the app doesn't use, or one without per-process numbers (Linux AMD / Intel
+// for now), is { vram: 0, shared: 0, util: 0 }.
 function get(key) {
   const r = results[key];
   if (!r || Date.now() - r.at > STALE_MS) return null;
-  const luids = hwstats.cardLuids();
-  if (ps && luids.filter(Boolean).join(',') !== luidsKey) { stopLoop(); startLoop(); }   // card list changed
+  const luids = hwstats.cardKeys();
+  if (ps && luids.filter(Boolean).join(',') !== luidsKey) { stopLoop(); startLoop(); }   // card list changed (Windows)
   return {
     pids: r.pids,
     gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, shared: g.shared, util: g.util } : { vram: 0, shared: 0, util: 0 }; }),
@@ -138,6 +218,6 @@ function get(key) {
   };
 }
 
-// Whether per-process stats can work here at all (Windows only for now; AI_SCOPE-052 covers other systems).
-function supported() { return process.platform === 'win32'; }
-module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get, _test: { handleBlock: handleBlock, results: results } };
+// Whether per-process stats can work here at all: Windows, Linux, macOS (AI_SCOPE-052).
+function supported() { return process.platform === 'win32' || NIX; }
+module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get, _test: { handleBlock: handleBlock, results: results, nixResolve: nixResolve, nixTick: nixTick } };

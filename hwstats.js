@@ -125,6 +125,9 @@ function matchNvidiaLuids() {
 }
 // LUID of each card, in the same order as info.gpus / samples' gpus[] ('<high8>_<low8>', or null if unknown).
 function cardLuids() { return allCards().map(function (c) { return c.luid || null; }); }
+// Per-process GPU numbers are keyed per card (AI_SCOPE-052): Windows by LUID (GPU counters), Linux by the NVIDIA card
+// id 'nv<index>' (nvidia-smi); in the Hardware card order. null = no per-process numbers for that card.
+function cardKeys() { return process.platform === 'win32' ? cardLuids() : allCards().map(function (c) { return c.source === 'nvidia' ? c.id : null; }); }
 
 function readDxgi(cb) {
   run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_DXGI], 20000, function (err, out) {
@@ -418,5 +421,5 @@ function peakBetween(t0, t1) {
 }
 function oldestSample() { return history.length ? history[0].t : null; }
 
-module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
+module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, cardKeys: cardKeys, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
                    _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards } };

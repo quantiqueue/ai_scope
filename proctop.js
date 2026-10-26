@@ -4,7 +4,9 @@
 // Always warm (AI_SCOPE-059): started with the server and never stopped (restarted after a crash), because its first
 // sample costs 5-7 s; it samples every FAST_MS while a Processes lens is looked at and every SLOW_MS otherwise
 // (Node tells it through a small control file), and keeps HIST_MS of samples so the lenses' 5-minute lines are full
-// when a page opens. Other platforms: supported() is false (AI_SCOPE-052).
+// when a page opens. Linux / macOS (AI_SCOPE-052): sampled in Node through procnix.js (processes from /proc or `ps`,
+// NVIDIA VRAM / GPU % per process from nvidia-smi on Linux; no per-process GPU numbers or I/O on macOS), written as
+// the same P / G lines the PowerShell sampler prints, so everything after handleBlock() is shared.
 // No dependencies; conservative JS.
 'use strict';
 const os = require('os');
@@ -13,6 +15,8 @@ const path = require('path');
 const spawn = require('child_process').spawn;
 const crypto = require('crypto');
 const hwstats = require('./hwstats');
+const procnix = require('./procnix');
+const NIX = procnix.supported() && process.platform !== 'win32';
 
 const FAST_MS = 5000;            // while someone looks (a collect over ~340 processes: ~0.4 s, ~1.9 % of a 16-thread CPU at this pace)
 const SLOW_MS = 30000;           // while nobody looks: keeps the query open (no cold start) and a coarse history
@@ -79,11 +83,65 @@ function handleBlock(lines) {
 
 function setEvery(ms) {
   if (ms === every && ps) return;
+  const faster = ms < every;
   every = ms;
+  if (NIX) { if (faster) nixKick(); return; }
   try { fs.writeFileSync(CTL_FILE, String(ms)); } catch (e) {}
 }
+
+// ---------- Linux / macOS sampler (AI_SCOPE-052) ----------
+// Every `every` ms: one snapshot of all processes (+ nvidia-smi on Linux), turned into P / G lines for handleBlock().
+// The first block comes at once with the plain values (W|partial, like AI_SCOPE-059's first block), the rates 1 s later.
+let nixTimer = null, nixPrev = null, nixLast = 0, nixBusy = false;
+function nixCycle(first) {
+  nixTimer = null;
+  if (!ps || nixBusy) return;
+  nixBusy = true;
+  procnix.snapshot(function (snap) {
+    const finish = function (gpu) {
+      nixBusy = false;
+      if (!ps) return;
+      nixLast = Date.now();
+      if (snap) {
+        const cores = os.cpus().length || 1, prev = nixPrev, dt = prev ? (snap.at - prev.at) / 1000 : 0, lines = [];
+        if (first || !prev) lines.push('W|partial');
+        Object.keys(snap.procs).forEach(function (k) {
+          const p = snap.procs[k], o = prev && dt > 0.2 && prev.procs[k] && prev.procs[k].start === p.start ? prev.procs[k] : null;
+          const rate = function (a, b) { return o && a != null && b != null ? String(Math.max(0, (a - b) / dt)) : ''; };
+          lines.push('P|' + p.pid + '|' + String(p.name).replace(/\|/g, '/') + '|' + (o ? String(Math.max(0, 100 * (p.cpu - o.cpu) / dt / cores)) : '') + '|' +
+            (p.rss || 0) + '||' + rate(p.ioR, o && o.ioR) + '|' + rate(p.ioW, o && o.ioW));
+          const g = gpu && gpu[k];
+          if (g) Object.keys(g).forEach(function (card) { lines.push('G|' + p.pid + '|' + card + '|' + g[card].vram + '|0|' + (g[card].util == null ? '' : g[card].util)); });
+        });
+        if (first && startup) { startup.begin = startup.spawnAt; startup.how = 'node'; }
+        handleBlock(lines);
+        nixPrev = snap;
+      }
+      nixTimer = setTimeout(function () { nixCycle(false); }, first ? 1000 : every);
+    };
+    if (!snap) return finish(null);
+    procnix.nvidia(finish);   // Linux: VRAM per process at once; GPU % from a ~1 s sample
+  });
+}
+// A faster pace (someone opened a Processes lens): take the next sample now (at least 1 s after the last one).
+function nixKick() {
+  if (!ps || nixBusy) return;
+  if (nixTimer) clearTimeout(nixTimer);
+  nixTimer = setTimeout(function () { nixCycle(false); }, Math.max(0, 1000 - (Date.now() - nixLast)));
+}
+function startNix() {
+  ps = { pid: process.pid, kill: function () { if (nixTimer) clearTimeout(nixTimer); nixTimer = null; } };   // sampled in this process
+  startedAt = Date.now(); startError = null; startup = { spawnAt: startedAt }; nixPrev = null;
+  nixCycle(true);
+}
+
 function start() {
-  if (ps || process.platform !== 'win32') return;
+  if (ps) return;
+  if (NIX) {
+    if (!idleTimer) idleTimer = setInterval(function () { if (ps && every !== SLOW_MS && Date.now() - lastLook > IDLE_MS) setEvery(SLOW_MS); }, 5000);
+    return startNix();
+  }
+  if (process.platform !== 'win32') return;
   if (!idleTimer) idleTimer = setInterval(function () { if (ps && every !== SLOW_MS && Date.now() - lastLook > IDLE_MS) setEvery(SLOW_MS); }, 5000);
   let src; try { src = fs.readFileSync(PS_FILE, 'utf8'); } catch (e) { startError = 'proctop.ps1 is missing'; return; }
   let child;
@@ -135,7 +193,7 @@ process.on('exit', function () { stop(); [SCRIPT_FILE, CTL_FILE].forEach(functio
 // null. withIcons: a process that didn't give its path (another user's, e.g. a second python.exe) borrows the icon of a
 // same-named one that did.
 function shape(sample, withIcons) {
-  const luids = hwstats.cardLuids(), byName = {};
+  const luids = hwstats.cardKeys(), byName = {};
   if (withIcons) sample.procs.forEach(function (r) { const p = pidPath[r.pid], id = p && icons[p.toLowerCase()]; if (id) byName[r.name.toLowerCase()] = id; });
   return sample.procs.map(function (r) {
     const o = { pid: r.pid, name: r.name, cpu: r.cpu, ram: r.ram, ioRead: r.ioRead, ioWrite: r.ioWrite,
@@ -146,7 +204,7 @@ function shape(sample, withIcons) {
 }
 // Latest sample for the /api/processes endpoint. Each call counts as "someone is looking": the sampler goes to FAST_MS.
 function get() {
-  if (process.platform !== 'win32') return { supported: false, procs: [] };
+  if (!supported()) return { supported: false, procs: [] };
   lastLook = Date.now();
   if (!ps && !startError && !restartTimer) start();
   setEvery(FAST_MS);
@@ -158,7 +216,10 @@ function get() {
     warming: !fresh && !!ps,                       // started, first numbers not in yet
     partial: !!(fresh && latest.partial),          // first block: memory values only, CPU % / GPU % / I/O follow ~1.4 s later (AI_SCOPE-059)
     since: ps ? startedAt : null,                  // when the sampler started (with the server; again after a crash)
-    samplerPid: ps ? ps.pid : null,                // the sampler's own powershell.exe (its cost shows in its own row)
+    samplerPid: ps ? ps.pid : null,                // the sampler's own process (powershell.exe; on Linux / macOS AI_SCOPE's own node)
+    // which lenses this system can fill (AI_SCOPE-052): per-process GPU numbers (Windows; Linux with NVIDIA), shared GPU memory
+    // (Windows only: nvidia-smi has no such number) and I/O (not macOS)
+    has: { gpu: hwstats.cardKeys().some(Boolean), shared: process.platform === 'win32', io: process.platform !== 'darwin' },
     error: startError,
     startup: startupTimes(),                      // where a cold start's time went (AI_SCOPE-059)
     cores: os.cpus().length,
@@ -168,7 +229,7 @@ function get() {
 // The kept samples (last HIST_MS, full ones only) for /api/processes/history: the page fills its 5-minute lines from it
 // when it opens or comes back after a gap. Doesn't count as a look.
 function getHistory() {
-  if (process.platform !== 'win32') return { supported: false, samples: [] };
+  if (!supported()) return { supported: false, samples: [] };
   return { supported: true, every: every, lastLookAgo: lastLook ? Date.now() - lastLook : null, samples: history.map(function (h) { return { at: h.at, procs: shape(h, false) }; }) };
 }
 // ms after Node spawned PowerShell: psRunning (script began), firstOutput, partialBlock, fullBlock; and the script's own
@@ -182,5 +243,5 @@ function startupTimes() {
 }
 // An exe icon (PNG) by the id given in get(); only icons of exes that were running are known (no file paths from the page).
 function icon(id) { return /^[0-9a-f]{12}$/.test(id) && iconById[id] || null; }
-function supported() { return process.platform === 'win32'; }
+function supported() { return process.platform === 'win32' || NIX; }
 module.exports = { start: start, get: get, history: getHistory, icon: icon, supported: supported, _test: { handleBlock: handleBlock, latest: function () { return latest; } } };

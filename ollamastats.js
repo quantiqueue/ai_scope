@@ -14,7 +14,9 @@ const path = require('path');
 const hwstats = require('./hwstats');
 const procstats = require('./procstats');   // Ollama's model process: VRAM per card, GPU %, CPU, RAM (Windows; AI_SCOPE-050)
 // Ollama (0.40 on snow) runs each loaded model in a child llama-server.exe of `ollama serve`; older versions used ollama_llama_server.exe.
-const MODEL_PROCS = ['llama-server.exe', 'ollama_llama_server.exe'];
+// 'ollama runner': newer Ollama builds run each model as `ollama runner …` (same binary) - matched by name + first
+// argument on Linux / macOS (AI_SCOPE-052; not seen on a test machine yet). Exe names: Windows (.exe ignored elsewhere).
+const MODEL_PROCS = ['llama-server.exe', 'ollama_llama_server.exe', 'ollama runner'];
 const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
 const StringDecoder = require('string_decoder').StringDecoder;
 

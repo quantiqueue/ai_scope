@@ -1,6 +1,6 @@
 // AI_SCOPE dashboard - Processes scope (AI_SCOPE-023, built in): the top 5 processes by VRAM, GPU, CPU and RAM, one lens
 // each. Lens settings (cog): per app (same program added together) or per process; VRAM / GPU: which graphics card.
-// Data: /api/processes (proctop.js; Windows only for now). The server's sampler is always warm but samples slowly
+// Data: /api/processes (proctop.js; Windows, Linux, macOS - AI_SCOPE-052). The server's sampler is always warm but samples slowly
 // while nobody asks, so the source polls only while one of its lenses is on screen (that puts it on its fast pace).
 
 defineSource('processes', '/api/processes', 'processes', 2500, true);
@@ -32,7 +32,8 @@ const PROC_METRICS = {
   // Ranked and drawn by read + write; split = the two columns shown.
   io: { rate: true, floor: 1e6, name: 'Top I/O', col: 'I/O', min: 1e3, fmt: rate2,
     description: 'The 5 processes reading and writing the most (MB/s): disk, but also network and devices — Windows counts all of a process\'s I/O together. Shows which app is loading a model.',
-    colTip: 'All I/O of the process: disk, network and devices together (Windows doesn\'t separate disk per process without admin rights).',
+    colTip: SERVER_OS === 'linux' ? 'Disk reads and writes of the process. Other users\' processes show 0 unless AI_SCOPE runs as root.'
+      : 'All I/O of the process: disk, network and devices together (Windows doesn\'t separate disk per process without admin rights).',
     value: p => (p.ioRead || 0) + (p.ioWrite || 0),
     split: [{ col: 'Read', value: p => p.ioRead || 0 }, { col: 'Write', value: p => p.ioWrite || 0 }] },
   ram: { floor: 0.5 * 1073741824, name: 'Top RAM', col: 'RAM', min: 0.005 * 1073741824, fmt: gb2,
@@ -40,6 +41,20 @@ const PROC_METRICS = {
     value: p => p.ram || 0 },
 };
 
+// What this system can show (AI_SCOPE-052): per-process GPU numbers (Windows; Linux with an NVIDIA card), shared GPU
+// memory (Windows only) and I/O (not macOS). The server says so in /api/processes (has); before its first answer, guess from the system and the cards.
+// Lenses it can't fill are left off the default page and out of the Add lens dialog.
+const PROC_NOSYS = 'Process stats aren\'t available on this system.';
+function procHas(what) {
+  const d = SOURCES.processes && SOURCES.processes.data;
+  if (d && d.has) return !!d.has[what];
+  if (SERVER_OS === 'win32') return true;
+  if (what === 'io') return SERVER_OS === 'linux';
+  if (what === 'shared') return false;
+  const gpus = (SOURCES.hardware && SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
+  return SERVER_OS === 'linux' && gpus.some(g => g.source === 'nvidia');
+}
+const procNeeds = (key, m) => key === 'shared' ? 'shared' : m.card ? 'gpu' : key === 'io' ? 'io' : null;
 // Rows for one metric: [{ name, pids: [], value, tip }], biggest first.
 function topRows(procs, m, st) {
   const card = m.card ? st.card : 0;
@@ -152,6 +167,7 @@ Object.keys(PROC_METRICS).forEach(key => {
     options: [['hide', 'No — its number is mostly other apps\' window memory, counted twice'], ['show', 'Yes']], when: () => SERVER_OS === 'win32' });
   defineLens({
     id: 'processes.' + key, scope: 'processes', size: 'tile',
+    available: () => !procNeeds(key, m) || procHas(procNeeds(key, m)),
     name: m.name, description: m.description, settings,
     markup: tableLensMarkup({ title: m.name, hint: '', cols: ['Process', '<span title="The last 5 minutes (while this page was open); hover for values">5 min</span>']
       .concat((m.split ? m.split.map(x => x.col) : [m.col]).map(c => m.colTip ? '<span title="' + escH(m.colTip) + '">' + c + '</span>' : c)), foot: '' }),
@@ -165,7 +181,8 @@ Object.keys(PROC_METRICS).forEach(key => {
       const t = L.el.querySelector('.ltitle');
       if (t.textContent !== title) t.textContent = title;
       let msg = '', rows = [];
-      if (!d.supported) msg = 'Process stats are Windows only for now.';
+      if (!d.supported) msg = PROC_NOSYS;
+      else if (procNeeds(key, m) && !procHas(procNeeds(key, m))) msg = 'Not available on this system.';
       else if (d.error) msg = escH(d.error);
       else if (!d.at) msg = 'Starting…';
       else if (m.card && d.procs.length && d.procs[0].gpus.length <= st.card) msg = 'GPU ' + (st.card + 1) + ' not found on this computer.';
@@ -205,18 +222,19 @@ function appCell(a) {
 }
 defineLens({
   id: 'processes.apps', scope: 'processes', size: 'full',
-  name: 'AI processes', description: 'Your installed AI apps (Bionic, Ollama, ComfyUI, Strata) with the VRAM, GPU, CPU and RAM of their own processes.',
+  name: 'AI processes', description: 'Your installed AI apps (Bionic, Ollama, ComfyUI, Strata, llama.cpp) with the VRAM, GPU, CPU and RAM of their own processes.',
   markup: tableLensMarkup({ title: 'AI processes', hint: '', cols: ['App', '<span title="All graphics cards added up; hover a value for each card">VRAM</span>',
     '<span title="The busiest graphics card; hover a value for each card">GPU</span>', 'CPU', 'RAM'], foot: '' }),
   init(L) { L.el.classList.add('ptop', 'papps'); },
   render(L, d) {
+    if (!procHas('gpu') && !L.state.noGpu) { L.state.noGpu = true; hideColumns(L.el, '2,3'); }   // VRAM, GPU: not on this system (AI_SCOPE-052)
     const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
     const card = i => gpus.length > 1 ? 'GPU ' + (i + 1) : 'GPU';
     const apps = (d.apps || []).slice().sort((a, b) => (b.process ? 1 : 0) - (a.process ? 1 : 0) ||
       (b.process ? b.process.gpus.reduce((s, g) => s + g.vram, 0) : 0) - (a.process ? a.process.gpus.reduce((s, g) => s + g.vram, 0) : 0));
     let msg = '';
-    if (!d.supported) msg = 'Process stats are Windows only for now.';
-    else if (!apps.length) msg = 'No AI app scope installed. Add Bionic, Ollama, ComfyUI or Strata on the Scopes page (+).';
+    if (!d.supported) msg = PROC_NOSYS;
+    else if (!apps.length) msg = 'No AI app scope installed. Add Bionic, Ollama, ComfyUI, Strata or llama.cpp on the Scopes page (+).';
     const trs = msg ? ['<tr class="pmsg"><td colspan="5">' + msg + '</td></tr>'] : apps.map(a => {
       const pr = a.process, dash = '<td class="na">—</td>';
       if (!pr) return '<tr class="poff"><td>' + appCell(a) + '</td>' + dash + dash + dash + dash + '</tr>';
@@ -239,16 +257,18 @@ defineLens({
 // then GPU n + VRAM n per card, then shared GPU memory per card ----------
 defineScopeLayout('processes', () => {
   const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
-  const n = Math.max(1, gpus.length), items = layoutOf(['processes.apps', 'processes.cpu', 'processes.ram']);
+  // GPU lenses per card where this system has per-process GPU numbers (AI_SCOPE-052); Windows always shows at least one
+  const n = !procHas('gpu') ? 0 : SERVER_OS === 'win32' ? Math.max(1, gpus.length) : gpus.length;
+  const items = layoutOf(['processes.apps', 'processes.cpu', 'processes.ram']);
   for (let i = 0; i < n; i++) items.push({ lens: 'processes.gpu', settings: { card: i } }, { lens: 'processes.vram', settings: { card: i } });
-  for (let i = 0; i < n; i++) items.push({ lens: 'processes.shared', settings: { card: i } });
-  items.push({ lens: 'processes.io', settings: {} });   // AI_SCOPE-030
+  if (procHas('shared')) for (let i = 0; i < n; i++) items.push({ lens: 'processes.shared', settings: { card: i } });
+  if (procHas('io')) items.push({ lens: 'processes.io', settings: {} });   // AI_SCOPE-030
   return items;
 });
 subscribeSource('processes', (d, err) => {
   const meta = document.getElementById('pMeta');
   if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }
-  meta.textContent = !d.supported ? 'Windows only for now'
+  meta.textContent = !d.supported ? 'not available on this system'
     : d.at ? 'updated ' + new Date(d.at).toLocaleTimeString() + ' · every ' + Math.round(d.every / 1000) + ' s · ' + d.procs.length + ' processes'
     : d.error ? 'Process stats unavailable' : 'starting…';
 }, document.querySelector('[data-panel="processes"] .section-head'));

@@ -295,7 +295,7 @@ function openAddLens(pg, pos) {
   lensForm.innerHTML = '<h2>' + CUSTOM_ICON + '<span>Add lens</span></h2>' +
     '<p class="lead">Click a lens to add it to ' + escH(name) + '. ' + escH(where) + '</p>' +
     groups.map(sc => {
-      const ls = lensesOf(sc.id);
+      const ls = lensesOf(sc.id).filter(d => !d.available || d.available());   // lenses this system can't fill are left out (AI_SCOPE-052)
       if (!ls.length) return '';
       const src = SOURCES[sc.id], off = src && src.data && src.data.online === false;
       return '<div class="lgroup"><div class="lghead">' + scopeIcon(sc, 'licon') + '<span>' + escH(sc.name) + '</span>' +
