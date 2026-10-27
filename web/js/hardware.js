@@ -150,6 +150,68 @@ defineLens({
   },
 });
 
+// ---------- PCIe (AI_SCOPE-065): one card's bus traffic (RX / TX MB/s, chart like the disk tile) + link ----------
+// NVIDIA only (dmon stream); "link" = current vs max negotiated PCIe link from nvidia-smi (info.gpus[].link).
+// MB/s values; chart scaled to the busiest moment of the 5 minutes (+25 %), minimum 1 MB/s.
+const pcieOf = (s, i) => { const g = s && s.gpus && s.gpus[i]; return g && g.pcieRx != null ? g : null; };
+const pcieScale = (hist, i) => Math.max(1, 1.25 * hist.reduce((a, s) => { const g = pcieOf(s, i); return g ? Math.max(a, g.pcieRx || 0, g.pcieTx || 0) : a; }, 0));
+function pciePath(hist, i, key, max) {
+  const n = hist.length;
+  return hist.map((s, k) => { const g = s.gpus && s.gpus[i]; return g && g[key] != null ? [n < 2 ? 100 : 100 * k / (n - 1), 100 - Math.min(100, 100 * (g[key] || 0) / max)] : null; })
+    .filter(Boolean).map((p, j) => (j ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join(' ');
+}
+const fmtMb = m => m == null ? '—' : m >= 1024 ? (m / 1024).toFixed(2) + ' GB/s' : Math.round(m) + ' MB/s';
+function linkText(l) {
+  if (!l) return '';
+  const cur = 'Gen ' + l.gen + ' ×' + l.width, max = 'Gen ' + l.genMax + ' ×' + l.widthMax;
+  return cur === max ? max : cur + ' of ' + max;
+}
+defineLens({
+  id: 'hardware.pcie', scope: 'hardware', size: 'tile',
+  name: 'PCIe', description: "One graphics card's PCIe bus traffic (RX / TX MB/s; model loads spike it) and its link vs what the card can use at most. NVIDIA cards only.",
+  settings: [
+    { id:'card', label:'Graphics card', type:'gpu', default:0 },
+  ],
+  markup: st => `
+  <div class="tilebox" data-tile="pcie${st.card}">` + lensHeadMarkup('PCIe') + `
+  <div class="tile">
+    <div class="v">—</div>
+    <div class="sub">&nbsp;</div>
+    <div class="meter"><div></div></div>
+    <div class="spark"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
+      <path class="line"></path><path class="line wline"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
+      <div class="tip" hidden></div></div>
+    <div class="spark-axis"><span>5 min ago</span><span class="dlegend"><i class="rd"></i>rx <i class="wr"></i>tx</span><span>now</span></div>
+  </div></div>`,
+  render(L, d) {
+    const info = d.info, gpus = info.gpus || [], i = L.settings.card;
+    const box = L.el.querySelector('[data-tile="pcie' + i + '"]'); if (!box) return;
+    const num = gpus.length > 1 ? ' ' + (i + 1) : '';   // "PCIe 2" with several cards, plain with one
+    if (box.querySelector('.ltitle').textContent !== 'PCIe' + num) box.querySelector('.ltitle').textContent = 'PCIe' + num;
+    const s = hwLatest(d); if (!s) return;
+    const v = box.querySelector('.tile');
+    const name = gpus[i] ? gpus[i].name : (info.gpuSource === 'none' ? 'No GPU stats available' : gpus.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
+    const g = (s.gpus && s.gpus[i]) || {};
+    if (g.pcieRx == null) {
+      v.querySelector('.v').innerHTML = NA_HTML;
+      v.querySelector('.sub').textContent = name + ' · ' + (gpus[i] && gpus[i].source !== 'nvidia' ? 'PCIe traffic: NVIDIA cards only' : 'detecting…');
+      v.querySelector('.meter > div').style.width = '0%';
+      v.querySelector('.spark').title = '';
+      return;
+    }
+    const rx = g.pcieRx || 0, tx = g.pcieTx || 0, both = rx + tx;
+    const scale = pcieScale(d.history, i);
+    v.querySelector('.v').innerHTML = both + '<small> MB/s</small>';
+    const lt = linkText(gpus[i] && gpus[i].link);
+    v.querySelector('.sub').textContent = lt ? lt : name;
+    if (lt) v.querySelector('.sub').title = 'PCIe link between card and PC: Gen sets the per-lane speed, × the lanes (Gen 4 ×16 = 16 GB/s). Showing current vs what the card could use at most — current can drop while the card is idle; below max explains slow model loads.';
+    v.querySelector('.meter > div').style.width = Math.max(0, Math.min(100, 100 * both / scale)) + '%';
+    v.querySelector('.line').setAttribute('d', pciePath(d.history, i, 'pcieRx', scale));
+    v.querySelector('.wline').setAttribute('d', pciePath(d.history, i, 'pcieTx', scale));
+    v.querySelector('.spark').title = 'Top of the chart = ' + fmtMb(scale) + ' (rx / tx MB/s)';
+  },
+});
+
 // ---------- Disk (AI_SCOPE-030): one physical disk - active time %, read and write lines ----------
 // bytes/s -> "12.3 MB/s" ("850 KB/s" below 1 MB/s)
 const fmtRate = b => b == null ? '—' : b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB/s' : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + ' MB/s' : Math.round(b / 1e3) + ' KB/s';
@@ -300,6 +362,11 @@ document.addEventListener('mousemove', e => {
     tip.textContent = (x ? 'R ' + fmtRate(x.read) + ' · W ' + fmtRate(x.write) + ' · ' + (x.active != null ? x.active.toFixed(0) : '—') + '%' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
+  if (id.indexOf('pcie') === 0) {   // PCIe tile (AI_SCOPE-065): rx / tx at that time
+    const g = h.gpus && h.gpus[+id.slice(4)];
+    tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
+    return;
+  }
   if (id.indexOf('pow') === 0) {   // power tile (AI_SCOPE-027): watts at that time
     const g = h.gpus && h.gpus[+id.slice(3)];
     tip.textContent = (g && g.power != null ? Math.round(g.power) + ' W' + (g.powerLimit ? ' of ' + Math.round(g.powerLimit) + ' W limit' : '') : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
@@ -316,9 +383,10 @@ document.addEventListener('mouseout', e => {
 defineScopeLayout('hardware', () => {
   const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
   const items = layoutOf(['hardware.cpu', 'hardware.ram']);
-  for (let i = 0; i < Math.max(1, gpus.length); i++) {   // power tile per card (AI_SCOPE-027)
+  for (let i = 0; i < Math.max(1, gpus.length); i++) {   // power + PCIe tile per card (027 / 065)
     items.push({ lens: 'hardware.gpu', settings: { card: i, show: 'both' } });
     items.push({ lens: 'hardware.power', settings: { card: i } });
+    items.push({ lens: 'hardware.pcie', settings: { card: i } });
   }
   const disks = (SOURCES.hardware.data && SOURCES.hardware.data.info.disks) || [];
   disks.forEach(x => items.push({ lens: 'hardware.disk', settings: { disk: x.id } }));   // AI_SCOPE-030

@@ -62,12 +62,16 @@ function allCards() { return nvCards.concat(winCards); }
 // full query fails once we fall back to the basic one for good (temperature then shows n/a).
 const NV_BASIC = 'index,name,utilization.gpu,memory.used,memory.total';
 const NV_FULL = NV_BASIC + ',temperature.gpu,power.draw,power.limit';
-let nvQuery = NV_FULL;
+// PCIe link (AI_SCOPE-065): current vs max negotiated link; extra fields, so the fallback steps down
+// full-pcie -> full -> basic (old drivers may not know the pcie fields).
+const NV_PCIE = NV_FULL + ',pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max';
+let nvQuery = NV_PCIE;
 function readNvidia(cb) {
   const query = nvQuery;
   run('nvidia-smi', ['--query-gpu=' + query, '--format=csv,noheader,nounits'], 5000,
     function (err, out) {
       if (err || !out.trim()) {
+        if (query === NV_PCIE) { nvQuery = NV_FULL; return readNvidia(cb); }
         if (query === NV_FULL) { nvQuery = NV_BASIC; return readNvidia(cb); }
         return cb(null);
       }
@@ -76,7 +80,8 @@ function readNvidia(cb) {
         const used = numOrNull(p[3]), total = numOrNull(p[4]);
         return { id: 'nv' + p[0], name: p[1], vendor: 'NVIDIA', source: 'nvidia', util: numOrNull(p[2]),
                  vramUsed: used == null ? null : used * 1048576, vramTotal: total == null ? null : total * 1048576,
-                 temp: numOrNull(p[5]), power: numOrNull(p[6]), powerLimit: numOrNull(p[7]) };
+                 temp: numOrNull(p[5]), power: numOrNull(p[6]), powerLimit: numOrNull(p[7]),
+                 link: query === NV_PCIE ? { gen: numOrNull(p[8]), genMax: numOrNull(p[9]), width: numOrNull(p[10]), widthMax: numOrNull(p[11]) } : null };
       }).filter(function (c) { return c.name; });
       cb(cards.length ? cards : null);
     });
@@ -245,6 +250,30 @@ const PS_VRAM_TOTAL =
   " Where-Object { $_.'HardwareInformation.qwMemorySize' } |" +
   " ForEach-Object { $_.DriverDesc + '|' + $_.'HardwareInformation.qwMemorySize' }";
 
+// ---- PCIe bus traffic (AI_SCOPE-065): one persistent 'nvidia-smi dmon -s t' stream ----
+// RX / TX MB/s per NVIDIA card; a long-running process like the Windows counter loop (spawning
+// per poll would cost). Latest block kept; values merge into the next 2 s sample.
+let pcieLatest = {};   // device index ('0', '1') -> { rx, tx } MB/s
+function startPcie() {
+  let buf = '';
+  let ps;
+  try { ps = spawn('nvidia-smi', ['dmon', '-s', 't'], { windowsHide: true }); } catch (e) { return; }   // 1 s default delay; Windows calls it -d/--delay, Linux --sleep - pass neither
+  ps.on('error', function () {});
+  ps.on('exit', function () { setTimeout(startPcie, 5000); });   // restart if it dies (like winCards)
+  ps.stdout.on('data', function (d) {
+    buf += d;
+    const lines = buf.split(/\r?\n/);
+    buf = lines.pop();
+    lines.forEach(function (l) {
+      const p = l.trim().split(/\s+/);
+      if (p.length !== 3) return;   // data lines are '<idx> <rx> <tx>'; header lines have 4+ tokens
+      const rx = numOrNull(p[1]), tx = numOrNull(p[2]);
+      if (p[0].match(/^\d+$/) && rx != null && tx != null) pcieLatest[p[0]] = { rx: rx, tx: tx };
+    });
+  });
+  process.on('exit', function () { try { ps.kill(); } catch (e) {} });
+}
+
 function setMode() {
   gpuMode = nvCards.length && winCards.length ? 'mixed' : nvCards.length ? 'nvidia' : winCards.length ? 'windows' : 'none';
 }
@@ -262,6 +291,7 @@ function detectGpu(cb) {
   const forceWin = String(process.env.AI_SCOPE_GPU_SOURCE || '').toLowerCase() === 'windows';
   const afterNvidia = function (nv) {
     nvCards = nv || [];
+    if (nvCards.length) startPcie();   // PCIe traffic stream (AI_SCOPE-065)
     if (process.platform !== 'win32') { setMode(); return cb(); }
     readDxgi(function (adapters) {
       if (adapters) {
@@ -305,7 +335,7 @@ function pollGpu() {
     // Keep the card list stable; update readings by id.
     cards.forEach(function (c) {
       const old = nvCards.filter(function (o) { return o.id === c.id; })[0];
-      if (old) { old.util = c.util; old.vramUsed = c.vramUsed; old.vramTotal = c.vramTotal; old.temp = c.temp; old.power = c.power; old.powerLimit = c.powerLimit; }
+      if (old) { old.util = c.util; old.vramUsed = c.vramUsed; old.vramTotal = c.vramTotal; old.temp = c.temp; old.power = c.power; old.powerLimit = c.powerLimit; if (c.link) old.link = c.link; }
     });
   });
 }
@@ -326,9 +356,11 @@ function sample() {
     vramTotal: has('vramTotal') ? sum('vramTotal') : null,
     // ...and per card, in the same order as info.gpus.
     // temp °C, power / powerLimit W: NVIDIA only (null for AMD/Intel - Windows' counters don't report them).
-    gpus: cards.map(function (c) { return { util: c.util, vramUsed: c.vramUsed, vramTotal: c.vramTotal,
+    // pcieRx / pcieTx MB/s: NVIDIA only, from the dmon stream (null until the first block arrives).
+    gpus: cards.map(function (c) { const px = c.source === 'nvidia' ? pcieLatest[c.id.replace(/^nv/, '')] : null; return { util: c.util, vramUsed: c.vramUsed, vramTotal: c.vramTotal,
                                             temp: c.temp == null ? null : c.temp, power: c.power == null ? null : c.power,
-                                            powerLimit: c.powerLimit == null ? null : c.powerLimit }; }),
+                                            powerLimit: c.powerLimit == null ? null : c.powerLimit,
+                                            pcieRx: px ? px.rx : null, pcieTx: px ? px.tx : null }; }),
   };
   // Disks (AI_SCOPE-030): read / write bytes per second and active time % per physical disk; names in info.disks
   const disks = diskstats.get();
@@ -366,7 +398,7 @@ function getStats() {
       cores: cpus.length,
       gpuName: cards.length ? cards.map(function (c) { return c.name; }).join(' + ') : null,
       gpuSource: gpuMode,
-      gpus: cards.map(function (c) { return { id: c.id, name: c.name, vendor: c.vendor, source: c.source, vramTotal: c.vramTotal }; }),
+      gpus: cards.map(function (c) { return { id: c.id, name: c.name, vendor: c.vendor, source: c.source, vramTotal: c.vramTotal, link: c.link || null }; }),
       disks: diskOrder.map(function (id) { return { id: id, name: diskNames[id] }; }),   // physical disks (AI_SCOPE-030)
       disksSupported: diskstats.supported(),
     },

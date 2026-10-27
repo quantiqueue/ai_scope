@@ -6,7 +6,7 @@ Back to the [README](../README.md) · [Manual](README.md)
 
 | Scope | What it shows |
 |---|---|
-| **Hardware** (built in) | CPU, RAM, a GPU + VRAM + Power tile per graphics card and a Disk tile per physical disk (active time, read / write speed), with 5-minute sparklines; GPU temperature, power draw and power limit on NVIDIA cards |
+| **Hardware** (built in) | CPU, RAM, a GPU + VRAM + Power + PCIe tile per graphics card and a Disk tile per physical disk (active time, read / write speed), with 5-minute sparklines; GPU temperature, power draw / limit and PCIe bus traffic + link on NVIDIA cards |
 | **Processes** (built in) | Your AI apps' own VRAM, GPU, CPU and RAM (AI processes), and the top 5 processes by CPU, RAM, I/O (read / write), and per graphics card GPU, VRAM and shared GPU memory, each with a 5-minute line per process |
 | **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit |
 | **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit |
@@ -52,7 +52,7 @@ The change is saved with the page when you save.
 
 ## Hardware on each system
 
-CPU and RAM tiles work everywhere. GPU and VRAM tiles come from `nvidia-smi` for NVIDIA cards (Windows and Linux) and from Windows' own counters for AMD and Intel cards on Windows; temperature and power draw are NVIDIA only. A Mac shows no GPU or Disk tiles yet. The **Power** tile per card charts the draw as a share of the card's power limit (watts on hover); cards that don't report power show it as not available.
+CPU and RAM tiles work everywhere. GPU and VRAM tiles come from `nvidia-smi` for NVIDIA cards (Windows and Linux) and from Windows' own counters for AMD and Intel cards on Windows; temperature, power draw and PCIe traffic / link are NVIDIA only. A Mac shows no GPU or Disk tiles yet. The **Power** tile per card charts the draw as a share of the card's power limit (watts on hover); cards that don't report power show it as not available. The **PCIe** tile charts bus traffic (RX / TX MB/s — model loads spike it) and names the card's link (current vs what it could use at most; current drops while a card is idle).
 
 ## Disk tiles (Hardware)
 
