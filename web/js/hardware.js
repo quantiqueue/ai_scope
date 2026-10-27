@@ -152,6 +152,7 @@ defineLens({
 
 // ---------- PCIe (AI_SCOPE-065): one card's bus traffic (RX / TX MB/s, chart like the disk tile) + link ----------
 // NVIDIA only (dmon stream); "link" = current vs max negotiated PCIe link from nvidia-smi (info.gpus[].link).
+// Sub line: link text then the card name (AI_SCOPE-068) — "Gen 5 ×8 of Gen 5 ×16 · NVIDIA GeForce RTX 5060 Ti".
 // MB/s values; chart scaled to the busiest moment of the 5 minutes (+25 %), minimum 1 MB/s.
 const pcieOf = (s, i) => { const g = s && s.gpus && s.gpus[i]; return g && g.pcieRx != null ? g : null; };
 const pcieScale = (hist, i) => Math.max(1, 1.25 * hist.reduce((a, s) => { const g = pcieOf(s, i); return g ? Math.max(a, g.pcieRx || 0, g.pcieTx || 0) : a; }, 0));
@@ -203,7 +204,7 @@ defineLens({
     const scale = pcieScale(d.history, i);
     v.querySelector('.v').innerHTML = both + '<small> MB/s</small>';
     const lt = linkText(gpus[i] && gpus[i].link);
-    v.querySelector('.sub').textContent = lt ? lt : name;
+    v.querySelector('.sub').textContent = lt ? lt + ' · ' + name : name;   // 068: name the card next to the link text
     if (lt) v.querySelector('.sub').title = 'PCIe link between card and PC: Gen sets the per-lane speed, × the lanes (Gen 4 ×16 = 16 GB/s). Showing current vs what the card could use at most — current can drop while the card is idle; below max explains slow model loads.';
     v.querySelector('.meter > div').style.width = Math.max(0, Math.min(100, 100 * both / scale)) + '%';
     v.querySelector('.line').setAttribute('d', pciePath(d.history, i, 'pcieRx', scale));
