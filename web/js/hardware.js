@@ -24,7 +24,7 @@ function tileValues(s) {
   const v = { cpu: s.cpu, ram: pct(s.ramUsed, s.ramTotal) };
   // Older samples (or no per-card data): fall back to the whole-PC numbers for the first card.
   const cards = s.gpus && s.gpus.length ? s.gpus : [{ util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal }];
-  cards.forEach((g, i) => { v['gpu' + i] = g.util; v['vram' + i] = pct(g.vramUsed, g.vramTotal); });
+  cards.forEach((g, i) => { v['gpu' + i] = g.util; v['vram' + i] = pct(g.vramUsed, g.vramTotal); v['pow' + i] = pct(g.power, g.powerLimit); });
   return v;
 }
 function setTile(el, value, big, sub, series) {
@@ -120,6 +120,33 @@ defineLens({
       }
       setTile(vEl, vram, vramBig, vramSub, hwSeries(d, 'vram' + i));
     }
+  },
+});
+
+// ---------- Power (AI_SCOPE-027): one card's power draw vs its power limit, own quarter-size tile ----------
+// NVIDIA only (Windows' GPU counters report no power for AMD / Intel cards) - those cards show "not available".
+// The chart and meter are % of the card's power limit, so cards compare fairly; hover gives the watts.
+defineLens({
+  id: 'hardware.power', scope: 'hardware', size: 'tile',
+  name: 'Power', description: "One graphics card's power draw vs its power limit, with a 5-minute history (NVIDIA cards report it; others don't).",
+  settings: [
+    { id:'card', label:'Graphics card', type:'gpu', default:0 },
+  ],
+  markup: st => tileHtml({ id:'pow' + st.card, label:'Power' + (st.card ? ' ' + (st.card + 1) : '') }),
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="pow' + L.settings.card + '"]'); if (!box) return;
+    const info = d.info, gpus = info.gpus || [], i = L.settings.card;
+    const num = gpus.length > 1 ? ' ' + (i + 1) : '';   // "Power 2" with several cards, plain "Power" with one
+    if (box.querySelector('.ltitle').textContent !== 'Power' + num) box.querySelector('.ltitle').textContent = 'Power' + num;
+    const s = hwLatest(d); if (!s) return;
+    const g = (s.gpus && s.gpus[i]) || {};
+    const name = gpus[i] ? gpus[i].name : (info.gpuSource === 'none' ? 'No GPU stats available' : gpus.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
+    const big = g.power != null
+      ? Math.round(g.power) + (g.powerLimit != null ? '<small> / ' + Math.round(g.powerLimit) + ' W</small>' : '<small> W</small>')
+      : NA_HTML;
+    const sub = g.power != null ? name : name + ' · power not available for this card';
+    setTile(box, tileValues(s)['pow' + i], big, sub, hwSeries(d, 'pow' + i));
+    box.querySelector('.spark').title = g.powerLimit != null ? 'Top of the chart = ' + Math.round(g.powerLimit) + ' W (the card\'s power limit)' : '';
   },
 });
 
@@ -273,6 +300,11 @@ document.addEventListener('mousemove', e => {
     tip.textContent = (x ? 'R ' + fmtRate(x.read) + ' · W ' + fmtRate(x.write) + ' · ' + (x.active != null ? x.active.toFixed(0) : '—') + '%' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
+  if (id.indexOf('pow') === 0) {   // power tile (AI_SCOPE-027): watts at that time
+    const g = h.gpus && h.gpus[+id.slice(3)];
+    tip.textContent = (g && g.power != null ? Math.round(g.power) + ' W' + (g.powerLimit ? ' of ' + Math.round(g.powerLimit) + ' W limit' : '') : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
+    return;
+  }
   tip.textContent = (v == null ? 'n/a' : v.toFixed(0) + '%') + ' · ' + new Date(h.t).toLocaleTimeString();
 });
 document.addEventListener('mouseout', e => {
@@ -284,7 +316,10 @@ document.addEventListener('mouseout', e => {
 defineScopeLayout('hardware', () => {
   const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
   const items = layoutOf(['hardware.cpu', 'hardware.ram']);
-  for (let i = 0; i < Math.max(1, gpus.length); i++) items.push({ lens: 'hardware.gpu', settings: { card: i, show: 'both' } });
+  for (let i = 0; i < Math.max(1, gpus.length); i++) {   // power tile per card (AI_SCOPE-027)
+    items.push({ lens: 'hardware.gpu', settings: { card: i, show: 'both' } });
+    items.push({ lens: 'hardware.power', settings: { card: i } });
+  }
   const disks = (SOURCES.hardware.data && SOURCES.hardware.data.info.disks) || [];
   disks.forEach(x => items.push({ lens: 'hardware.disk', settings: { disk: x.id } }));   // AI_SCOPE-030
   return items;
