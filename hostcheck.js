@@ -6,7 +6,11 @@
 // are let through. No dependencies; conservative JS.
 'use strict';
 const os = require('os');
-const EXTRA_HOSTS = String(process.env.AI_SCOPE_ALLOWED_HOSTS || '').split(',').map(function (h) { return h.trim().toLowerCase(); }).filter(Boolean);
+let EXTRA_HOSTS = String(process.env.AI_SCOPE_ALLOWED_HOSTS || '').split(',').map(function (h) { return h.trim().toLowerCase(); }).filter(Boolean);
+// AI_SCOPE-010: the "Allowed host names" setting, set at boot and on change (env values are read once at load).
+function setExtraHosts(list) {
+  EXTRA_HOSTS = (list || []).map(function (h) { return String(h || '').trim().toLowerCase(); }).filter(function (h) { return !!h; });
+}
 let ownAddrs = null, ownAddrsAt = 0;
 function ownAddresses() {   // this PC's addresses (refreshed every 30 s: DHCP / VPN can change them)
   if (!ownAddrs || Date.now() - ownAddrsAt > 30000) {
@@ -28,4 +32,4 @@ function hostAllowed(req) {
   const me = os.hostname().toLowerCase();
   return h === me || h.split('.')[0] === me;   // snow, snow.local, snow.lan, snow.home.arpa
 }
-module.exports = { hostAllowed: hostAllowed };
+module.exports = { hostAllowed: hostAllowed, setExtraHosts: setExtraHosts };

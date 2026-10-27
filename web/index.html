@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI_SCOPE</title>
 <link rel="icon" href="/favicon.ico">
-<script>try { var t = JSON.parse(localStorage.getItem('aiscope.theme')); if (t === 'dark' || t === 'magenta' || t === 'neo' || t === 'eva') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<script>window.AI_SCOPE_SETTINGS = /*__SETTINGS__*/{}; (function(){ var t = (window.AI_SCOPE_SETTINGS || {}).theme; if (t === 'dark' || t === 'magenta' || t === 'neo' || t === 'eva') document.documentElement.dataset.theme = t; })();</script>
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;800&display=swap">
 </head>
@@ -16,17 +16,10 @@
   <div class="addwrap">
     <a class="addbtn" id="addBtn" href="#scopes" title="Scopes">+</a>
   </div>
-  <div class="themewrap">
-    <button class="themebtn" id="themeBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="Theme: Default" aria-label="Theme: Default">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r="1.2"/><circle cx="17.5" cy="10.5" r="1.2"/><circle cx="8.5" cy="7.5" r="1.2"/><circle cx="6.5" cy="12.5" r="1.2"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16c3.1 0 5.6-2.5 5.6-5.6C21.6 6 17.3 2 12 2z"/></svg>
+  <div class="cogwrap">
+    <button class="cogbtn" id="settingsBtn" type="button" title="AI_SCOPE Settings" aria-label="AI_SCOPE Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1-.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l-.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
     </button>
-    <div class="thememenu" id="themeMenu" role="menu" hidden>
-      <button type="button" role="menuitemradio" data-theme-opt="default" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#f6f6f7 48%,#18181b 52%)"></span>Default<span class="ck">&#10003;</span></button>
-      <button type="button" role="menuitemradio" data-theme-opt="dark" aria-checked="false"><span class="sw" style="background:#18181b"></span>Dark<span class="ck">&#10003;</span></button>
-      <button type="button" role="menuitemradio" data-theme-opt="magenta" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#1f0d19 48%,#ff3fa4 52%)"></span>Magenta<span class="ck">&#10003;</span></button>
-      <button type="button" role="menuitemradio" data-theme-opt="neo" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#09130b 48%,#2bff88 52%)"></span>Neo<span class="ck">&#10003;</span></button>
-      <button type="button" role="menuitemradio" data-theme-opt="eva" aria-checked="false"><span class="sw" style="background:linear-gradient(135deg,#5b2d86 48%,#9be33c 52%)"></span>EVA<span class="ck">&#10003;</span></button>
-    </div>
   </div>
 </nav>
 <div class="empty" id="noTabs" hidden>No scopes open. Click <b>+</b> to open one.</div>
@@ -45,7 +38,6 @@
   <div class="section-head">
     <h1>Scopes</h1>
     <span class="meta">Click a scope to open it</span>
-    <button type="button" class="stopbtn" id="stopBtn" hidden title="Stops the AI_SCOPE server on this computer (Ollama relay and ComfyUI run history stop recording too)">Stop AI_SCOPE</button>
   </div>
   <div class="wrap"><div id="gallery"></div></div>
 </section>
@@ -119,6 +111,7 @@
 <script src="/js/strata.js"></script>
 <script src="/js/llamacpp.js"></script>
 <script src="/js/shell.js"></script>
+<script src="/js/settings.js"></script>
 <script src="/js/layout.js"></script>
 <script src="/js/custom.js"></script>
 </body>

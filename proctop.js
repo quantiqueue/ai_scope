@@ -19,6 +19,7 @@ const procnix = require('./procnix');
 const NIX = procnix.supported() && process.platform !== 'win32';
 
 const FAST_MS = 5000;            // while someone looks (a collect over ~340 processes: ~0.4 s, ~1.9 % of a 16-thread CPU at this pace)
+let fastMs = FAST_MS;            // AI_SCOPE-010: the settings' "Process Refresh Rate" (seconds), set through setFastMs
 const SLOW_MS = 30000;           // while nobody looks: keeps the query open (no cold start) and a coarse history
 const IDLE_MS = 30000;           // back to SLOW_MS this long after the last look
 const STALE_MS = 3 * SLOW_MS;    // a sample this old is not shown (the sampler is gone or stuck)
@@ -87,6 +88,14 @@ function setEvery(ms) {
   every = ms;
   if (NIX) { if (faster) nixKick(); return; }
   try { fs.writeFileSync(CTL_FILE, String(ms)); } catch (e) {}
+}
+// AI_SCOPE-010's "Process Refresh Rate": the watched pace, in ms (2-60 s). A sampler already on the old fast pace
+// moves to the new one at once; a cold one stays cold until someone looks.
+function setFastMs(ms) {
+  const n = Math.max(2000, Math.min(60000, Math.round(ms)));
+  const wasOnFastPace = every === fastMs;
+  fastMs = n;
+  if (wasOnFastPace) setEvery(fastMs);
 }
 
 // ---------- Linux / macOS sampler (AI_SCOPE-052) ----------
@@ -207,7 +216,7 @@ function get() {
   if (!supported()) return { supported: false, procs: [] };
   lastLook = Date.now();
   if (!ps && !startError && !restartTimer) start();
-  setEvery(FAST_MS);
+  setEvery(fastMs);
   const fresh = latest && Date.now() - latest.at < STALE_MS;
   return {
     supported: true,
@@ -244,4 +253,5 @@ function startupTimes() {
 // An exe icon (PNG) by the id given in get(); only icons of exes that were running are known (no file paths from the page).
 function icon(id) { return /^[0-9a-f]{12}$/.test(id) && iconById[id] || null; }
 function supported() { return process.platform === 'win32' || NIX; }
-module.exports = { start: start, get: get, history: getHistory, icon: icon, supported: supported, _test: { handleBlock: handleBlock, latest: function () { return latest; } } };
+module.exports = { start: start, get: get, history: getHistory, icon: icon, supported: supported, setFastMs: setFastMs,
+  _test: { handleBlock: handleBlock, latest: function () { return latest; } } };
