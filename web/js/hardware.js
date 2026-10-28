@@ -384,6 +384,16 @@ document.addEventListener('mousemove', e => {
     tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
+  if (id === 'scpu') {   // Strata process CPU tile (AI_SCOPE-075): its own history, % of all cores at that time
+    const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
+    const k4 = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));
+    const hs4 = hst[k4], c = hs4.cpu;
+    tip.textContent = (c != null ? Math.min(100, c).toFixed(0) + '%' : 'n/a') + ' · ' + new Date(hs4.t).toLocaleTimeString();
+    const x4 = hst.length < 2 ? 100 : 100 * k4 / (hst.length - 1);
+    guide.setAttribute('x1', x4); guide.setAttribute('x2', x4); guide.style.display = '';
+    tip.hidden = false; tip.style.left = x4 + '%';
+    return;
+  }
   if (id === 'ramC') {   // Committed RAM tile (AI_SCOPE-074): reserved memory against the commit limit at that time
     const lim = h.commitLimit;
     tip.textContent = (lim != null && h.commitUsed != null

@@ -32,16 +32,21 @@ let ps = null, luidsKey = null, restartTimer = null;
 // samples below, Hardware card order, newest last. Only cycles that found the app's processes add a point,
 // so a stopped app leaves a gap instead of invented zeros.
 // AI_SCOPE-073: each point also carries the process's ram / ramPrivate (bytes, whole family — same rule as
-// get(): null when the process refused OpenProcess), for the Strata RAM lens.
+// get(): null when the process refused OpenProcess), for the Strata RAM lens, and AI_SCOPE-075 adds `cpu`
+// (% of the whole CPU, same clamp as get()).
 const HIST = 150;
-const hist = {};        // key -> [{ t, gpus: [{ vram, util }], ram, ramPrivate }]
+const hist = {};        // key -> [{ t, gpus: [{ vram, util }], ram, ramPrivate, cpu }]
 function pushHist(key) {
   const r = results[key];
   if (!r) return;
   const luids = hwstats.cardKeys();
   const h = hist[key] || (hist[key] = []);
-  if (luids.length) h.push({ t: r.at, gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util } : { vram: 0, util: null }; }),
-    ram: r.ramUnknown && !r.ram ? null : r.ram, ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate });
+  // 075 fix: the point is pushed even when the machine has no detectable graphics cards - the gpus list is
+  // simply empty, so the CPU / RAM lenses keep their history there (073's notes already described this, the
+  // old `if (luids.length)` guard meant it was not actually true).
+  h.push({ t: r.at, gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util } : { vram: 0, util: null }; }),
+    ram: r.ramUnknown && !r.ram ? null : r.ram, ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate,
+    cpu: r.cpu == null ? null : Math.min(100, r.cpu) });
   if (h.length > HIST) h.shift();
 }
 

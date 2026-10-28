@@ -258,6 +258,36 @@ defineLens({
   },
 });
 
+// ---------- CPU of Strata's model process (AI_SCOPE-075) ----------
+// Mirrors the Hardware CPU tile's style (big "NN%", sub line names the machine, meter = the same %, sparkline
+// from history) but shows Strata's own process numbers from procstats - one number for the whole PC, so there is
+// no card picker and no Show choice, only Width. The Hardware tile needs no stale-state wording because its
+// sampler always runs; this one reuses 072 / 073's rule: no fresh process sample => show the newest history
+// point and say Inactive.
+const SCPU_TIP = "Share of the whole CPU (all cores) used by Strata's model process";
+defineLens({
+  id: 'strata.cpu', scope: 'strata', size: 'tile',
+  name: 'Strata CPU', description: "CPU share of Strata's model process across all cores, with a 5-minute history.",
+  markup: () => tileHtml({ id:'scpu', label:'Strata CPU' }),
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="scpu"]'); if (!box) return;
+    box.querySelector('.ltitle').title = SCPU_TIP;
+    // Machine line exactly like hardware.cpu (the tile label already says which app this is).
+    const hw = (SOURCES.hardware && SOURCES.hardware.data) || {};
+    const info = hw.info || {};
+    const hist = d.processHistory || [];
+    const series = hist.map(h => h.cpu == null ? null : Math.min(100, h.cpu));
+    let cur = d.process ? d.process.cpu : null, inactive = false;
+    if (cur == null) {                                            // stale process - newest point history has
+      for (let i = hist.length - 1; i >= 0; i--) if (hist[i].cpu != null) { cur = hist[i].cpu; break; }
+      inactive = true;
+    }
+    const v = cur == null ? null : Math.min(100, cur);
+    setTile(box, v, v == null ? NA_HTML : v.toFixed(0) + '<small>%</small>',
+      inactive ? 'Inactive' : (info.cpuModel || 'CPU') + ' · ' + (info.cores || '?') + ' threads', series);
+  },
+});
+
 // ---------- The Strata scope page: header line + its lenses ----------
 subscribeSource('strata', (d, err) => {
   const meta = document.getElementById('sMeta');
@@ -269,7 +299,8 @@ subscribeSource('strata', (d, err) => {
 // tiles stay out of the default (no per-process GPU stats there) but remain addable - they answer
 // "Not available on this system" until 062 changes that.
 // AI_SCOPE-073: a new row at the very bottom, "Strata RAM (Working)" + "Strata RAM (Committed)" - on every OS,
-// since per-process RAM exists on Linux / macOS too.
+// since per-process RAM exists on Linux / macOS too. AI_SCOPE-075: "Strata CPU" leads that same row, also on
+// every OS (procstats reports CPU % on Windows, Linux and macOS).
 defineScopeLayout('strata', () => {
   const items = layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.loaded', 'strata.requests', 'strata.installed']);
   if (SERVER_OS !== 'darwin') {
@@ -279,6 +310,7 @@ defineScopeLayout('strata', () => {
       items.push({ lens: 'strata.gpu', settings: { card: i, show: 'vram' } });
     }
   }
+  items.push({ lens: 'strata.cpu' });
   items.push({ lens: 'strata.ram', settings: { show: 'working' } });
   items.push({ lens: 'strata.ram', settings: { show: 'committed' } });
   return items;
