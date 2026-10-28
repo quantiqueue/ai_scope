@@ -10,9 +10,11 @@
 //   - **Time-mapped chart and hover**: points sit at their real times inside the 5-minute window and age out
 //     of the left edge; the "5 min ago → now" axis is honest even when the app stopped producing samples.
 //   - **Stale sample => big value n/a** — no frozen last value ("that represents reality most closely").
-//   - **App attested OFFLINE => procstats writes explicit zero points** ("it really should be 0 when offline
-//     because it's offline"), marked `off`, which paint as zeros with an "Inactive" sub line; the zero tail
-//     flows in from the right. **Online + sample missing (a lookup hiccup) => gap, never zeros.**
+//   - **App attested OFFLINE ('off') or IDLE — its own API says nothing is loaded ('idle') => procstats
+//     writes explicit zero points** ("it really should be 0 when offline because it's offline"; an unloaded
+//     model is likewise genuinely 0 — user, review batch 2), marked `attest`, painted as 0 with the sub line
+//     worded "<App> Offline" / "No Model Loaded". **Model loaded but the process lookup missed (a hiccup)
+//     => gap + n/a, never zeros** — that lone case stays "Inactive".
 // Call defineMirror() after the scope's defineSource; the source payload must carry `process`,
 // `processSupported`, `processHistory` and `processCards` (stratastats.js shape; the /api/bionic route adds them).
 
@@ -53,13 +55,15 @@ function setTileTime(el, value, big, sub, segs) {
   el.querySelector('.line').setAttribute('d', segPath(segs));
   el.querySelector('.area').setAttribute('d', areaOf(segs));
 }
-// The value rule (review batch): the live process sample wins; otherwise the newest point in the window ONLY
-// if it is an attested-offline zero (`off`) — an app that is gone really uses nothing; a stale real reading is n/a.
+// The value rule (review batches): the live process sample wins; otherwise the newest point in the window
+// ONLY if it is an attested zero (`attest: 'off' | 'idle'` — the app is gone, or reachable with nothing
+// loaded, and really uses nothing) — those paint as 0 with the state worded in the sub line; a stale real
+// reading is n/a + "Inactive" (the only remaining gap case is a lookup hiccup while a model IS loaded).
 function liveOrOff(d, pts) {
-  if (d.process) return { p: d.process, inactive: false };
+  if (d.process) return { p: d.process, inactive: false, state: null };
   const last = pts.length ? pts[pts.length - 1] : null;
-  if (last && last.off) return { p: last, inactive: true };
-  return { p: null, inactive: true };
+  if (last && last.attest) return { p: last, inactive: true, state: last.attest };
+  return { p: null, inactive: true, state: null };
 }
 // Time-based hover: guide and tip sit at the CURSOR time; the value comes from the nearest point in the
 // window within 4 s, else n/a — axis and readout now mean the same time.
@@ -86,6 +90,9 @@ function defineMirror(spec) {
   window[name.toUpperCase().replace(/[^A-Z0-9]/g, '') + '_PROC_HIST'] = hist;   // e.g. STRATA_PROC_HIST, BIONIC_PROC_HIST
   const cards = [];   // per-card { name, vramTotal } from the payload, for the GPU tile labels and the hover ceiling
   subscribeSource(key, d => { hist = (d && d.processHistory) || []; cards.length = 0; (d && d.processCards || []).forEach(c => cards.push(c)); });
+  // Sub-line wording for the attested states (review batch 2, the user's own words): offline / no model;
+  // the lone remaining gap (hiccup while a model is loaded) stays "Inactive".
+  const stateText = st => st === 'off' ? name + ' Offline' : st === 'idle' ? 'No Model Loaded' : 'Inactive';
 
   // ---------- GPU / VRAM per card (AI_SCOPE-072) ----------
   // One metric per tile (Show picks GPU usage or VRAM); a card picker because VRAM is per card. "Not available
@@ -121,7 +128,7 @@ function defineMirror(spec) {
       let big;
       if (show === 'gpu') big = cur && cur.util != null ? Math.round(cur.util) + '<small>%</small>' : NA_HTML;
       else big = cur && cur.vram != null ? GB(cur.vram) + (total ? '<small> / ' + GB(total) + ' GB</small>' : '<small> GB</small>') : NA_HTML;
-      setTileTime(box, v, big, (c.inactive ? 'Inactive · ' : '') + cardName, segs);
+      setTileTime(box, v, big, (c.inactive ? stateText(c.state) + ' · ' : '') + cardName, segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'gp', fn: (spark, f, guide, tip) => {   // GPU % or GB of the card total at that time
@@ -178,7 +185,7 @@ function defineMirror(spec) {
       const of = committed
         ? (hs.commitLimit ? 'of commit limit' + (SERVER_OS === 'linux' ? ' (RAM + swap)' : '') : 'of RAM (no commit limit here)')
         : 'of system RAM';
-      setTileTime(box, v, big, c.inactive ? 'Inactive' : (v == null ? 'detecting\u2026' : v.toFixed(0) + '% ' + of), segs);
+      setTileTime(box, v, big, c.inactive ? stateText(c.state) : (v == null ? 'detecting\u2026' : v.toFixed(0) + '% ' + of), segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'ram_', fn: (spark, f, guide, tip) => {   // working / committed GB at that time, against the right ceiling
@@ -213,7 +220,7 @@ function defineMirror(spec) {
       const c = liveOrOff(d, pts);
       const v = c.p && c.p.cpu != null ? Math.min(100, c.p.cpu) : null;
       setTileTime(box, v, v == null ? NA_HTML : v.toFixed(0) + '<small>%</small>',
-        c.inactive ? 'Inactive' : (info.cpuModel || 'CPU') + ' · ' + (info.cores || '?') + ' threads', segs);
+        c.inactive ? stateText(c.state) : (info.cpuModel || 'CPU') + ' · ' + (info.cores || '?') + ' threads', segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'cpu', fn: (spark, f, guide, tip) => {   // % of all cores at that time
@@ -260,8 +267,10 @@ function defineMirror(spec) {
       const max = Math.max(1e6, 1.25 * pts.reduce((a, x) => Math.max(a, x.ioRead || 0, x.ioWrite || 0), 0));   // window only: "top of the chart" is what you SEE
       el.querySelector('.v').innerHTML = tot == null ? NA_HTML : fmtRate(tot);
       const sub = 'Read ' + fmtRate(r) + ' · Write ' + fmtRate(w);
-      el.querySelector('.sub').textContent = c.inactive ? 'Inactive · ' + sub : sub;
-      el.querySelector('.sub').title = c.inactive ? 'No live process sample' + (c.p && c.p.off ? ' - the app is offline, it uses nothing' : ' - the app is online but its process was not found') : IO_TIP;
+      el.querySelector('.sub').textContent = c.inactive ? stateText(c.state) + ' · ' + sub : sub;
+      el.querySelector('.sub').title = c.inactive
+        ? (c.state === 'off' ? name + ' is offline - it uses nothing' : c.state === 'idle' ? 'No model loaded - nothing is running' : 'Model process not found right now - the app is online with a model loaded, this is a lookup gap')
+        : IO_TIP;
       el.querySelector('.meter > div').style.width = (tot == null ? 0 : Math.max(0, Math.min(100, 100 * tot / max))) + '%';
       el.querySelector('.line:not(.wline)').setAttribute('d', segPath(ioSegs(pts, now, 'ioRead', max)));
       el.querySelector('.wline').setAttribute('d', segPath(ioSegs(pts, now, 'ioWrite', max)));

@@ -119,13 +119,16 @@ function poll() {
     busy = false;
     if (err || !d || !Array.isArray(d.instances)) {
       online = false; native = null;
-      procstats.attest('strata', false);   // AI_SCOPE-077 review: offline attestation lets procstats write honest zero history
+      procstats.attest('strata', 'off');   // AI_SCOPE-077 review: offline attestation lets procstats write honest zero history
       lastError = err ? (err.code === 'ECONNREFUSED' ? 'Strata app not running at ' + base : err.message) : 'unexpected answer - is this the Strata app?';
       return;
     }
     online = true; lastError = null; native = d; fetchedAt = Date.now();
-    procstats.attest('strata', true);   // 077 review: online => never zeros, a missed process lookup stays a gap
     const enginePorts = d.instances.map(function (i) { return +i.port; }).filter(function (p) { return p > 0 && p < 65536; });
+    // 077 review batch 2: three-valued attestation from the app's own API - engine instances loaded =>
+    // 'live' (a missed process lookup stays a gap, never zeros); no instances => 'idle' (nothing is
+    // loaded, it genuinely uses nothing - procstats writes zeros, the tile sub reads "No Model Loaded").
+    procstats.attest('strata', enginePorts.length ? 'live' : 'idle');
     if (enginePorts.length) procstats.watch('strata', enginePorts, MODEL_PROCS); else procstats.unwatch('strata');
     collectRequests(d.instances);
     if ((!logo.light || !logo.dark) && Date.now() - logo.tried > 60000) fetchLogos();

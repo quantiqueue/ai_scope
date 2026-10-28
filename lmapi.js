@@ -161,11 +161,14 @@ function tryBase(list, i, cb) {
 function poll() {
   const list = base ? [base].concat(CANDIDATES.filter(function (c) { return c !== base; })) : CANDIDATES;
   tryBase(list, 0, function (err, b, ver, d) {
-    if (err) { online = false; lastError = err.message; models = []; procstats.attest('bionic', false); return; }   // 077 review: offline attestation drives procstats' zero history
+    if (err) { online = false; lastError = err.message; models = []; procstats.attest('bionic', 'off'); return; }   // 077 review: offline attestation drives procstats' zero history
     base = b; online = true; apiVersion = ver; lastError = null; raw = d;
-    procstats.attest('bionic', true);   // 077 review: online => never zeros, a missed process lookup stays a gap
     procstats.watch('bionic', portsOf([b]), MODEL_PROCS);
     models = ver === 'v1' ? normV1(d) : normV0(d);
+    // 077 review batch 2: attestation from Bionic's own API - a model with live instances => 'live' (a
+    // missed process lookup stays a gap, never zeros); server reachable, nothing loaded => 'idle'
+    // (procstats writes zeros, the tile sub reads "No Model Loaded").
+    procstats.attest('bionic', models.some(function (m) { return m.instances.length; }) ? 'live' : 'idle');
     if (Date.now() - reposAt > 60000) scanRepos();
     models.forEach(function (m) { const s = sourceFor(m); m.modelUrl = s.modelUrl; m.publisherUrl = s.publisherUrl; m.source = s.source; m.modified = s.modified; });
     const keys = models.filter(function (m) { return m.instances.length; }).map(function (m) { return m.key; }).join(',');
