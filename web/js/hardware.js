@@ -368,6 +368,19 @@ document.addEventListener('mousemove', e => {
     tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
+  if (id.indexOf('sram_') === 0) {   // Strata process RAM tiles (AI_SCOPE-073): working / committed GB at that time,
+                                     // against the right ceiling - system RAM for Working, the commit limit for Committed
+    const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
+    const k = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));
+    const hs = hst[k], committed = id === 'sram_committed';
+    const b = hs[committed ? 'ramPrivate' : 'ram'];
+    const lim = committed ? (h.commitLimit || h.ramTotal) : h.ramTotal;
+    tip.textContent = (b != null ? GB(b) + ' GB' + (lim ? ' of ' + GB(lim) + ' GB' : '') : 'n/a') + ' · ' + new Date(hs.t).toLocaleTimeString();
+    const x3 = hst.length < 2 ? 100 : 100 * k / (hst.length - 1);
+    guide.setAttribute('x1', x3); guide.setAttribute('x2', x3); guide.style.display = '';
+    tip.hidden = false; tip.style.left = x3 + '%';
+    return;
+  }
   if (id.indexOf('sgp') === 0) {   // Strata process tiles (AI_SCOPE-072): their own history, GPU % or GB at that time
     const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
     const k = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));

@@ -178,7 +178,9 @@ function getState(limit) {
   // Strata's model process(es): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded.
   // AI_SCOPE-072: processCards (Hardware card names / totals for the tile labels) and processHistory (5 min,
   // newest last) join the answer, and all of it stays in the payload when Strata itself is offline - the GPU /
-  // VRAM tiles draw their histories right through an "Inactive" stretch.
+  // VRAM tiles draw their histories right through an "Inactive" stretch. AI_SCOPE-073: the history points also
+  // carry the process's ram / ramPrivate for the Strata RAM lens (per-process RAM exists on macOS / Linux too,
+  // so that lens is not gated on per-process GPU support).
   out.process = procstats.get('strata'); out.processSupported = procstats.supported();
   out.processHistory = procstats.history('strata');
   out.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });

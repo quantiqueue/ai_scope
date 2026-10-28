@@ -209,6 +209,55 @@ defineLens({
   },
 });
 
+// ---------- RAM of Strata's model process (AI_SCOPE-073) ----------
+// Quarter tiles in the Hardware RAM tile's style, showing Strata's own process RAM: Working (working set /
+// resident) or Committed (private). One metric per tile (Show picks it); no card setting - process RAM is one
+// system-wide number. Value + ceiling (user, 2026-10-28): **Working is a fraction of system RAM, Committed a
+// fraction of the commit limit** (RAM + pagefile, from hwstats - macOS has no such limit, so there it falls back
+// to system RAM and the sub line says so). Stale sample => Inactive with the big value from the newest history
+// point, like 072. Works on every OS where procstats works (Windows / Linux / macOS).
+const SRAM_TIP = {
+  working: 'RAM in use by the process now (working set on Windows, resident on Linux / macOS), against the system total',
+  committed: 'Private memory reserved for the process (must fit in RAM + pagefile), against the system commit limit; on Windows it counts the large-page / driver-pinned RAM that working sets never show (AI_SCOPE-063)',
+};
+defineLens({
+  id: 'strata.ram', scope: 'strata', size: 'tile',
+  name: 'Strata RAM', description: "Strata's model process RAM — working set over system RAM, or committed private memory over the commit limit — with a 5-minute history.",
+  settings: [
+    { id:'show', label:'Show', type:'choice', default:'working', options:[['working', 'Working'], ['committed', 'Committed']] },
+  ],
+  markup: st => tileHtml({ id:'sram_' + st.show,
+    label:'Strata RAM (' + (st.show === 'committed' ? 'Committed' : 'Working') + ')' }),
+  render(L, d) {
+    const show = L.settings.show, committed = show === 'committed', key = committed ? 'ramPrivate' : 'ram';
+    const box = L.el.querySelector('[data-tile="sram_' + show + '"]'); if (!box) return;
+    const label = 'Strata RAM (' + (committed ? 'Committed' : 'Working') + ')';
+    if (box.querySelector('.ltitle').textContent !== label) box.querySelector('.ltitle').textContent = label;
+    box.querySelector('.ltitle').title = SRAM_TIP[show];
+    const hist = d.processHistory || [];
+    // The ceiling: system RAM for Working, the commit limit for Committed. The Hardware source is always
+    // subscribed (other scopes' System load rows need it), so its latest sample carries both.
+    const hw = (SOURCES.hardware && SOURCES.hardware.data) || {};
+    const hs = (hw.history && hw.history[hw.history.length - 1]) || {};
+    const limit = committed ? (hs.commitLimit || hs.ramTotal || 0) : (hs.ramTotal || 0);
+    const pct = b => (b != null && limit) ? Math.min(100, 100 * b / limit) : null;
+    const series = hist.map(h => pct(h[key]));
+    let cur = d.process ? d.process[key] : null, inactive = false;
+    if (cur == null) {                                           // no fresh process - newest point history has, and say Inactive
+      for (let i = hist.length - 1; i >= 0; i--) if (hist[i][key] != null) { cur = hist[i][key]; break; }
+      inactive = true;
+    }
+    const v = pct(cur);
+    const big = cur != null ? GB(cur) + (limit ? '<small> / ' + GB(limit) + ' GB</small>' : '<small> GB</small>') : NA_HTML;
+    // Sub line: like the Hardware RAM tile ("% used"), naming what the percentage is taken of (OS-aware -
+    // Linux / macOS report resident rather than a Windows working set, and macOS has no commit limit).
+    const of = committed
+      ? (hs.commitLimit ? 'of commit limit' + (SERVER_OS === 'linux' ? ' (RAM + swap)' : '') : 'of RAM (no commit limit here)')
+      : 'of system RAM';
+    setTile(box, v, big, inactive ? 'Inactive' : (v == null ? 'detecting\u2026' : v.toFixed(0) + '% ' + of), series);
+  },
+});
+
 // ---------- The Strata scope page: header line + its lenses ----------
 subscribeSource('strata', (d, err) => {
   const meta = document.getElementById('sMeta');
@@ -219,13 +268,18 @@ subscribeSource('strata', (d, err) => {
 // AI_SCOPE-072: default gets one row of Strata GPU + VRAM tiles per card after Installed Models; on macOS the
 // tiles stay out of the default (no per-process GPU stats there) but remain addable - they answer
 // "Not available on this system" until 062 changes that.
+// AI_SCOPE-073: a new row at the very bottom, "Strata RAM (Working)" + "Strata RAM (Committed)" - on every OS,
+// since per-process RAM exists on Linux / macOS too.
 defineScopeLayout('strata', () => {
   const items = layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.loaded', 'strata.requests', 'strata.installed']);
-  if (SERVER_OS === 'darwin') return items;
-  const cards = (SOURCES.strata.data && SOURCES.strata.data.processCards) || [];
-  for (let i = 0; i < Math.max(1, cards.length); i++) {
-    items.push({ lens: 'strata.gpu', settings: { card: i, show: 'gpu' } });
-    items.push({ lens: 'strata.gpu', settings: { card: i, show: 'vram' } });
+  if (SERVER_OS !== 'darwin') {
+    const cards = (SOURCES.strata.data && SOURCES.strata.data.processCards) || [];
+    for (let i = 0; i < Math.max(1, cards.length); i++) {
+      items.push({ lens: 'strata.gpu', settings: { card: i, show: 'gpu' } });
+      items.push({ lens: 'strata.gpu', settings: { card: i, show: 'vram' } });
+    }
   }
+  items.push({ lens: 'strata.ram', settings: { show: 'working' } });
+  items.push({ lens: 'strata.ram', settings: { show: 'committed' } });
   return items;
 });
