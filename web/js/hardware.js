@@ -384,6 +384,17 @@ document.addEventListener('mousemove', e => {
     tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
+  if (id === 'sio') {   // Strata process I/O tile (AI_SCOPE-076): read / write at that time, like the Disk tile
+    const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
+    const k5 = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));
+    const hs5 = hst[k5];
+    tip.textContent = (hs5.ioRead == null && hs5.ioWrite == null ? 'n/a'
+      : 'R ' + fmtRate(hs5.ioRead || 0) + ' · W ' + fmtRate(hs5.ioWrite || 0)) + ' · ' + new Date(hs5.t).toLocaleTimeString();
+    const x5 = hst.length < 2 ? 100 : 100 * k5 / (hst.length - 1);
+    guide.setAttribute('x1', x5); guide.setAttribute('x2', x5); guide.style.display = '';
+    tip.hidden = false; tip.style.left = x5 + '%';
+    return;
+  }
   if (id === 'scpu') {   // Strata process CPU tile (AI_SCOPE-075): its own history, % of all cores at that time
     const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
     const k4 = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));

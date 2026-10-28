@@ -4,6 +4,7 @@
 # Every 2 s prints, for each watched app:
 #   P|key|pid|name|workingSet|private|cpu100ns       one line per process of the app
 #   G|key|pid|luid|dedicated|shared|util              one line per process and graphics card it uses
+#   I|key|pid|read|write                             IO Read / IO Write Bytes per second, per process (AI_SCOPE-076)
 # then "---". An app's processes = the process listening on its port + all its child processes.
 # GPU numbers: Windows GPU performance counters read through PDH (one query, wildcard per process, collected every
 # cycle). Don't use .NET PerformanceCounter here: its first use took ~25 s on a test PC (AI_SCOPE-037/038).
@@ -77,11 +78,17 @@ public static class AiScopeProc {
       if (PdhAddEnglishCounter(query, "\\GPU Engine(" + inst + ")\\Utilization Percentage", IntPtr.Zero, out e) != 0) e = IntPtr.Zero;
       // CPU / RAM from the process counters too, for processes that refuse OpenProcess (Strata's strata.exe):
       // "Process V2" instances are named "<name>:<pid>" (Windows 10 1709+), so a "*:<pid>" wildcard finds the process by PID.
-      IntPtr pc, ws, pb;
+      IntPtr pc, ws, pb, ir, iw;
       if (PdhAddEnglishCounter(query, "\\Process V2(*:" + p + ")\\% Processor Time", IntPtr.Zero, out pc) != 0) pc = IntPtr.Zero;
       if (PdhAddEnglishCounter(query, "\\Process V2(*:" + p + ")\\Working Set", IntPtr.Zero, out ws) != 0) ws = IntPtr.Zero;
       if (PdhAddEnglishCounter(query, "\\Process V2(*:" + p + ")\\Private Bytes", IntPtr.Zero, out pb) != 0) pb = IntPtr.Zero;
-      counters[p] = new IntPtr[] { d, s, e, pc, ws, pb };
+      // AI_SCOPE-076: file I/O rates for the Strata I/O lens. Also PDH (not GetProcessIoCounters): strata.exe refuses
+      // OpenProcess, so there is no handle to ask. Measured on snow: IO Read / IO Write Bytes/sec resolve VALID for
+      // strata.exe; Page Writes/sec does not exist per process, so pagefile traffic is out of reach here (it is
+      // charged to System). Sockets are not counted either - a download that is written to disk shows as a write only.
+      if (PdhAddEnglishCounter(query, "\\Process V2(*:" + p + ")\\IO Read Bytes/sec", IntPtr.Zero, out ir) != 0) ir = IntPtr.Zero;
+      if (PdhAddEnglishCounter(query, "\\Process V2(*:" + p + ")\\IO Write Bytes/sec", IntPtr.Zero, out iw) != 0) iw = IntPtr.Zero;
+      counters[p] = new IntPtr[] { d, s, e, pc, ws, pb, ir, iw };
     }
     PdhCollectQueryData(query);
   }
@@ -156,6 +163,14 @@ public static class AiScopeProc {
     }
     return sb.ToString();
   }
+  // "I|key|pid|read|write" for one process (AI_SCOPE-076); "" when neither counter has a value yet
+  public static string Io(string key, int pid) {
+    IntPtr[] c; if (!counters.TryGetValue(pid, out c) || c.Length < 8) return "";
+    double? r = Sum(c[6]), w = Sum(c[7]);
+    if (r == null && w == null) return "";
+    System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+    return "I|" + key + "|" + pid + "|" + (r == null ? "" : r.Value.ToString("R", inv)) + "|" + (w == null ? "" : w.Value.ToString("R", inv)) + "\n";
+  }
 }
 '@
 $file = '__FILE__'
@@ -200,6 +215,7 @@ while ($true) {
       }
       $null = $out.Append('P|' + $k + '|' + $x + '|' + [AiScopeProc]::Names[$x] + '|' + $r + "`n")
       $null = $out.Append([AiScopeProc]::Gpu($k, $x))
+      $null = $out.Append([AiScopeProc]::Io($k, $x))
     }
   }
   [Console]::Out.Write($out.ToString() + "---`n"); [Console]::Out.Flush()

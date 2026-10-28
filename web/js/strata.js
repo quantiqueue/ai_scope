@@ -288,6 +288,63 @@ defineLens({
   },
 });
 
+// ---------- File I/O of Strata's model process (AI_SCOPE-076) ----------
+// Layout and style mirror the Hardware Disk tile (two lines: read solid, write dashed, same legend and
+// chart scaling), with two differences on purpose: no disk picker (per-process I/O counters are one number per
+// process, not per physical drive) and no "% active" (a device counter). Big value = read + write, so the sub
+// line and the two chart lines always show the split - a read-then-write flow (unpacking a model, a copy)
+// legitimately counts its bytes twice, which the split makes readable.
+const SIO_TIP = "Bytes per second Strata's model process reads and writes. One count per operation: a flow that reads then writes (unpacking a model, copying) counts those bytes twice. Sockets and pagefile traffic are not included, and this is why a download that is written to disk shows as a write only. Windows counters only.";
+const ioScale = hist => Math.max(1e6, 1.25 * hist.reduce((a, h) => Math.max(a, h.ioRead || 0, h.ioWrite || 0), 0));
+function ioPath(hist, key, max) {
+  const n = hist.length;
+  return hist.map((h, i) => h.ioRead == null && h.ioWrite == null ? null
+      : [n < 2 ? 100 : 100 * i / (n - 1), 100 - Math.min(100, 100 * (h[key] || 0) / max)])
+    .filter(Boolean).map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join(' ');
+}
+defineLens({
+  id: 'strata.io', scope: 'strata', size: 'tile',
+  name: 'Strata I/O',
+  description: "File read / write speed of Strata's model process with a 5-minute history (one count per operation; sockets and pagefile traffic are not included).",
+  markup: () => `
+  <div class="tilebox" data-tile="sio">` + lensHeadMarkup('Strata I/O') + `
+  <div class="tile disk">
+    <div class="v">—</div>
+    <div class="sub">&nbsp;</div>
+    <div class="meter"><div></div></div>
+    <div class="spark"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
+      <path class="line"></path><path class="line wline"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
+      <div class="tip" hidden></div></div>
+    <div class="spark-axis"><span>5 min ago</span><span class="dlegend"><i class="rd"></i>read <i class="wr"></i>write</span><span>now</span></div>
+  </div></div>`,
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="sio"]'); if (!box) return;
+    box.querySelector('.ltitle').title = SIO_TIP;
+    const el = box.querySelector('.tile');
+    const hist = d.processHistory || [];
+    if (SERVER_OS !== 'win32') {   // the counters come from PDH; the Linux / macOS path has no per-process I/O yet
+      el.querySelector('.v').innerHTML = NA_HTML;
+      el.querySelector('.sub').textContent = 'I/O stats: Windows only for now';
+      return;
+    }
+    let r = d.process ? d.process.ioRead : null, w = d.process ? d.process.ioWrite : null, inactive = false;
+    if (r == null && w == null) {                       // stale process - newest history point that has them
+      for (let i = hist.length - 1; i >= 0; i--) if (hist[i].ioRead != null || hist[i].ioWrite != null) { r = hist[i].ioRead || 0; w = hist[i].ioWrite || 0; break; }
+      inactive = true;
+    }
+    const tot = r == null && w == null ? null : (r || 0) + (w || 0);
+    const max = ioScale(hist);
+    el.querySelector('.v').innerHTML = tot == null ? NA_HTML : fmtRate(tot);
+    const sub = 'Read ' + fmtRate(r) + ' · Write ' + fmtRate(w);
+    el.querySelector('.sub').textContent = inactive ? 'Inactive · ' + sub : sub;
+    el.querySelector('.sub').title = inactive ? 'No live process sample - the newest reading in the history' : SIO_TIP;
+    el.querySelector('.meter > div').style.width = (tot == null ? 0 : Math.max(0, Math.min(100, 100 * tot / max))) + '%';
+    el.querySelector('.line:not(.wline)').setAttribute('d', ioPath(hist, 'ioRead', max));
+    el.querySelector('.wline').setAttribute('d', ioPath(hist, 'ioWrite', max));
+    el.querySelector('.spark').title = 'Top of the chart = ' + fmtRate(max);
+  },
+});
+
 // ---------- The Strata scope page: header line + its lenses ----------
 subscribeSource('strata', (d, err) => {
   const meta = document.getElementById('sMeta');
@@ -300,7 +357,8 @@ subscribeSource('strata', (d, err) => {
 // "Not available on this system" until 062 changes that.
 // AI_SCOPE-073: a new row at the very bottom, "Strata RAM (Working)" + "Strata RAM (Committed)" - on every OS,
 // since per-process RAM exists on Linux / macOS too. AI_SCOPE-075: "Strata CPU" leads that same row, also on
-// every OS (procstats reports CPU % on Windows, Linux and macOS).
+// every OS (procstats reports CPU % on Windows, Linux and macOS). AI_SCOPE-076: "Strata I/O" closes that row
+// (the tile answers "Windows only for now" where the counters do not exist).
 defineScopeLayout('strata', () => {
   const items = layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.loaded', 'strata.requests', 'strata.installed']);
   if (SERVER_OS !== 'darwin') {
@@ -313,5 +371,6 @@ defineScopeLayout('strata', () => {
   items.push({ lens: 'strata.cpu' });
   items.push({ lens: 'strata.ram', settings: { show: 'working' } });
   items.push({ lens: 'strata.ram', settings: { show: 'committed' } });
+  items.push({ lens: 'strata.io' });
   return items;
 });

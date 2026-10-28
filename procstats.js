@@ -33,7 +33,8 @@ let ps = null, luidsKey = null, restartTimer = null;
 // so a stopped app leaves a gap instead of invented zeros.
 // AI_SCOPE-073: each point also carries the process's ram / ramPrivate (bytes, whole family — same rule as
 // get(): null when the process refused OpenProcess), for the Strata RAM lens, and AI_SCOPE-075 adds `cpu`
-// (% of the whole CPU, same clamp as get()).
+// (% of the whole CPU, same clamp as get()). AI_SCOPE-076 adds ioRead / ioWrite (file I/O bytes/sec; only the
+// Windows counter path fills them, so they are null on Linux / macOS).
 const HIST = 150;
 const hist = {};        // key -> [{ t, gpus: [{ vram, util }], ram, ramPrivate, cpu }]
 function pushHist(key) {
@@ -46,7 +47,8 @@ function pushHist(key) {
   // old `if (luids.length)` guard meant it was not actually true).
   h.push({ t: r.at, gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util } : { vram: 0, util: null }; }),
     ram: r.ramUnknown && !r.ram ? null : r.ram, ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate,
-    cpu: r.cpu == null ? null : Math.min(100, r.cpu) });
+    cpu: r.cpu == null ? null : Math.min(100, r.cpu),
+    ioRead: r.ioSeen ? r.ioRead || 0 : null, ioWrite: r.ioSeen ? r.ioWrite || 0 : null });   // AI_SCOPE-076
   if (h.length > HIST) h.shift();
 }
 
@@ -80,6 +82,10 @@ function handleBlock(lines) {
         }
         lastCpu[ck] = { t: now, cpu: cpu };
       }
+    } else if (p[0] === 'I' && p.length >= 5) {   // AI_SCOPE-076: file I/O rates (bytes/sec) for one process
+      r.ioRead = (r.ioRead || 0) + (p[3] === '' ? 0 : parseFloat(p[3].replace(',', '.')) || 0);
+      r.ioWrite = (r.ioWrite || 0) + (p[4] === '' ? 0 : parseFloat(p[4].replace(',', '.')) || 0);
+      if (p[3] !== '' || p[4] !== '') r.ioSeen = true;
     } else if (p[0] === 'G' && p.length >= 7) {
       const luid = p[3].toLowerCase();
       const g = r.luids[luid] || (r.luids[luid] = { vram: 0, shared: 0, util: null });
@@ -238,6 +244,8 @@ function get(key) {
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
     ram: r.ramUnknown && !r.ram ? null : r.ram,
     ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate,
+    ioRead: r.ioSeen ? r.ioRead || 0 : null,     // AI_SCOPE-076: file I/O bytes/sec (Windows counters only)
+    ioWrite: r.ioSeen ? r.ioWrite || 0 : null,
   };
 }
 
