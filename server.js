@@ -116,12 +116,20 @@ function readJson(req, cb) {
   req.on('end', () => { let v = null; try { v = JSON.parse(body || '{}'); } catch (e) {} cb(v); });
 }
 // The installed scopes go into the page itself, so the first render already shows the right tabs.
+function pageSettings() {
+  // AI_SCOPE-070: the theme must be ABSENT from the page data until it is actually saved - shell.js moves a
+  // browser's old per-browser choice into the setting once, and its guard tests for a missing value. list()
+  // always carries theme's 'default' def, which made that guard dead and silently lost every saved theme.
+  const s = settings.list();
+  if (settings.savedValue('theme') === undefined) delete s.theme;
+  return s;
+}
 function pageHtml() {
   const html = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8');
   const js = v => JSON.stringify(v).replace(/</g, '\\u003c');
   return html.split('/*__SCOPES__*/[]').join(js(scopes.list())).split('/*__CUSTOM__*/[]').join(js(customscopes.list()))
     .split('/*__LAYOUTS__*/{}').join(js(scopelayouts.list())).split("/*__OS__*/''").join(js(process.platform))
-    .split('/*__SETTINGS__*/{}').join(js(settings.list()));   // AI_SCOPE-010: theme + landing before the page paints
+    .split('/*__SETTINGS__*/{}').join(js(pageSettings()));   // AI_SCOPE-010: theme + landing before the page paints (theme only once saved - 070)
 }
 
 http.createServer((req, res) => {
