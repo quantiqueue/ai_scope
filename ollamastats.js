@@ -275,7 +275,7 @@ function startProxy() {
     // Ollama's own check - so check it here first.
     if (!hostAllowed(req)) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: 'AI_SCOPE relay: unknown host name (see AI_SCOPE_ALLOWED_HOSTS)' }));
+      return res.end(JSON.stringify({ error: 'AI_SCOPE relay: unknown host name (add it in AI_SCOPE Settings - Server - Allowed host names)' }));
     }
     const ep = req.url.split('?')[0];
     let rec = null;

@@ -1,13 +1,14 @@
 // Host check (AI_SCOPE-021), shared by the dashboard server and the Ollama relay: a DNS-rebinding guard. A malicious site
 // can point its own name at 127.0.0.1 and then read or change local services from your browser; its requests carry that
 // foreign name as Host. Only names of this machine are answered: localhost (and *.localhost), loopback addresses, this
-// PC's network addresses, its computer name (also as e.g. snow.local / snow.lan), the --host address, and names listed in
-// AI_SCOPE_ALLOWED_HOSTS (comma-separated, e.g. for a reverse proxy). Requests without a Host header (old HTTP/1.0 tools)
+// PC's network addresses, its computer name (also as e.g. snow.local / snow.lan), the --host address, and names listed
+// in AI_SCOPE Settings (Server section, "Allowed host names" - comma-separated, e.g. for a reverse proxy; AI_SCOPE-069
+// removed the old AI_SCOPE_ALLOWED_HOSTS env var). Requests without a Host header (old HTTP/1.0 tools)
 // are let through. No dependencies; conservative JS.
 'use strict';
 const os = require('os');
-let EXTRA_HOSTS = String(process.env.AI_SCOPE_ALLOWED_HOSTS || '').split(',').map(function (h) { return h.trim().toLowerCase(); }).filter(Boolean);
-// AI_SCOPE-010: the "Allowed host names" setting, set at boot and on change (env values are read once at load).
+let EXTRA_HOSTS = [];   // AI_SCOPE-069: no env source - the Settings dialog's "Allowed host names" is the only supplier
+// AI_SCOPE-010: the "Allowed host names" setting, set at boot and on change.
 function setExtraHosts(list) {
   EXTRA_HOSTS = (list || []).map(function (h) { return String(h || '').trim().toLowerCase(); }).filter(function (h) { return !!h; });
 }

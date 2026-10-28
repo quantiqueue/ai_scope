@@ -32,7 +32,7 @@ const BOOT_ID = Date.now().toString(); // changes on every restart; the page use
 // and they set the sampler's watched pace and the extra host names before anything else reads them.
 settings.setPaceApplier(proctop.setFastMs);
 settings.setScopeChecker(function (id) { return scopes.isInstalled(id) || customscopes.list().some(function (c) { return c.id === id; }); });
-settings.boot(HOST, String(process.env.AI_SCOPE_ALLOWED_HOSTS || ''), PORT);
+settings.boot(HOST, PORT);   // AI_SCOPE-069: the allowed-host-names env var is gone; the setting's own file is the source
 // A saved choice wins in both directions (settings are Local and win over the launch flags), so the row
 // always says what the next start will do; what is bound right now only changes on that start.
 const savedNa = settings.savedValue('networkAccess');
@@ -131,7 +131,7 @@ http.createServer((req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   if (!hostAllowed(req)) {   // AI_SCOPE-021: not a name of this machine (DNS rebinding)
     res.writeHead(403, { 'Content-Type': 'text/plain' });
-    return res.end('AI_SCOPE: unknown host name. Open AI_SCOPE by this computer\'s name or address, or add the name to AI_SCOPE_ALLOWED_HOSTS.');
+    return res.end('AI_SCOPE: unknown host name. Open AI_SCOPE by this computer\'s name or address, or add the name in AI_SCOPE Settings (Server - Allowed host names).');
   }
   if (req.method === 'POST' && url.pathname !== '/api/stop' && !postAllowed(req, true)) return sendJson(res, 403, NOT_ALLOWED);
   if (url.pathname === '/__boot') {

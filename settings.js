@@ -51,7 +51,8 @@ const FILE_OF = function (id) { return paths.file('settings-' + id + '.json'); }
 const saved = {};   // section id -> object read from its file
 
 // What the launch handed us (bin/ai_scope.js / dev.js), as fallbacks when nothing is saved yet.
-let launch = { host: null, allowedHosts: null, port: null };
+// AI_SCOPE-069: the old AI_SCOPE_ALLOWED_HOSTS env is gone - the allowedHosts setting's own file is the only source.
+let launch = { host: null, port: null };
 let scopeOk = function () { return true; };   // server.js fills this from the installed scopes
 let procsPace = null;                          // engine.processEvery applies through this
 let pending = [];   // keys changed this boot that still need AI_SCOPE to restart (cleared by a restart or a revert)
@@ -170,14 +171,12 @@ function splitHosts(s) {
 
 // ---------- Boot: read the files and hand the values out ----------
 const hostcheck = require('./hostcheck');
-function boot(launchHost, launchHosts, launchPort) {
+function boot(launchHost, launchPort) {   // AI_SCOPE-069: no launchHosts anymore - settings-only for allowed names
   load();
-  launch = { host: launchHost, allowedHosts: launchHosts, port: launchPort };
+  launch = { host: launchHost, port: launchPort };
   SECTIONS.forEach(function (s) { (s.keys || []).forEach(function (f) { f.pending = false; }); });  // a new boot cleared any owed restart
   const na = SECTIONS.filter(function (s) { return s.id === 'server'; })[0].keys.filter(function (f) { return f.key === 'networkAccess'; })[0];
   na.launch = launchHost === '0.0.0.0' || launchHost === '::';
-  const ah = find('server', 'allowedHosts');
-  ah.launch = (launchHosts || []).join(', ');
   // "Start at login" shows what the login item actually is, until someone changes it.
   const sl = find('server', 'startAtLogin');
   sl.dyn = function () { if ((saved.server || {})[sl.key] !== undefined) return saved.server[sl.key]; try { return fs.existsSync(startup.target()); } catch (e) { return false; } };
