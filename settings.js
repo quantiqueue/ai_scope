@@ -11,13 +11,14 @@ const fs = require('fs');
 const path = require('path');
 const paths = require('./paths');
 const startup = require('./bin/startup');
+const PKG_VERSION = require('./package.json').version;   // shown by the Server section's static "AI_SCOPE Server Version" line
 
 // Types: 'scope' = Home or an installed scope id, 'choice' (options), 'number' (seconds, with a unit), 'bool', 'text'.
 // local: only this computer may change it. dyn(f) = the value shown when nothing was saved yet.
 const SECTIONS = [
   { id: 'general', label: 'General', keys: [
-    { key: 'landing', label: 'Default Scope', type: 'scope', def: 'home',
-      info: 'Which page AI_SCOPE opens when you go to its address. The tabs stay in the same order.' },
+    { key: 'landing', label: 'Default Page', type: 'scope', def: 'home',
+      info: 'Which page opens when starting AI_SCOPE. The tabs stay in the same order.' },
   ] },
   { id: 'appearance', label: 'Appearance', keys: [
     { key: 'theme', label: 'Theme', type: 'choice', def: 'default',
@@ -31,11 +32,16 @@ const SECTIONS = [
   ] },
   { id: 'server', label: 'Server', keys: [
     { key: 'networkAccess', label: 'Allow Network Access', type: 'bool', local: true,
-      info: 'On = phones and other PCs on your network can open AI_SCOPE too. Off = only this computer. Takes effect when AI_SCOPE next starts.' },
+      info: 'Allow other devices on your network to open AI_SCOPE. Takes effect when AI_SCOPE next starts.' },
     { key: 'startAtLogin', label: 'Start at login', type: 'bool', local: true,
-      info: 'Adds the item that starts AI_SCOPE when you log in, or removes it. Applies the next time you log in.' },
+      info: 'Starts AI_SCOPE when you log in to your computer, or removes it. Applies the next time you log in.' },
     { key: 'allowedHosts', label: 'Allowed host names', type: 'text', local: true, def: '',
       info: 'Extra names AI_SCOPE answers, comma-separated - only needed when something (a reverse proxy) stands in front of it. Leave empty for the usual setup.' },
+  ] },
+  { id: 'about', label: 'About', keys: [
+    // Read-only row at the top of About (its text is static and lives in the page; only the version
+    // travels through describe(), so it always reports the running server's package.json).
+    { key: 'serverVersion', label: 'AI_SCOPE Server Version', type: 'static', def: PKG_VERSION },
   ] },
 ];
 const FIELD_BY = {};
@@ -119,6 +125,7 @@ function change(section, key, v, local) {
   return { ok: true, restart: restart, settings: describe(), all: list() };
 }
 function prepare(f, v) {
+  if (f.type === 'static') return { value: null, error: 'This row is information only - nothing to change' };
   if (f.type === 'bool') return { value: v === true || v === 1 || v === 'true' || v === 'on', error: null };
   if (f.type === 'number') {
     const n = typeof v === 'number' ? v : parseFloat(String(v));

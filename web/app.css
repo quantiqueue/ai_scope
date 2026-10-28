@@ -319,7 +319,7 @@
 
   /* AI_SCOPE-010: the AI_SCOPE Settings dialog - half the page, header zone ruled, section tabs on the left,
      the selected section on the right; the right side scrolls when a section is taller than the dialog */
-  dialog.modal.setdlg { width:min(50vw, calc(100vw - 32px)); height:min(50vh, calc(100vh - 32px)); }
+  dialog.modal.setdlg { width:min(80vw, calc(100vw - 32px)); height:min(80vh, calc(100vh - 32px)); }
   /* the form is a definite box (absolute inside the fixed dialog): header row, then the two columns */
   dialog.modal.setdlg form { position:absolute; top:0; left:0; right:0; bottom:56px; padding:0; display:grid; grid-template-rows:auto minmax(0,1fr); }
   dialog.modal.setdlg .sethead { position:static; width:100%; }
@@ -341,12 +341,17 @@
   .settab:hover, .settab:focus-visible { color:var(--text); border-color:var(--line); outline:none; }
   .settab.active { color:var(--text); background:var(--bg); border-color:var(--line); box-shadow:inset 0 -2px 0 var(--accent); }
   .setbody { display:block; }
-  .setsection[hidden] { display:none; }
+  /* AI_SCOPE-010: wide screens show only the selected section (.cur from web/js/settings.js); narrow
+     (<=640px) shows ALL sections stacked - decided in the stylesheet, so resizing the window mid-session
+     switches the dialog without a re-render. (Was a hidden="" baked in at draw time, which stranded
+     every other section off-screen when the window was shrunk.) */
+  @media (min-width: 641px) { .setsection:not(.cur) { display:none; } }
   .setsection { padding:14px 0 12px; }
   .setsection h3 { font-size:.86rem; font-weight:650; color:var(--text); margin:0 0 14px; }
   .setsection .field { margin:18px 0 22px; }
   .setsection label { margin-bottom:8px; }
-  .setactions { display:flex; gap:8px; margin-top:12px; }
+  .setsection .setstatic { font-size:.88rem; color:var(--text); }   /* AI_SCOPE-010: static info row (Server version) */
+  .setactions { display:flex; flex-direction:column; gap:8px; margin-top:12px; width:max-content; }   /* AI_SCOPE-010: Stop and Restart Now stack, one per line; width:max-content + stretch makes both as wide as the wider Stop button */
   .setactions .btn { font-size:.8rem; padding:6px 11px; }
   .restartflag { font-size:.78rem; font-weight:650; color:var(--bad); margin-top:6px; }
   .seterr { font-size:.8rem; color:var(--bad); line-height:1.45; margin:14px 0 0; }
@@ -354,13 +359,13 @@
   /* Done stays put bottom-right, like the other dialogs' actions row, while a tall section scrolls under it */
   /* Done is a child of the dialog (the actions row), not of the scrolling content */
   dialog.modal.setdlg .actions { position:absolute; right:18px; bottom:14px; background:var(--card); }
-  /* About page: the overview, the centred maker line, and the support marks under a header */
-  .setlead { font-size:.85rem; color:var(--text); line-height:1.55; margin:0 0 18px; }
-  .setmade { text-align:center; font-size:.92rem; color:var(--text); margin:20px 0 24px; }
+  /* About page: everything left-aligned under the version row (centering dropped, AI_SCOPE-010,
+     2026-10-28) - the maker line and the support marks start at the same left edge as the rows above */
+  .setmade { font-size:.92rem; color:var(--text); margin:20px 0 24px; }
   .setmade a { color:var(--accent); text-decoration:none; }
   .setmade a:hover { text-decoration:underline; }
-  .setsupport { text-align:center; font-size:.85rem; font-weight:650; color:var(--muted); margin:24px 0 14px; }
-  .setbrand { display:flex; justify-content:center; align-items:center; gap:20px; margin:0 0 18px; }
+  .setsupport { font-size:.85rem; font-weight:650; color:var(--muted); margin:24px 0 14px; }
+  .setbrand { display:flex; align-items:center; gap:20px; margin:0 0 18px; }
   .setbrand.gh, .setbrand.coffee { position:relative; display:inline-flex; align-items:center; text-decoration:none; }
   .setbrand svg { width:28px; height:28px; flex:none; }
   .setbrand svg path { fill:currentColor; }
