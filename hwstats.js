@@ -253,13 +253,37 @@ const PS_VRAM_TOTAL =
 // ---- PCIe bus traffic (AI_SCOPE-065): one persistent 'nvidia-smi dmon -s t' stream ----
 // RX / TX MB/s per NVIDIA card; a long-running process like the Windows counter loop (spawning
 // per poll would cost). Latest block kept; values merge into the next 2 s sample.
+// AI_SCOPE-071: give up after PCIE_MAX_BAD starts in a row that deliver no data - older drivers / WSL
+// nvidia-smi print usage and exit 0, which used to restart the stream every 5 s forever; the exit hook
+// is registered once and kills whatever stream is current (per-restart hooks piled listeners up until
+// Node warned); and pcieLatest is cleared when a stream stops, so a dead stream never keeps painting
+// its last reading. A stream that delivers data again resets the failure count.
 let pcieLatest = {};   // device index ('0', '1') -> { rx, tx } MB/s
+let pcieProc = null;   // the current stream process (null = none running)
+let pcieBad = 0;       // consecutive starts that exited without delivering a data line
+let pcieGaveUp = false;
+let pcieExitHooked = false;
+const PCIE_MAX_BAD = 4;
+function pcieFail() {
+  if (pcieGaveUp) return;
+  pcieBad++;
+  if (pcieBad >= PCIE_MAX_BAD) {
+    pcieGaveUp = true; pcieLatest = {};
+    console.log('[hwstats] PCIe stream died ' + pcieBad + ' times in a row - giving up (this driver\'s nvidia-smi may not support dmon); traffic stays n/a');
+    return;
+  }
+  setTimeout(startPcie, 5000);
+}
 function startPcie() {
+  if (pcieGaveUp) return;
   let buf = '';
   let ps;
-  try { ps = spawn('nvidia-smi', ['dmon', '-s', 't'], { windowsHide: true }); } catch (e) { return; }   // 1 s default delay; Windows calls it -d/--delay, Linux --sleep - pass neither
+  try { ps = spawn('nvidia-smi', ['dmon', '-s', 't'], { windowsHide: true }); } catch (e) { pcieFail(); return; }   // 1 s default delay; Windows calls it -d/--delay, Linux --sleep - pass neither
   ps.on('error', function () {});
-  ps.on('exit', function () { setTimeout(startPcie, 5000); });   // restart if it dies (like winCards)
+  ps.on('exit', function () {
+    if (pcieProc === ps) { pcieProc = null; pcieLatest = {}; }   // 071: stream stopped - drop its last reading (tile shows detecting / n/a, not frozen numbers)
+    pcieFail();
+  });
   ps.stdout.on('data', function (d) {
     buf += d;
     const lines = buf.split(/\r?\n/);
@@ -268,10 +292,14 @@ function startPcie() {
       const p = l.trim().split(/\s+/);
       if (p.length !== 3) return;   // data lines are '<idx> <rx> <tx>'; header lines have 4+ tokens
       const rx = numOrNull(p[1]), tx = numOrNull(p[2]);
-      if (p[0].match(/^\d+$/) && rx != null && tx != null) pcieLatest[p[0]] = { rx: rx, tx: tx };
+      if (p[0].match(/^\d+$/) && rx != null && tx != null) { pcieLatest[p[0]] = { rx: rx, tx: tx }; pcieBad = 0; }   // data flowing - the stream works, forget earlier failures
     });
   });
-  process.on('exit', function () { try { ps.kill(); } catch (e) {} });
+  if (!pcieExitHooked) {   // 071: one exit hook for all time - it kills the CURRENT stream, not a captured one
+    pcieExitHooked = true;
+    process.on('exit', function () { if (pcieProc) { try { pcieProc.kill(); } catch (e) {} } });
+  }
+  pcieProc = ps;
 }
 
 function setMode() {
