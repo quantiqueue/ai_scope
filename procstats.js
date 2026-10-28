@@ -251,7 +251,10 @@ process.on('exit', function () { stopLoop(); try { fs.unlinkSync(WATCH_FILE); } 
 
 // Watch an app's processes: key (e.g. 'comfyui'), the port(s) it listens on, and optionally the exe names to count
 // (e.g. ['llama-server.exe'] for Bionic, whose model runs in a child process; default: the port owner + all children).
-// Call again when the port changes.
+// Call again when the port changes. AI_SCOPE-077 batch 3: the port list may be EMPTY while the app's model
+// process is already running (a Strata engine loading / unloading, port not listening yet) - the Windows and
+// nix resolvers then match by exe NAME if the names are app-specific (never for shared runners like
+// llama-server.exe / python.exe, which need a port to attribute them).
 function watch(key, ports, names) {
   ports = (ports || []).map(Number).filter(function (n) { return n > 0 && n < 65536; });
   names = (names || []).map(String).filter(function (n) { return /^[\w .-]+$/.test(n); });

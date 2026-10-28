@@ -129,7 +129,11 @@ function poll() {
     // 'live' (a missed process lookup stays a gap, never zeros); no instances => 'idle' (nothing is
     // loaded, it genuinely uses nothing - procstats writes zeros, the tile sub reads "No Model Loaded").
     procstats.attest('strata', enginePorts.length ? 'live' : 'idle');
-    if (enginePorts.length) procstats.watch('strata', enginePorts, MODEL_PROCS); else procstats.unwatch('strata');
+    // 077 review batch 3: always watch, even with no engine port - during a model LOAD (or unload) the
+    // engine strata.exe is already running hot while the API reports no instance yet and the port is not
+    // LISTENING either. procstats then finds strata.exe by its (app-specific) exe name, so the mirror
+    // tiles show the real load-time I/O / CPU / RAM instead of idle zeros.
+    procstats.watch('strata', enginePorts, MODEL_PROCS);
     collectRequests(d.instances);
     if ((!logo.light || !logo.dark) && Date.now() - logo.tried > 60000) fetchLogos();
   });

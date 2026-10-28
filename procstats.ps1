@@ -174,6 +174,9 @@ public static class AiScopeProc {
 }
 '@
 $file = '__FILE__'
+# AI_SCOPE-077 review batch 3: runner names several apps share - without a listening port to attribute
+# them to, they cannot be counted for any app (same GENERIC rule as the Linux / macOS path, 052).
+$GENERIC = @('llama-server.exe', 'python.exe', 'python3.exe', 'node.exe')
 $apps = @{}; $watched = ''; $stamp = $null; $last = 0; $missing = $false
 function Resolve-Apps {
   $script:apps = @{}; $script:missing = $false
@@ -186,9 +189,21 @@ function Resolve-Apps {
     $root = $null
     foreach ($p in $parts[1].Split(',')) { if ($p -and $listen.ContainsKey([int]$p)) { $root = $listen[[int]$p]; break } }
     $fam = @(); if ($root) { $fam = @([AiScopeProc]::Family($root)) }
+    $want = @()
     if ($parts.Count -ge 3 -and $parts[2]) {
       $want = @($parts[2].Split(',') | Where-Object { $_ })
       $fam = @($fam | Where-Object { $want -contains [AiScopeProc]::Names[$_] })
+    }
+    # 077 batch 3: no listening port yet (a model LOAD/UNLOAD - the engine process runs before its port
+    # exists) - find the app's processes by exe NAME, but only app-specific names: a shared runner like
+    # llama-server.exe without its port would misattribute another app's process (Strata's strata.exe is
+    # unique; the generic set is 052's). PIDs already claimed by another key are skipped.
+    if (-not $root -and $want.Count) {
+      $spec = @($want | Where-Object { $GENERIC -notcontains $_ })
+      if ($spec.Count) {
+        $claimed = @($script:apps.Values | ForEach-Object { $_ })
+        $fam = @(([AiScopeProc]::Names).Keys | Where-Object { $spec -contains [AiScopeProc]::Names[$_] -and $claimed -notcontains $_ })
+      }
     }
     if ($fam.Count) { $script:apps[$parts[0]] = $fam } else { $script:missing = $true }
   }
