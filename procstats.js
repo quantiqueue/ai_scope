@@ -52,6 +52,39 @@ function pushHist(key) {
   if (h.length > HIST) h.shift();
 }
 
+// AI_SCOPE-077 (review batch): an offline app really uses nothing, so the mirror tiles should read 0 rather
+// than freeze. The APP MODULES (stratastats / lmapi — not this sampler) attest whether their app is reachable,
+// and while attested OFFLINE this module writes explicit zero history points on its own 2 s heartbeat, even
+// though no processes are being found. Points are marked `off: 1` so the tiles can tell attested zeros from
+// stale real readings. While an app is attested ONLINE a missed PID/port lookup (PIDs are re-resolved every
+// 15 s) stays a GAP - never a false zero dip (user decision, 2026-10-28).
+const onlineByApp = {};    // key -> true / false, set by the app module each poll
+let zeroTimer = null;
+const ZERO_EVERY = 2000;
+function zeroTick() {
+  const now = Date.now(), luids = hwstats.cardKeys(), win = process.platform === 'win32';
+  let waiting = false;
+  Object.keys(onlineByApp).forEach(function (k) {
+    if (onlineByApp[k]) return;
+    waiting = true;
+    const r = results[k];
+    if (r && now - r.at < 3000) return;                       // a real reading (app on its way out) still wins
+    const h = hist[k] || (hist[k] = []);
+    const last = h[h.length - 1];
+    if (last && last.off && now - last.t < ZERO_EVERY - 500) return;   // don't stack two zeros in one tick
+    h.push({ t: now, off: 1, gpus: luids.map(function () { return { vram: 0, util: 0 }; }),
+      ram: 0, ramPrivate: 0, cpu: 0, ioRead: win ? 0 : null, ioWrite: win ? 0 : null });
+    if (h.length > HIST) h.shift();
+  });
+  if (!waiting && zeroTimer) { clearInterval(zeroTimer); zeroTimer = null; }
+}
+function attest(key, online) {
+  if (onlineByApp[key] === !!online) return;
+  onlineByApp[key] = !!online;
+  if (!online && !zeroTimer) zeroTimer = setInterval(zeroTick, ZERO_EVERY);
+}
+function unattest(key) { delete onlineByApp[key]; }
+
 // The PowerShell side lives in procstats.ps1 (output format described there).
 const PS_FILE = path.join(__dirname, 'procstats.ps1');
 
@@ -252,4 +285,5 @@ function get(key) {
 // Whether per-process stats can work here at all: Windows, Linux, macOS (AI_SCOPE-052).
 function supported() { return process.platform === 'win32' || NIX; }
 module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get, history: function (key) { return hist[key] || []; },   // 072: 5-min per-app GPU history
+  attest: attest, unattest: unattest,   // AI_SCOPE-077 review: offline attestation drives the zero heartbeat
   _test: { handleBlock: handleBlock, results: results, nixResolve: nixResolve, nixTick: nixTick } };

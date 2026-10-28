@@ -119,10 +119,12 @@ function poll() {
     busy = false;
     if (err || !d || !Array.isArray(d.instances)) {
       online = false; native = null;
+      procstats.attest('strata', false);   // AI_SCOPE-077 review: offline attestation lets procstats write honest zero history
       lastError = err ? (err.code === 'ECONNREFUSED' ? 'Strata app not running at ' + base : err.message) : 'unexpected answer - is this the Strata app?';
       return;
     }
     online = true; lastError = null; native = d; fetchedAt = Date.now();
+    procstats.attest('strata', true);   // 077 review: online => never zeros, a missed process lookup stays a gap
     const enginePorts = d.instances.map(function (i) { return +i.port; }).filter(function (p) { return p > 0 && p < 65536; });
     if (enginePorts.length) procstats.watch('strata', enginePorts, MODEL_PROCS); else procstats.unwatch('strata');
     collectRequests(d.instances);
@@ -249,6 +251,7 @@ function start(settings) {
 function stop() {
   if (timer) { clearInterval(timer); timer = null; }
   procstats.unwatch('strata');
+  procstats.unattest('strata');   // 077 review: an uninstalled scope stops claiming history
   online = false; native = null; lastError = null;
 }
 

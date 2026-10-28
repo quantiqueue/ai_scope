@@ -161,8 +161,9 @@ function tryBase(list, i, cb) {
 function poll() {
   const list = base ? [base].concat(CANDIDATES.filter(function (c) { return c !== base; })) : CANDIDATES;
   tryBase(list, 0, function (err, b, ver, d) {
-    if (err) { online = false; lastError = err.message; models = []; return; }
+    if (err) { online = false; lastError = err.message; models = []; procstats.attest('bionic', false); return; }   // 077 review: offline attestation drives procstats' zero history
     base = b; online = true; apiVersion = ver; lastError = null; raw = d;
+    procstats.attest('bionic', true);   // 077 review: online => never zeros, a missed process lookup stays a gap
     procstats.watch('bionic', portsOf([b]), MODEL_PROCS);
     models = ver === 'v1' ? normV1(d) : normV0(d);
     if (Date.now() - reposAt > 60000) scanRepos();
@@ -214,6 +215,6 @@ function start(settings) {
   poll(); timer = setInterval(poll, 10000); // each poll adds 2 lines to Bionic's server log
 }
 function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
-function stop() { stopTimer(); procstats.unwatch('bionic'); online = false; base = null; models = []; raw = null; lastError = null; lastLoadedKeys = ''; }
+function stop() { stopTimer(); procstats.unwatch('bionic'); procstats.unattest('bionic'); online = false; base = null; models = []; raw = null; lastError = null; lastLoadedKeys = ''; }   // 077 review: unattest on stop
 
 module.exports = { start: start, stop: stop, getState: getState, getRaw: getRaw, loadedCount: loadedCount };

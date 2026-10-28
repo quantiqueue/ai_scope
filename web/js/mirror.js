@@ -2,26 +2,82 @@
 // processes**: GPU / VRAM per card (AI_SCOPE-072), RAM Working / Committed (AI_SCOPE-073), CPU (AI_SCOPE-075)
 // and file I/O (AI_SCOPE-076). Strata built them one ticket at a time in strata.js; defineMirror() lifts them
 // into one source so every app scope gets the same tiles, rules and wording: quarter tiles in the Hardware tile
-// style, 5-minute server-side history from procstats, hover from that history, stale sample => newest point +
-// "Inactive", Width on all, GPU with a card picker, RAM with Show (Working / Committed, each with its own
-// ceiling), CPU with no settings, I/O without a disk picker (one number per process, not per drive) — and no
-// Power / PCIe mirrors, which have no per-process equivalent (see the Terminology section of the tasks doc).
-// Call it after the scope's defineSource; the source payload must carry `process`, `processSupported`,
-// `processHistory` and `processCards` (stratastats.js shape; the /api/bionic route adds them the same way).
-// The full rules of the family, and the settled per-metric decisions, are in the v0.4 tasks doc (072 / 073 /
-// 075 / 076); this module is their single implementation.
+// style, 5-minute server-side history from procstats, hover from that history, Width on all, GPU with a card
+// picker, RAM with Show (Working / Committed, each with its own ceiling), CPU with no settings, I/O without a
+// disk picker (one number per process, not per drive) — and no Power / PCIe mirrors, which have no per-process
+// equivalent (see the Terminology section of the v0.4 tasks doc).
+// State rules, revised by 077's REVIEW BATCH (user decisions, 2026-10-28):
+//   - **Time-mapped chart and hover**: points sit at their real times inside the 5-minute window and age out
+//     of the left edge; the "5 min ago → now" axis is honest even when the app stopped producing samples.
+//   - **Stale sample => big value n/a** — no frozen last value ("that represents reality most closely").
+//   - **App attested OFFLINE => procstats writes explicit zero points** ("it really should be 0 when offline
+//     because it's offline"), marked `off`, which paint as zeros with an "Inactive" sub line; the zero tail
+//     flows in from the right. **Online + sample missing (a lookup hiccup) => gap, never zeros.**
+// Call defineMirror() after the scope's defineSource; the source payload must carry `process`,
+// `processSupported`, `processHistory` and `processCards` (stratastats.js shape; the /api/bionic route adds them).
 
 // Per-prefix hover handlers for the shared sparkline hover in hardware.js. Each mirror scope registers the
 // prefix used by its tiles, so a Bionic tile hovers over Bionic's history, not Strata's (the pre-077
-// branches read window.STRATA_PROC_HIST by name — one scope hardcoded into the shared handler).
-// The MIRROR_HOVER array itself is declared in hardware.js (the hover handler lives there and classic scripts
-// share one global lexical scope — declaring it twice would be a SyntaxError); mirror.js loads after it.
+// branches read window.STRATA_PROC_HIST by name). The MIRROR_HOVER array itself lives in hardware.js (the
+// hover handler is there, and classic scripts share one global lexical scope); mirror.js only fills it.
+
+const MWIN = 300000;                 // the sparkline window: 5 minutes, like the Hardware tiles (072)
+function winPts(hist, now) {         // history points whose TIME is inside the window, oldest first
+  const t0 = now - MWIN, out = [];
+  for (let i = hist.length - 1; i >= 0 && out.length < 240; i--) { if (hist[i].t >= t0) out.push(hist[i]); else break; }
+  return out.reverse();
+}
+const xAt = (t, now) => 100 * (t - (now - MWIN)) / MWIN;
+// Path segments: one polyline per run of points (gaps over 6 s — the sampler stopped, or a null value —
+// break the line instead of drawing a straight lie across them).
+function segsOf(pts, now, yOf) {
+  const segs = []; let cur = [];
+  for (let i = 0; i < pts.length; i++) {
+    const y = yOf(pts[i]);
+    if (y == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+    if (cur.length && pts[i].t - pts[i - 1].t > 6000) { segs.push(cur); cur = []; }
+    cur.push([xAt(pts[i].t, now), 100 - Math.max(0, Math.min(100, y))]);   // y is a percent (0-100); the SVG is flipped (0 = top)
+  }
+  if (cur.length) segs.push(cur);
+  return segs;
+}
+const segPath = segs => segs.map(s => s.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join('')).join(' ');
+const areaOf = segs => segs.map(s => segPath([s]) + ' L' + s[s.length - 1][0].toFixed(2) + ' 100 L' + s[0][0].toFixed(2) + ' 100 Z').join(' ');
+// Like hardware.js setTile(), but the series arrives as TIME-MAPPED segments, not index-mapped values.
+function setTileTime(el, value, big, sub, segs) {
+  if (!el) return;
+  el.querySelector('.v').innerHTML = big;
+  el.querySelector('.sub').textContent = sub;
+  el.querySelector('.sub').title = sub;
+  el.querySelector('.meter > div').style.width = (value == null ? 0 : Math.max(0, Math.min(100, value))) + '%';
+  el.querySelector('.line').setAttribute('d', segPath(segs));
+  el.querySelector('.area').setAttribute('d', areaOf(segs));
+}
+// The value rule (review batch): the live process sample wins; otherwise the newest point in the window ONLY
+// if it is an attested-offline zero (`off`) — an app that is gone really uses nothing; a stale real reading is n/a.
+function liveOrOff(d, pts) {
+  if (d.process) return { p: d.process, inactive: false };
+  const last = pts.length ? pts[pts.length - 1] : null;
+  if (last && last.off) return { p: last, inactive: true };
+  return { p: null, inactive: true };
+}
+// Time-based hover: guide and tip sit at the CURSOR time; the value comes from the nearest point in the
+// window within 4 s, else n/a — axis and readout now mean the same time.
+function hoverTime(spark, f, guide, tip, pts, now, textOf) {
+  const tc = (now - MWIN) + f * MWIN;
+  let best = null;
+  for (let i = 0; i < pts.length; i++) if (!best || Math.abs(pts[i].t - tc) < Math.abs(best.t - tc)) best = pts[i];
+  const x = 100 * f;
+  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
+  tip.hidden = false; tip.style.left = x + '%';
+  tip.textContent = (best && Math.abs(best.t - tc) <= 4000 ? textOf(best) : 'n/a') + ' · ' + new Date(tc).toLocaleTimeString();
+}
 
 // One entry per app scope:
 //   key   — the scope id; lens ids become <key>.gpu / .ram / .cpu / .io, so saved layouts address them directly
 //   name  — display name in labels ("Bionic RAM (Committed)"; the tile CSS upper-cases)
-//   letter — starts the four data-tile prefixes (<letter>gp / <letter>ram / <letter>cp / <letter>io); one letter
-//            per scope, distinct from every other scope's (077 uses 's' for Strata, 'b' for Bionic)
+//   letter — starts the four data-tile prefixes (<letter>gp / <letter>ram_ / <letter>cpu / <letter>io); one
+//            letter per scope, distinct from every other scope's (077 uses 's' for Strata, 'b' for Bionic)
 function defineMirror(spec) {
   const key = spec.key, name = spec.name, p = spec.letter;
   // The scope's process history, newest last — kept for the hover handlers (same role window.STRATA_PROC_HIST
@@ -32,9 +88,8 @@ function defineMirror(spec) {
   subscribeSource(key, d => { hist = (d && d.processHistory) || []; cards.length = 0; (d && d.processCards || []).forEach(c => cards.push(c)); });
 
   // ---------- GPU / VRAM per card (AI_SCOPE-072) ----------
-  // One metric per tile (Show picks GPU usage or VRAM); a card picker because VRAM is per card. "Inactive ·
-  // <card>" when the process sample is stale (big value = newest history point); "Not available on this system"
-  // where per-process GPU stats cannot exist (macOS; Linux AMD / Intel cards) — no invented fallback numbers.
+  // One metric per tile (Show picks GPU usage or VRAM); a card picker because VRAM is per card. "Not available
+  // on this system" where per-process GPU stats cannot exist (macOS; Linux AMD / Intel cards).
   defineLens({
     id: key + '.gpu', scope: key, size: 'tile',
     name: name + ' GPU',
@@ -53,36 +108,32 @@ function defineMirror(spec) {
       if (box.querySelector('.ltitle').textContent !== label) box.querySelector('.ltitle').textContent = label;
       const card = cards[i] || {}, cardName = card.name || (cards.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
       if (!d.processSupported) {   // macOS has no per-process GPU source (and none is coming without 062); Linux AMD / Intel cards lack it too
-        setTile(box, null, NA_HTML, 'Not available on this system', []);
+        setTileTime(box, null, NA_HTML, 'Not available on this system', []);
         return;
       }
+      const now = Date.now(), pts = winPts(hist, now);
       const total = card.vramTotal || 0;
       const pct = g => !g ? null : show === 'gpu' ? (g.util == null ? null : g.util) : (total ? 100 * g.vram / total : null);
-      const series = hist.map(h => pct(h.gpus && h.gpus[i]));
-      let cur = d.process && d.process.gpus ? d.process.gpus[i] : null;
-      let inactive = false;
-      if (!cur) {                                  // no fresh process - show the newest point history has, and say Inactive
-        const last = hist.length ? hist[hist.length - 1] : null;
-        cur = last && last.gpus ? last.gpus[i] : null;
-        inactive = true;
-      }
+      const segs = segsOf(pts, now, h => pct(h.gpus && h.gpus[i]));
+      const c = liveOrOff(d, pts);
+      const cur = c.p && c.p.gpus ? c.p.gpus[i] : null;
       const v = pct(cur);
       let big;
       if (show === 'gpu') big = cur && cur.util != null ? Math.round(cur.util) + '<small>%</small>' : NA_HTML;
       else big = cur && cur.vram != null ? GB(cur.vram) + (total ? '<small> / ' + GB(total) + ' GB</small>' : '<small> GB</small>') : NA_HTML;
-      setTile(box, v, big, (inactive ? 'Inactive · ' : '') + cardName, series);
+      setTileTime(box, v, big, (c.inactive ? 'Inactive · ' : '') + cardName, segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'gp', fn: (spark, f, guide, tip) => {   // GPU % or GB of the card total at that time
-    if (!hist.length) return;
     const id = spark.closest('[data-tile]').dataset.tile;   // "<p>gp<card>_<show>"
     const rest = id.slice((p + 'gp').length), iCard = parseInt(rest, 10), show = rest.slice(-3);
-    const k = Math.max(0, Math.min(hist.length - 1, Math.round(f * (hist.length - 1)))), hs = hist[k];
-    const g = hs.gpus && hs.gpus[iCard], tot = cards[iCard];
-    const text = show === 'gpu'
-      ? (g && g.util != null ? g.util.toFixed(0) + '%' : 'n/a')
-      : (g && g.vram != null ? GB(g.vram) + ' GB' + (tot && tot.vramTotal ? ' of ' + GB(tot.vramTotal) + ' GB' : '') : 'n/a');
-    hoverAt(spark, f, guide, tip, hist, k, text);
+    const now = Date.now();
+    hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => {
+      const g = hs.gpus && hs.gpus[iCard], tot = cards[iCard];
+      return show === 'gpu'
+        ? (g && g.util != null ? g.util.toFixed(0) + '%' : 'n/a')
+        : (g && g.vram != null ? GB(g.vram) + ' GB' + (tot && tot.vramTotal ? ' of ' + GB(tot.vramTotal) + ' GB' : '') : 'n/a');
+    });
   } });
 
   // ---------- RAM of the model process (AI_SCOPE-073) ----------
@@ -116,12 +167,10 @@ function defineMirror(spec) {
       const hs = (hw.history && hw.history[hw.history.length - 1]) || {};
       const limit = committed ? (hs.commitLimit || hs.ramTotal || 0) : (hs.ramTotal || 0);
       const pct2 = b => (b != null && limit) ? Math.min(100, 100 * b / limit) : null;
-      const series = hist.map(h => pct2(h[k2]));
-      let cur = d.process ? d.process[k2] : null, inactive = false;
-      if (cur == null) {                                           // no fresh process - newest point history has, and say Inactive
-        for (let i = hist.length - 1; i >= 0; i--) if (hist[i][k2] != null) { cur = hist[i][k2]; break; }
-        inactive = true;
-      }
+      const now = Date.now(), pts = winPts(hist, now);
+      const segs = segsOf(pts, now, h => pct2(h[k2]));
+      const c = liveOrOff(d, pts);
+      const cur = c.p ? c.p[k2] : null;
       const v = pct2(cur);
       const big = cur != null ? GB(cur) + (limit ? '<small> / ' + GB(limit) + ' GB</small>' : '<small> GB</small>') : NA_HTML;
       // Sub line: like the Hardware RAM tile ("% used"), naming what the percentage is taken of (OS-aware —
@@ -129,23 +178,24 @@ function defineMirror(spec) {
       const of = committed
         ? (hs.commitLimit ? 'of commit limit' + (SERVER_OS === 'linux' ? ' (RAM + swap)' : '') : 'of RAM (no commit limit here)')
         : 'of system RAM';
-      setTile(box, v, big, inactive ? 'Inactive' : (v == null ? 'detecting\u2026' : v.toFixed(0) + '% ' + of), series);
+      setTileTime(box, v, big, c.inactive ? 'Inactive' : (v == null ? 'detecting\u2026' : v.toFixed(0) + '% ' + of), segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'ram_', fn: (spark, f, guide, tip) => {   // working / committed GB at that time, against the right ceiling
-    if (!hist.length) return;
-    const k = Math.max(0, Math.min(hist.length - 1, Math.round(f * (hist.length - 1))));
-    const hs = hist[k], id = spark.closest('[data-tile]').dataset.tile, committed = id === p + 'ram_committed';
-    const b = hs[committed ? 'ramPrivate' : 'ram'];
-    const h = (hwHist && hwHist.length) ? hwHist[Math.max(0, Math.min(hwHist.length - 1, Math.round(f * (hwHist.length - 1))))] : {};
-    const lim = committed ? (h.commitLimit || h.ramTotal) : h.ramTotal;
-    hoverAt(spark, f, guide, tip, hist, k, b != null ? GB(b) + ' GB' + (lim ? ' of ' + GB(lim) + ' GB' : '') : 'n/a');
+    const id = spark.closest('[data-tile]').dataset.tile, committed = id === p + 'ram_committed';
+    const now = Date.now();
+    hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => {
+      const b = hs[committed ? 'ramPrivate' : 'ram'];
+      const h = (hwHist && hwHist.length) ? hwHist[Math.max(0, Math.min(hwHist.length - 1, Math.round(f * (hwHist.length - 1))))] : {};
+      const lim = committed ? (h.commitLimit || h.ramTotal) : h.ramTotal;
+      return b != null ? GB(b) + ' GB' + (lim ? ' of ' + GB(lim) + ' GB' : '') : 'n/a';
+    });
   } });
 
   // ---------- CPU of the model process (AI_SCOPE-075) ----------
   // Mirrors the Hardware CPU tile's style (big "NN%", sub line names the machine, meter = the same %, sparkline
   // from history) but shows the app's own process numbers from procstats — one number for the whole PC, so there
-  // is no card picker and no Show choice, only Width. No fresh process sample => newest history point + Inactive.
+  // is no card picker and no Show choice, only Width.
   const CPU_TIP = 'Share of the whole CPU (all cores) used by ' + name + "'s model process";
   defineLens({
     id: key + '.cpu', scope: key, size: 'tile',
@@ -158,37 +208,27 @@ function defineMirror(spec) {
       // Machine line exactly like hardware.cpu (the tile label already says which app this is).
       const hw = (SOURCES.hardware && SOURCES.hardware.data) || {};
       const info = hw.info || {};
-      const series = hist.map(h => h.cpu == null ? null : Math.min(100, h.cpu));
-      let cur = d.process ? d.process.cpu : null, inactive = false;
-      if (cur == null) {                                            // stale process - newest point history has
-        for (let i = hist.length - 1; i >= 0; i--) if (hist[i].cpu != null) { cur = hist[i].cpu; break; }
-        inactive = true;
-      }
-      const v = cur == null ? null : Math.min(100, cur);
-      setTile(box, v, v == null ? NA_HTML : v.toFixed(0) + '<small>%</small>',
-        inactive ? 'Inactive' : (info.cpuModel || 'CPU') + ' · ' + (info.cores || '?') + ' threads', series);
+      const now = Date.now(), pts = winPts(hist, now);
+      const segs = segsOf(pts, now, h => h.cpu == null ? null : Math.min(100, h.cpu));
+      const c = liveOrOff(d, pts);
+      const v = c.p && c.p.cpu != null ? Math.min(100, c.p.cpu) : null;
+      setTileTime(box, v, v == null ? NA_HTML : v.toFixed(0) + '<small>%</small>',
+        c.inactive ? 'Inactive' : (info.cpuModel || 'CPU') + ' · ' + (info.cores || '?') + ' threads', segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'cpu', fn: (spark, f, guide, tip) => {   // % of all cores at that time
-    if (!hist.length) return;
-    const k = Math.max(0, Math.min(hist.length - 1, Math.round(f * (hist.length - 1)))), c = hist[k].cpu;
-    hoverAt(spark, f, guide, tip, hist, k, c != null ? Math.min(100, c).toFixed(0) + '%' : 'n/a');
+    const now = Date.now();
+    hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => (hs.cpu != null ? Math.min(100, hs.cpu).toFixed(0) + '%' : 'n/a'));
   } });
 
   // ---------- File I/O of the model process (AI_SCOPE-076) ----------
-  // Layout and style mirror the Hardware Disk tile (two lines: read solid, write dashed, same legend and chart
-  // scaling), with two differences on purpose: no disk picker (per-process I/O counters are one number per
+  // Layout and style mirror the Hardware Disk tile (two lines: read solid, write dashed, same legend and
+  // chart scaling), with two differences on purpose: no disk picker (per-process I/O counters are one number per
   // process, not per physical drive) and no "% active" (a device counter). Big value = read + write, so the sub
   // line and the two chart lines always show the split — a read-then-write flow (unpacking a model, a copy)
   // legitimately counts its bytes twice, which the split makes readable. Windows counters only for now.
   const IO_TIP = 'Bytes per second ' + name + "'s model process reads and writes. One count per operation: a flow that reads then writes (unpacking a model, copying) counts those bytes twice. Sockets and pagefile traffic are not included, and this is why a download that is written to disk shows as a write only. Windows counters only.";
-  const ioScale = h => Math.max(1e6, 1.25 * h.reduce((a, x) => Math.max(a, x.ioRead || 0, x.ioWrite || 0), 0));
-  const ioPath = (h, field, max) => {
-    const n = h.length;
-    return h.map((x, i) => x.ioRead == null && x.ioWrite == null ? null
-        : [n < 2 ? 100 : 100 * i / (n - 1), 100 - Math.min(100, 100 * (x[field] || 0) / max)])
-      .filter(Boolean).map((pt, i) => (i ? 'L' : 'M') + pt[0].toFixed(2) + ' ' + pt[1].toFixed(2)).join(' ');
-  };
+  const ioSegs = (pts, now, field, max) => segsOf(pts, now, h => (h.ioRead == null && h.ioWrite == null) ? null : Math.min(100, 100 * (h[field] || 0) / max));
   defineLens({
     id: key + '.io', scope: key, size: 'tile',
     name: name + ' I/O',
@@ -213,27 +253,24 @@ function defineMirror(spec) {
         el.querySelector('.sub').textContent = 'I/O stats: Windows only for now';
         return;
       }
-      let r = d.process ? d.process.ioRead : null, w = d.process ? d.process.ioWrite : null, inactive = false;
-      if (r == null && w == null) {                       // stale process - newest history point that has them
-        for (let i = hist.length - 1; i >= 0; i--) if (hist[i].ioRead != null || hist[i].ioWrite != null) { r = hist[i].ioRead || 0; w = hist[i].ioWrite || 0; break; }
-        inactive = true;
-      }
+      const now = Date.now(), pts = winPts(hist, now);
+      const c = liveOrOff(d, pts);
+      const r = c.p ? c.p.ioRead : null, w = c.p ? c.p.ioWrite : null;
       const tot = r == null && w == null ? null : (r || 0) + (w || 0);
-      const max = ioScale(hist);
+      const max = Math.max(1e6, 1.25 * pts.reduce((a, x) => Math.max(a, x.ioRead || 0, x.ioWrite || 0), 0));   // window only: "top of the chart" is what you SEE
       el.querySelector('.v').innerHTML = tot == null ? NA_HTML : fmtRate(tot);
       const sub = 'Read ' + fmtRate(r) + ' · Write ' + fmtRate(w);
-      el.querySelector('.sub').textContent = inactive ? 'Inactive · ' + sub : sub;
-      el.querySelector('.sub').title = inactive ? 'No live process sample - the newest reading in the history' : IO_TIP;
+      el.querySelector('.sub').textContent = c.inactive ? 'Inactive · ' + sub : sub;
+      el.querySelector('.sub').title = c.inactive ? 'No live process sample' + (c.p && c.p.off ? ' - the app is offline, it uses nothing' : ' - the app is online but its process was not found') : IO_TIP;
       el.querySelector('.meter > div').style.width = (tot == null ? 0 : Math.max(0, Math.min(100, 100 * tot / max))) + '%';
-      el.querySelector('.line:not(.wline)').setAttribute('d', ioPath(hist, 'ioRead', max));
-      el.querySelector('.wline').setAttribute('d', ioPath(hist, 'ioWrite', max));
+      el.querySelector('.line:not(.wline)').setAttribute('d', segPath(ioSegs(pts, now, 'ioRead', max)));
+      el.querySelector('.wline').setAttribute('d', segPath(ioSegs(pts, now, 'ioWrite', max)));
       el.querySelector('.spark').title = 'Top of the chart = ' + fmtRate(max);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'io', fn: (spark, f, guide, tip) => {   // read / write at that time, like the Disk tile
-    if (!hist.length) return;
-    const k = Math.max(0, Math.min(hist.length - 1, Math.round(f * (hist.length - 1)))), hs = hist[k];
-    hoverAt(spark, f, guide, tip, hist, k, hs.ioRead == null && hs.ioWrite == null ? 'n/a'
+    const now = Date.now();
+    hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => hs.ioRead == null && hs.ioWrite == null ? 'n/a'
       : 'R ' + fmtRate(hs.ioRead || 0) + ' · W ' + fmtRate(hs.ioWrite || 0));
   } });
 
@@ -257,13 +294,4 @@ function defineMirror(spec) {
       return items;
     },
   };
-}
-
-// Shared hover drawing for the mirror branches (guide line + tip re-indexed to the scope's own history, as the
-// per-scope branches in hardware.js did before 077).
-function hoverAt(spark, f, guide, tip, hist, k, text) {
-  const x = hist.length < 2 ? 100 : 100 * k / (hist.length - 1);
-  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
-  tip.hidden = false; tip.style.left = x + '%';
-  tip.textContent = text + ' · ' + new Date(hist[k].t).toLocaleTimeString();
 }
