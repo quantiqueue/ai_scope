@@ -379,7 +379,8 @@ function sample() {
     cpu: cpuPercent(),
     ramUsed: total - free,
     ramTotal: total,
-    commitLimit: commitLimit,   // AI_SCOPE-073: RAM + pagefile ceiling for committed memory (null where it has no meaning)
+    commitLimit: commitLimit,   // AI_SCOPE-073/074: RAM + pagefile ceiling for committed memory (null where it has no meaning)
+    commitUsed: commitUsed,     // AI_SCOPE-074: committed in use (same one call, above)
     // Whole-PC GPU numbers (busiest card, VRAM summed over all cards)...
     gpu: has('util') ? Math.max.apply(null, cards.map(function (c) { return c.util || 0; })) : null,
     vramUsed: has('vramUsed') ? sum('vramUsed') : null,
@@ -408,49 +409,53 @@ function sample() {
 let diskNames = {}, diskOrder = [];
 let started = false;
 
-// ---- Memory ceiling for committed memory (AI_SCOPE-073) ----
-// The Strata "Committed" tile scales against the commit limit, not physical RAM. On Windows that is
-// Win32_OperatingSystem.TotalVirtualMemorySize (KB) - the same number as the \Memory\Commit Limit counter
-// (checked on snow: 153,927,544 KB = 157,621,805,056 B, i.e. 127.8 GB RAM + a 19 GB pagefile), and reading it
-// through CIM is locale-free (the counter path is not). It only moves when the pagefile setting changes and one
-// call costs ~1.8 s of PowerShell startup, so it is read at start and every MEM_LIMIT_EVERY - never per 2 s sample.
-// Linux: MemTotal + SwapTotal from /proc/meminfo (cheap fs read). macOS has no commit limit (and no
-// resident/private split), so it stays null and the tile falls back to physical RAM as the ceiling.
-let commitLimit = null;
+// ---- Committed memory: what is reserved and the ceiling it must fit in (AI_SCOPE-073 / 074) ----
+// The "Committed" RAM tile needs both numbers, and they come from ONE call.
+// Windows (CIM, locale-free where the \Memory\... counter paths are not): TotalVirtualMemorySize is the commit
+// limit and TotalVirtualMemorySize - FreeVirtualMemory is committed in use - verified on snow against the PDH
+// counters (limit 153,927,544 KB = 157,621,805,056 B = 146.8 GB, i.e. 127.8 GB RAM + a 19 GB pagefile; committed
+// 133.6 GB by both routes). One call costs ~1.8 s of PowerShell startup, so it is read at start and every
+// MEM_LIMIT_EVERY - never per 2 s sample - and a failed read keeps the last good values.
+// Linux: /proc/meminfo (cheap fs read) - CommitLimit is the ceiling, Committed_AS the reservation (an accounting
+// estimate: with default overcommit it can exceed the limit, which the tile shows as a full meter).
+// macOS has no commit-limit concept, so both stay null and the tile says so; 074 also leaves it out of the macOS
+// default layout.
+let commitLimit = null, commitUsed = null;
 const MEM_LIMIT_EVERY = 60000;
-const PS_COMMIT_LIMIT =
+const PS_COMMIT =
   "$ErrorActionPreference='SilentlyContinue';" +
   "$o=Get-CimInstance Win32_OperatingSystem;" +
-  "if ($o) { [int64]$o.TotalVirtualMemorySize * 1KB }";
-function readCommitLimit() {
+  "if ($o) { [int64]$o.TotalVirtualMemorySize * 1KB; [int64]$o.FreeVirtualMemory * 1KB }";
+function readCommit() {
   if (process.platform === 'win32') {
     try {
-      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_COMMIT_LIMIT],
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_COMMIT],
         { windowsHide: true, timeout: 10000 }, function (e, out) {
-          if (e) return;                          // keep the last good value
-          const v = parseInt(String(out).trim(), 10);
-          if (v > 0) commitLimit = v;
+          if (e) return;                          // keep the last good values
+          const v = String(out).trim().split(/\r?\n/).map(function (s) { return parseInt(s.trim(), 10); });
+          if (v[0] > 0) { commitLimit = v[0]; commitUsed = (v[1] > 0 && v[1] <= v[0]) ? v[0] - v[1] : null; }
         });
-    } catch (e) { /* the tile then scales against RAM */ }
+    } catch (e) { /* the tile then falls back to Usage */ }
     return;
   }
   if (process.platform === 'linux') {
     let text = '';
     try { text = fs.readFileSync('/proc/meminfo', 'utf8'); } catch (e) { return; }
-    const kb = function (name) { const m = new RegExp('^' + name + ':\\s+(\\d+)', 'm').exec(text); return m ? +m[1] * 1024 : 0; };
-    const total = kb('MemTotal');
-    if (total) commitLimit = total + kb('SwapTotal');
+    const kb = function (name) { const m = new RegExp('^' + name + ':\\s+(\\d+)', 'm').exec(text); return m ? +m[1] * 1024 : null; };
+    const total = kb('MemTotal'), cl = kb('CommitLimit');
+    if (total) commitLimit = cl != null ? cl : total + (kb('SwapTotal') || 0);
+    commitUsed = kb('Committed_AS');
     return;
   }
-  commitLimit = null;    // macOS
+  commitLimit = null; commitUsed = null;    // macOS
 }
 
 function start() {
   if (started) return;
   started = true;
   diskstats.start();
-  readCommitLimit();
-  setInterval(readCommitLimit, MEM_LIMIT_EVERY);
+  readCommit();
+  setInterval(readCommit, MEM_LIMIT_EVERY);
   cpuPercent();
   detectGpu(function () {
     const cards = allCards();

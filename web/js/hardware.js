@@ -71,12 +71,28 @@ defineLens({
 });
 defineLens({
   id: 'hardware.ram', scope: 'hardware', size: 'tile',
-  name: 'RAM', description: 'Memory in use with a 5-minute history.',
-  markup: tileHtml({ id:'ram', label:'RAM' }),
+  name: 'RAM', description: 'Memory in use with a 5-minute history; Show can switch it to committed memory over the commit limit.',
+  settings: [
+    { id:'show', label:'Show', type:'choice', default:'usage', options:[['usage', 'Usage'], ['committed', 'Committed']] },
+  ],
+  markup: st => tileHtml({ id:'ram' + (st.show === 'committed' ? 'C' : ''),
+    label:'RAM' + (st.show === 'committed' ? ' (Committed)' : '') }),
   render(L, d) {
     const s = hwLatest(d); if (!s) return;
+    const box = L.el.querySelector('[data-tile="ram' + (L.settings.show === 'committed' ? 'C' : '') + '"]'); if (!box) return;
+    if (L.settings.show === 'committed') {
+      // Committed (reserved against RAM + pagefile) - the numbers 073 / 074 read in one CIM / meminfo call.
+      const lim = s.commitLimit;
+      if (lim == null) { setTile(box, null, NA_HTML, 'Committed memory: not available on this system', []); return; }
+      const pctC = b => (b != null && lim) ? Math.min(100, 100 * b / lim) : null;
+      const val = pctC(s.commitUsed);
+      setTile(box, val, (s.commitUsed != null ? GB(s.commitUsed) + '<small> / ' + GB(lim) + ' GB</small>' : NA_HTML),
+        (val == null ? 'detecting…' : val.toFixed(0) + '% of commit limit'),
+        d.history.map(h => h.commitLimit ? pctC(h.commitUsed) : null));   // samples before the field landed stay gaps
+      return;
+    }
     const v = tileValues(s);
-    setTile(L.el.querySelector('.tile'), v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', hwSeries(d, 'ram'));
+    setTile(box, v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', hwSeries(d, 'ram'));
   },
 });
 // One graphics card: GPU usage (with temperature and power), VRAM, or both side by side.
@@ -368,6 +384,13 @@ document.addEventListener('mousemove', e => {
     tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
+  if (id === 'ramC') {   // Committed RAM tile (AI_SCOPE-074): reserved memory against the commit limit at that time
+    const lim = h.commitLimit;
+    tip.textContent = (lim != null && h.commitUsed != null
+      ? GB(h.commitUsed) + ' / ' + GB(lim) + ' GB (' + Math.min(100, Math.round(100 * h.commitUsed / lim)) + '%)'
+      : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
+    return;
+  }
   if (id.indexOf('sram_') === 0) {   // Strata process RAM tiles (AI_SCOPE-073): working / committed GB at that time,
                                      // against the right ceiling - system RAM for Working, the commit limit for Committed
     const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
@@ -410,6 +433,9 @@ document.addEventListener('mouseout', e => {
 defineScopeLayout('hardware', () => {
   const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
   const items = layoutOf(['hardware.cpu', 'hardware.ram']);
+  // AI_SCOPE-074: a second RAM tile showing committed memory over the commit limit - left out of the macOS
+  // default (no commit-limit concept there); still addable by hand, where it answers "not available".
+  if (SERVER_OS !== 'darwin') items.push({ lens: 'hardware.ram', settings: { show: 'committed' } });
   for (let i = 0; i < Math.max(1, gpus.length); i++) {   // power + PCIe tile per card (027 / 065)
     items.push({ lens: 'hardware.gpu', settings: { card: i, show: 'both' } });
     items.push({ lens: 'hardware.power', settings: { card: i } });
