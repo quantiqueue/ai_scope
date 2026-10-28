@@ -368,6 +368,19 @@ document.addEventListener('mousemove', e => {
     tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
+  if (id.indexOf('sgp') === 0) {   // Strata process tiles (AI_SCOPE-072): their own history, GPU % or GB at that time
+    const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
+    const k = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));
+    const hs = hst[k], g = hs.gpus && hs.gpus[+id.charAt(3)];
+    const tot = (((SOURCES.strata && SOURCES.strata.data) || {}).processCards || [])[+id.charAt(3)];
+    if (id.slice(4) === 'gpu') tip.textContent = (g && g.util != null ? g.util.toFixed(0) + '%' : 'n/a');
+    else tip.textContent = (g && g.vram != null ? GB(g.vram) + ' GB' + (tot && tot.vramTotal ? ' of ' + GB(tot.vramTotal) + ' GB' : '') : 'n/a');
+    tip.textContent += ' · ' + new Date(hs.t).toLocaleTimeString();
+    const x2 = hst.length < 2 ? 100 : 100 * k / (hst.length - 1);
+    guide.setAttribute('x1', x2); guide.setAttribute('x2', x2); guide.style.display = '';
+    tip.hidden = false; tip.style.left = x2 + '%';
+    return;
+  }
   if (id.indexOf('pow') === 0) {   // power tile (AI_SCOPE-027): watts at that time
     const g = h.gpus && h.gpus[+id.slice(3)];
     tip.textContent = (g && g.power != null ? Math.round(g.power) + ' W' + (g.powerLimit ? ' of ' + Math.round(g.powerLimit) + ' W limit' : '') : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();

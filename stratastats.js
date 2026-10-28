@@ -175,9 +175,14 @@ function getState(limit) {
                 version: null, engineVersion: null, updateNotice: null,
                 current: null, loaded: null, totals: null, average: null, installed: [],
                 totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse() };
-  if (!d) return out;
-  // Strata's model process(es) (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded
+  // Strata's model process(es): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded.
+  // AI_SCOPE-072: processCards (Hardware card names / totals for the tile labels) and processHistory (5 min,
+  // newest last) join the answer, and all of it stays in the payload when Strata itself is offline - the GPU /
+  // VRAM tiles draw their histories right through an "Inactive" stretch.
   out.process = procstats.get('strata'); out.processSupported = procstats.supported();
+  out.processHistory = procstats.history('strata');
+  out.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
+  if (!d) return out;
   out.version = d.version || null;
   out.engineVersion = (d.engineInfo && d.engineInfo.version) || (d.engine && d.engine.version) || null;
   out.updateNotice = (d.engine && d.engine.updateNotice) || null;

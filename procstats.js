@@ -28,6 +28,21 @@ const results = {};     // key -> { at, pids: [{ pid, name }], luids: { luid: { 
 const lastCpu = {};     // pid -> { t, cpu (100 ns units) }
 let ps = null, luidsKey = null, restartTimer = null;
 
+// AI_SCOPE-072: ~5 minutes of per-app GPU numbers (the Strata scope's GPU / VRAM tiles), same cadence as the
+// samples below, Hardware card order, newest last. Only cycles that found the app's processes add a point,
+// so a stopped app leaves a gap instead of invented zeros.
+const HIST = 150;
+const hist = {};        // key -> [{ t, gpus: [{ vram, util }] }]
+function pushHist(key) {
+  const r = results[key];
+  if (!r) return;
+  const luids = hwstats.cardKeys();
+  if (!luids.length) return;
+  const h = hist[key] || (hist[key] = []);
+  h.push({ t: r.at, gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util } : { vram: 0, util: null }; }) });
+  if (h.length > HIST) h.shift();
+}
+
 // The PowerShell side lives in procstats.ps1 (output format described there).
 const PS_FILE = path.join(__dirname, 'procstats.ps1');
 
@@ -67,7 +82,7 @@ function handleBlock(lines) {
     }
   });
   Object.keys(results).forEach(function (k) { if (!fresh[k]) delete results[k]; });
-  Object.keys(fresh).forEach(function (k) { if (fresh[k].pids.length) results[k] = fresh[k]; });
+  Object.keys(fresh).forEach(function (k) { if (fresh[k].pids.length) { results[k] = fresh[k]; pushHist(k); } });   // 072: history for every cycle that found the app
 }
 
 // ---------- Linux / macOS (AI_SCOPE-052) ----------
@@ -121,6 +136,7 @@ function nixTick() {
           });
           if (r.ramPrivate == null) r.ramPrivate = r.ram;   // macOS: no private / resident split
           results[k] = r;
+          pushHist(k);   // 072
         });
         Object.keys(results).forEach(function (k) { if (!watches[k]) delete results[k]; });
         Object.keys(nixPrev).forEach(function (ck) { if (!snap.procs[ck.split(':').pop()]) delete nixPrev[ck]; });
@@ -220,4 +236,5 @@ function get(key) {
 
 // Whether per-process stats can work here at all: Windows, Linux, macOS (AI_SCOPE-052).
 function supported() { return process.platform === 'win32' || NIX; }
-module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get, _test: { handleBlock: handleBlock, results: results, nixResolve: nixResolve, nixTick: nixTick } };
+module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get, history: function (key) { return hist[key] || []; },   // 072: 5-min per-app GPU history
+  _test: { handleBlock: handleBlock, results: results, nixResolve: nixResolve, nixTick: nixTick } };

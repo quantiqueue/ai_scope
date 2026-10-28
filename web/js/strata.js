@@ -161,6 +161,54 @@ defineLens({
   },
 });
 
+// ---------- GPU / VRAM of Strata's model process (AI_SCOPE-072) ----------
+// Quarter tiles in the Hardware style, but showing Strata's own process numbers (procstats - what the live
+// request card's "Strata process" row carries): GPU % or VRAM used on one card, with a 5-minute server-side
+// history. One metric per tile (the Show setting picks it); "Inactive" when there is no fresh process sample
+// (Strata stopped or no model loaded) - the sparkline keeps drawing from history; on systems without
+// per-process GPU stats the tile says so instead of showing wrong numbers.
+window.STRATA_PROC_HIST = [];                 // newest-last process history, for the shared tile hover in hardware.js
+subscribeSource('strata', d => { window.STRATA_PROC_HIST = (d && d.processHistory) || []; });
+
+defineLens({
+  id: 'strata.gpu', scope: 'strata', size: 'tile',
+  name: 'Strata GPU', description: "One graphics card's GPU usage or VRAM used by Strata's model process, with a 5-minute history.",
+  settings: [
+    { id:'card', label:'Graphics card', type:'gpu', default:0 },
+    { id:'show', label:'Show', type:'choice', default:'gpu', options:[['gpu', 'GPU usage'], ['vram', 'VRAM']] },
+  ],
+  markup: st => tileHtml({ id:'sgp' + st.card + '_' + st.show,
+    label:'Strata ' + (st.show === 'vram' ? 'VRAM' : 'GPU') + (st.card ? ' ' + (st.card + 1) : '') }),
+  render(L, d) {
+    const i = L.settings.card, show = L.settings.show;
+    const box = L.el.querySelector('[data-tile="sgp' + i + '_' + show + '"]'); if (!box) return;
+    const cards = d.processCards || [], num = cards.length > 1 ? ' ' + (i + 1) : '';
+    const label = 'Strata ' + (show === 'vram' ? 'VRAM' : 'GPU') + num;   // "Strata GPU 2" with several cards, plain with one
+    if (box.querySelector('.ltitle').textContent !== label) box.querySelector('.ltitle').textContent = label;
+    const card = cards[i] || {}, name = card.name || (cards.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
+    if (!d.processSupported) {   // macOS has no per-process GPU source (and none is coming without 062); Linux AMD / Intel cards lack it too
+      setTile(box, null, NA_HTML, 'Not available on this system', []);
+      return;
+    }
+    const hist = d.processHistory || [];
+    const total = card.vramTotal || 0;
+    const pct = g => !g ? null : show === 'gpu' ? (g.util == null ? null : g.util) : (total ? 100 * g.vram / total : null);
+    const series = hist.map(h => pct(h.gpus && h.gpus[i]));
+    let cur = d.process && d.process.gpus ? d.process.gpus[i] : null;
+    let inactive = false;
+    if (!cur) {                                  // no fresh process - show the newest point history has, and say Inactive
+      const last = hist.length ? hist[hist.length - 1] : null;
+      cur = last && last.gpus ? last.gpus[i] : null;
+      inactive = true;
+    }
+    const v = pct(cur);
+    let big;
+    if (show === 'gpu') big = cur && cur.util != null ? Math.round(cur.util) + '<small>%</small>' : NA_HTML;
+    else big = cur && cur.vram != null ? GB(cur.vram) + (total ? '<small> / ' + GB(total) + ' GB</small>' : '<small> GB</small>') : NA_HTML;
+    setTile(box, v, big, (inactive ? 'Inactive · ' : '') + name, series);
+  },
+});
+
 // ---------- The Strata scope page: header line + its lenses ----------
 subscribeSource('strata', (d, err) => {
   const meta = document.getElementById('sMeta');
@@ -168,4 +216,16 @@ subscribeSource('strata', (d, err) => {
   meta.textContent = (d.online ? 'connected to ' + d.url + (d.version ? ' · Strata ' + d.version : '') + (d.engineVersion ? ' · engine ' + d.engineVersion : '')
     : 'Strata offline') + ' · ' + d.totalRequests + ' requests saved · updates every 2 s';
 });
-defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.loaded', 'strata.requests', 'strata.installed']));
+// AI_SCOPE-072: default gets one row of Strata GPU + VRAM tiles per card after Installed Models; on macOS the
+// tiles stay out of the default (no per-process GPU stats there) but remain addable - they answer
+// "Not available on this system" until 062 changes that.
+defineScopeLayout('strata', () => {
+  const items = layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.loaded', 'strata.requests', 'strata.installed']);
+  if (SERVER_OS === 'darwin') return items;
+  const cards = (SOURCES.strata.data && SOURCES.strata.data.processCards) || [];
+  for (let i = 0; i < Math.max(1, cards.length); i++) {
+    items.push({ lens: 'strata.gpu', settings: { card: i, show: 'gpu' } });
+    items.push({ lens: 'strata.gpu', settings: { card: i, show: 'vram' } });
+  }
+  return items;
+});
