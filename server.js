@@ -310,6 +310,11 @@ http.createServer((req, res) => {
       body.average = lmstats.getAverage(body.rows);
       body.process = procstats.get('bionic');   // Bionic's model process (AI_SCOPE-049)
       body.processSupported = procstats.supported();
+      // AI_SCOPE-077: the Hardware Mirror Lens family (web/js/mirror.js) also needs the 5-minute process
+      // history and the Hardware card names / totals, like stratastats.js sends for Strata (072). The history
+      // is kept for every cycle procstats finds Bionic's processes, so the tiles ride through "Inactive".
+      body.processHistory = procstats.history('bionic');
+      body.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
     }
     catch (e) { body = { rows: [], error: String(e && e.message || e) }; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

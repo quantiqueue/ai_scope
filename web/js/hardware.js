@@ -59,6 +59,12 @@ const hwLatest = d => d.history[d.history.length - 1];
 const hwSeries = (d, id) => d.history.map(h => tileValues(h)[id]);
 const NA_HTML = '<span class="na">n/a</span>';
 
+// AI_SCOPE-077: hover registry for the Hardware Mirror Lens family (web/js/mirror.js). mirror.js pushes one
+// entry per tile-id prefix ({ prefix, fn(spark, f, guide, tip) }) and the sparkline hover below dispatches to
+// them, so each app scope's tiles read their own process history. Declared here (classic scripts share one
+// global lexical scope) because mirror.js loads after this file and the hover handler reads it.
+const MIRROR_HOVER = [];
+
 defineLens({
   id: 'hardware.cpu', scope: 'hardware', size: 'tile',
   name: 'CPU', description: 'CPU usage with a 5-minute history.',
@@ -364,13 +370,24 @@ function peakCell(p) {
 
 // Hover on a sparkline (any tile, on any page): show the value at that point in time.
 document.addEventListener('mousemove', e => {
-  const spark = e.target.closest && e.target.closest('[data-tile] .spark'); if (!spark || !hwHist.length) return;
+  const spark = e.target.closest && e.target.closest('[data-tile] .spark'); if (!spark) return;
   const id = spark.closest('[data-tile]').dataset.tile;
+  // Hardware pages need the Hardware history; mirror tiles (mirror.js) carry their own, so they do not wait for it.
+  const mirrorTile = typeof MIRROR_HOVER !== 'undefined' && MIRROR_HOVER.some(m => id.indexOf(m.prefix) === 0);
+  if (!hwHist.length && !mirrorTile) return;
   const r = spark.getBoundingClientRect();
   const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-  const i = Math.round(f * (hwHist.length - 1));
-  const h = hwHist[i], v = id.indexOf('disk:') === 0 ? null : tileValues(h)[id];
   const tip = spark.querySelector('.tip'), guide = spark.querySelector('.guide');
+  // 077: a mirror tile can be hovered before the Hardware sampler has any history (its branches read their own
+  // history). hwHist is non-empty whenever we are not in that case, so the guard below covers every read of h / v.
+  const h = hwHist.length ? hwHist[Math.round(f * (hwHist.length - 1))] : null;
+  if (mirrorTile && !h) {
+    for (let mi = 0; mi < MIRROR_HOVER.length; mi++) {
+      if (id.indexOf(MIRROR_HOVER[mi].prefix) === 0) { MIRROR_HOVER[mi].fn(spark, f, guide, tip); return; }
+    }
+  }
+  const i = Math.round(f * (hwHist.length - 1));
+  const v = id.indexOf('disk:') === 0 ? null : tileValues(h)[id];
   const x = hwHist.length < 2 ? 100 : 100 * i / (hwHist.length - 1);
   guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
   tip.hidden = false; tip.style.left = x + '%';
@@ -384,27 +401,6 @@ document.addEventListener('mousemove', e => {
     tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
-  if (id === 'sio') {   // Strata process I/O tile (AI_SCOPE-076): read / write at that time, like the Disk tile
-    const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
-    const k5 = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));
-    const hs5 = hst[k5];
-    tip.textContent = (hs5.ioRead == null && hs5.ioWrite == null ? 'n/a'
-      : 'R ' + fmtRate(hs5.ioRead || 0) + ' · W ' + fmtRate(hs5.ioWrite || 0)) + ' · ' + new Date(hs5.t).toLocaleTimeString();
-    const x5 = hst.length < 2 ? 100 : 100 * k5 / (hst.length - 1);
-    guide.setAttribute('x1', x5); guide.setAttribute('x2', x5); guide.style.display = '';
-    tip.hidden = false; tip.style.left = x5 + '%';
-    return;
-  }
-  if (id === 'scpu') {   // Strata process CPU tile (AI_SCOPE-075): its own history, % of all cores at that time
-    const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
-    const k4 = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));
-    const hs4 = hst[k4], c = hs4.cpu;
-    tip.textContent = (c != null ? Math.min(100, c).toFixed(0) + '%' : 'n/a') + ' · ' + new Date(hs4.t).toLocaleTimeString();
-    const x4 = hst.length < 2 ? 100 : 100 * k4 / (hst.length - 1);
-    guide.setAttribute('x1', x4); guide.setAttribute('x2', x4); guide.style.display = '';
-    tip.hidden = false; tip.style.left = x4 + '%';
-    return;
-  }
   if (id === 'ramC') {   // Committed RAM tile (AI_SCOPE-074): reserved memory against the commit limit at that time
     const lim = h.commitLimit;
     tip.textContent = (lim != null && h.commitUsed != null
@@ -412,31 +408,13 @@ document.addEventListener('mousemove', e => {
       : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
-  if (id.indexOf('sram_') === 0) {   // Strata process RAM tiles (AI_SCOPE-073): working / committed GB at that time,
-                                     // against the right ceiling - system RAM for Working, the commit limit for Committed
-    const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
-    const k = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));
-    const hs = hst[k], committed = id === 'sram_committed';
-    const b = hs[committed ? 'ramPrivate' : 'ram'];
-    const lim = committed ? (h.commitLimit || h.ramTotal) : h.ramTotal;
-    tip.textContent = (b != null ? GB(b) + ' GB' + (lim ? ' of ' + GB(lim) + ' GB' : '') : 'n/a') + ' · ' + new Date(hs.t).toLocaleTimeString();
-    const x3 = hst.length < 2 ? 100 : 100 * k / (hst.length - 1);
-    guide.setAttribute('x1', x3); guide.setAttribute('x2', x3); guide.style.display = '';
-    tip.hidden = false; tip.style.left = x3 + '%';
-    return;
-  }
-  if (id.indexOf('sgp') === 0) {   // Strata process tiles (AI_SCOPE-072): their own history, GPU % or GB at that time
-    const hst = window.STRATA_PROC_HIST || []; if (!hst.length) return;
-    const k = Math.max(0, Math.min(hst.length - 1, Math.round(f * (hst.length - 1))));
-    const hs = hst[k], g = hs.gpus && hs.gpus[+id.charAt(3)];
-    const tot = (((SOURCES.strata && SOURCES.strata.data) || {}).processCards || [])[+id.charAt(3)];
-    if (id.slice(4) === 'gpu') tip.textContent = (g && g.util != null ? g.util.toFixed(0) + '%' : 'n/a');
-    else tip.textContent = (g && g.vram != null ? GB(g.vram) + ' GB' + (tot && tot.vramTotal ? ' of ' + GB(tot.vramTotal) + ' GB' : '') : 'n/a');
-    tip.textContent += ' · ' + new Date(hs.t).toLocaleTimeString();
-    const x2 = hst.length < 2 ? 100 : 100 * k / (hst.length - 1);
-    guide.setAttribute('x1', x2); guide.setAttribute('x2', x2); guide.style.display = '';
-    tip.hidden = false; tip.style.left = x2 + '%';
-    return;
+  // Hardware Mirror Lens tiles (AI_SCOPE-072/073/075/076, shared family since 077): the per-scope hover is
+  // registered by mirror.js against the tile-id prefix, so every scope's tiles read their OWN history.
+  // (Before 077 this handler held four hardcoded branches reading window.STRATA_PROC_HIST by name.)
+  if (typeof MIRROR_HOVER !== 'undefined') {
+    for (let mi = 0; mi < MIRROR_HOVER.length; mi++) {
+      if (id.indexOf(MIRROR_HOVER[mi].prefix) === 0) { MIRROR_HOVER[mi].fn(spark, f, guide, tip); return; }
+    }
   }
   if (id.indexOf('pow') === 0) {   // power tile (AI_SCOPE-027): watts at that time
     const g = h.gpus && h.gpus[+id.slice(3)];
