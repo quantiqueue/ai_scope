@@ -52,7 +52,7 @@ let startup = null;
 function handleBlock(lines) {
   const byPid = {};
   let partial = false;
-  const proc = pid => byPid[pid] || (byPid[pid] = { pid: pid, name: '', cpu: null, ram: null, priv: null, luids: {} });
+  const proc = pid => byPid[pid] || (byPid[pid] = { pid: pid, name: '', cpu: null, ram: null, priv: null, ppid: 0, luids: {} });
   const num = s => { if (s === '' || s == null) return null; const v = parseFloat(String(s).replace(',', '.')); return isFinite(v) ? v : null; };
   lines.forEach(function (l) {
     const p = l.split('|');
@@ -69,6 +69,7 @@ function handleBlock(lines) {
       if (p[5]) pidPath[r.pid] = p[5];
       r.ioRead = num(p[6]); r.ioWrite = num(p[7]);   // all I/O bytes/s (disk, network, devices; AI_SCOPE-030)
       if (p.length >= 9) r.priv = num(p[8]);         // AI_SCOPE-084: private bytes, for the mirror's RAM (Committed) lens
+      if (p.length >= 10) r.ppid = num(p[9]) || 0;   // AI_SCOPE-084: the parent, so procstats.js can resolve an app's process family from this table
     } else if (p[0] === 'G' && p.length >= 6) {
       const r = proc(+p[1]);
       r.luids[p[2].toLowerCase()] = { vram: num(p[3]) || 0, shared: num(p[4]) || 0, util: num(p[5]) };
@@ -156,7 +157,7 @@ function nixCycle(first) {
           const rate = function (a, b) { return o && a != null && b != null ? String(Math.max(0, (a - b) / dt)) : ''; };
           lines.push('P|' + p.pid + '|' + String(p.name).replace(/\|/g, '/') + '|' + (o ? String(Math.max(0, 100 * (p.cpu - o.cpu) / dt / cores)) : '') + '|' +
             (p.rss || 0) + '||' + rate(p.ioR, o && o.ioR) + '|' + rate(p.ioW, o && o.ioW) + '|' +
-            (p.priv == null ? '' : String(p.priv)));   // 084: the same 9th field the Windows sampler sends (null on macOS)
+            (p.priv == null ? '' : String(p.priv)) + '|' + (p.ppid || 0));   // 084: the same 9th / 10th fields the Windows sampler sends
           const g = gpu && gpu[k];
           if (g) Object.keys(g).forEach(function (card) { lines.push('G|' + p.pid + '|' + card + '|' + g[card].vram + '|0|' + (g[card].util == null ? '' : g[card].util)); });
         });
