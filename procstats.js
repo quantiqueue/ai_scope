@@ -120,12 +120,44 @@ function refreshWatch(key) {
   resolveAt = 0;   // look the app up (or drop it) on the next sample
   syncPace();
 }
-// Ask proctop for its fastest honest pace while anything needs family numbers, and release it when nothing does
+// Ask proctop for its fastest honest pace while anything actually needs numbers, and release it when nothing does
 // (084: one sampler, one rate - the Processes lenses ride the same period rather than a separate display cadence).
+// AI_SCOPE-091: "armed" is not the same as "needs numbers". A scope that never attests a state (ComfyUI, Ollama,
+// llama.cpp today) is armed by definition, and armed-but-absent apps were holding the one shared sampler at 2 s
+// around the clock - ~5.5 % of a core instead of the 0.7 % of the 30 s idle pace - and overriding Settings →
+// Engine → Process Refresh Rate for anyone who chose a slower rate. The demand now follows what exists:
+// an app that reported live / loading / unloading, a family we actually found, or a watched port seen listening.
+function needsFastPace() {
+  return armedKeys().some(function (k) {
+    const s = attested[k];
+    if (s && WATCH_STATES[s]) return true;                       // the app's own API says work is happening
+    const f = fams[k];
+    if (f && f.pids.length) return true;                         // we found its processes: keep the 2 s cadence
+    return watches[k].ports.some(function (p) { return !!owners[p]; });   // its port is listening (the wake clock looks)
+  });
+}
 function syncPace() {
-  if (!armedKeys().length) { proctop.release('procstats'); return; }
+  if (!needsFastPace()) { proctop.release('procstats'); updateWakeClock(); return; }
   proctop.start();
   proctop.demand('procstats', MIRROR_MS);
+  updateWakeClock();
+}
+// The wake clock (091): with the demand released, proctop samples at its watched / idle pace (up to 30 s), and
+// family resolution is driven by those samples - so an app that starts would go unnoticed for half a minute. This
+// clock reads the port table on its own (netstat costs 18 ms) every WAKE_MS while anything is armed and nothing
+// needs numbers; when a watched port appears listening, syncPace takes the 2 s demand again.
+const WAKE_MS = 10000;
+let wakeTimer = null;
+function updateWakeClock() {
+  const want = armedKeys().length > 0 && !needsFastPace();
+  if (want && !wakeTimer) wakeTimer = setInterval(wakeTick, WAKE_MS);
+  if (!want && wakeTimer) { clearInterval(wakeTimer); wakeTimer = null; }
+}
+function wakeTick() {
+  const ports = [];
+  armedKeys().forEach(function (k) { watches[k].ports.forEach(function (p) { if (ports.indexOf(p) < 0) ports.push(p); }); });
+  if (!ports.length) return;                      // nothing to look for (a name-only watcher): the samples carry it
+  portOwners(function () { syncPace(); });
 }
 function unattest(key) { delete attested[key]; }
 
@@ -293,6 +325,7 @@ function aggregate(sample) {
     pushHist(k);   // 072: a point for every sample that found the app's processes
   });
   Object.keys(results).forEach(function (k) { if (!watches[k] || !armed(k) || !fams[k]) delete results[k]; });
+  syncPace();   // 091: the pace follows what was found - an app that stopped (no family any more) releases the 2 s demand
 }
 proctop.onSample(aggregate);
 
