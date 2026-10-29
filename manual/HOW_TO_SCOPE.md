@@ -19,6 +19,7 @@ Back to the [README](../README.md) · [Manual](README.md)
 - Drag tabs to reorder them; close a tab with its **×**. Each browser remembers its own tabs and order.
 - **While something runs**, each *Current request / Current job* card says what it's doing ("Running — reading prompt", "Running — sampling (+2 queued)") and shows a **System load** row (whole-computer GPU, VRAM, CPU and RAM). Where AI_SCOPE can find the app's own process, ComfyUI's *Current job* card shows a **ComfyUI process** row instead, and the Bionic, Ollama, Strata and llama.cpp *Current request* cards a **Bionic / Ollama / Strata / llama.cpp process** row: the GPU %, VRAM (per card), CPU and RAM used by the app's own process (for these, the process that runs the model: llama-server for Bionic and Ollama, strata.exe for Strata, llama.exe or llama-server.exe for llama.cpp). GPU and VRAM per process come from Windows' GPU performance counters, or on Linux from `nvidia-smi` (NVIDIA cards); macOS shows CPU and RAM only. On Linux and macOS an app running as another user (e.g. Ollama's Linux service) is found by its process name. Their *Loaded in memory* / *Loaded model* tables also show how much of the model sits on each graphics card. When idle it tells you the next step ("Load a model in Strata to see live stats.").
 - The request and run tables have a **Peak load** column: the highest GPU % and VRAM while each one ran (hover for CPU and RAM too).
+- On the **Bionic and Strata pages**, the same measurements also appear as **their own Hardware tiles** — GPU / VRAM / RAM / CPU / I/O for that app's processes, laid out like the Hardware scope's (see [App Hardware tiles](#app-hardware-tiles-hardware-mirror-lenses)).
 - Model and publisher names link to their Hugging Face / Ollama / LM Studio catalog pages (opens a new tab).
 - Request, run and installed-model tables show 5 rows per page (change it with the lens's cog: **Rows per page**, see [Lens settings](#lens-settings-cog)).
 - Scopes are listed in **`scopes.json`** (name, description, icon, the server modules that collect its data, and the settings asked at install). Installed scopes and their settings are saved in `~/.ai_scope/installed.json`.
@@ -46,13 +47,23 @@ Some lenses also have:
 
 - **Rows per page** (request, run and installed-model tables; default 5).
 - **Show process stats** (the *Current request* / *Current job* cards): the app's process row, or System load (on by default).
-- Their own settings, e.g. the Hardware GPU lens's card and GPU usage / VRAM / both, the Disk tile's disk, and the Processes lenses' rows (per app or per process), graphics card and dwm.exe (see [Processes scope](#processes-scope)).
+- Their own settings, e.g. the Hardware GPU lens's card and GPU usage / VRAM / both, the Disk tile's disk, the Processes lenses' rows (per app or per process), graphics card and dwm.exe (see [Processes scope](#processes-scope)), and an app's Hardware tiles — the GPU tile's graphics card and GPU usage / VRAM, the RAM tile's Working / Committed (see [App Hardware tiles](#app-hardware-tiles-hardware-mirror-lenses)).
 
 The change is saved with the page when you save.
 
 ## Hardware on each system
 
 CPU and RAM tiles work everywhere. GPU and VRAM tiles come from `nvidia-smi` for NVIDIA cards (Windows and Linux) and from Windows' own counters for AMD and Intel cards on Windows; temperature, power draw and PCIe traffic / link are NVIDIA only. A Mac shows no GPU or Disk tiles yet. The **Power** tile per card charts the draw as a share of the card's power limit (watts on hover); cards that don't report power show it as not available. The **PCIe** tile charts bus traffic (RX / TX MB/s — model loads spike it) and names the card's link (current vs what it could use at most; current drops while a card is idle).
+
+## App Hardware tiles (Hardware Mirror Lenses)
+
+The **Bionic** and **Strata** pages carry a set of tiles that mirror the Hardware scope's measurement types, but measure **that app's own processes**: a **GPU** and **VRAM** tile per graphics card, **RAM (Working)** and **RAM (Committed)**, a **CPU** tile and an **I/O** tile. They read the same counters the Processes scope uses, from the process that runs the app's model plus its helpers (for a model in a child process, that child and its workers).
+
+- These can differ from the **Hardware** scope by design: one measures the app, the other the whole card.
+- The sub line says what the app is doing: "**Bionic Offline**", "**No Model Loaded**", "**Loading…**", "**Unloading…**", "**Load failed**" — during a load the tiles read 0 until the load's own processes are measurable, and an old sample shows the big number as **n/a** rather than a frozen last value. Hovering a tile's line shows both the app's and the Hardware scope's value at that time.
+- Cog settings: the GPU tile's **Graphics card** and **Show** (GPU usage / VRAM), the RAM tile's **Show** (Working / Committed). Committed compares the app's committed memory against the PC's commit ceiling (the same ceiling the Hardware RAM tile can show), which is what runs out when a model won't fit — not free RAM.
+- **Power and PCIe are not mirrored**: those are measurements of the card, not of a process. Other app scopes (Ollama, ComfyUI, llama.cpp) currently show their process numbers in the *Current request / Current job* card's process row.
+- On a **custom scope** page you can place these tiles next to Hardware's. New tiles only appear on a page you haven't saved, or after **Reset to default**.
 
 ## Disk tiles (Hardware)
 
