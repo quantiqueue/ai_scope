@@ -227,20 +227,36 @@ if (-not [AiScopeTop]::Open()) { exit 1 }
 $t = $sw.ElapsedMilliseconds; $first = [AiScopeTop]::Cycle($true); $t = $sw.ElapsedMilliseconds - $t
 [Console]::Out.Write('T|types|' + $tTypes + '|' + $how + "`nT|counters|" + [AiScopeTop]::AddMs + "`nT|collect1|" + [AiScopeTop]::CollectMs +
   "`nT|cycle1|" + $t + "`n" + $first + "---`n"); [Console]::Out.Flush()
-# Pace (AI_SCOPE-059): ms between samples, from the control file proctop.js writes (fast while a Processes lens is looked
-# at, slow otherwise). Read every 250 ms while waiting; a faster pace than the current wait takes a sample at once.
+# Pace (AI_SCOPE-059): ms between samples, from the control file proctop.js writes (fast while a Processes lens is
+# looked at, slow otherwise; AI_SCOPE-084 adds a demand from the app scopes). AI_SCOPE-090: $every is the PERIOD, not
+# the sleep - the schedule is computed from the moment the last cycle BEGAN, so the cycle's own time (200-230 ms over
+# ~350 processes on snow, and 226 ms in its own T|cycle1 timing) counts against it. Before this a 2 s pace put
+# samples 2.13-2.26 s apart, which made the "every 2 s" the page prints and the "about 2 s" in AI_SCOPE-084's notes
+# both slightly untrue. A faster pace from the control file still takes the next sample at once (never closer than
+# 1 s to the last cycle - CPU % / GPU % / I/O are rates and need the span).
 $ctl = '__CTL__'; $every = __EVERY__
 function Pace { try { $v = [int]([IO.File]::ReadAllText($ctl).Trim()); if ($v -ge 1000) { return $v } } catch {}; return $every }
-$wait = 1000   # first numbers: CPU % and GPU % need two samples, 1 s apart is enough (then every $every ms)
+# $next is measured on $sw, the stopwatch this script already runs for its start-up timings; $last marks the start of
+# the current cycle so the wait is period - cycle time rather than period + cycle time.
+$last = $sw.ElapsedMilliseconds
+$next = $last + 1000   # first numbers: CPU % and GPU % need two samples, 1 s apart is enough (then every $every ms)
 while ($true) {
   if (-not [AiScopeTop]::Alive(__PARENT__)) { exit }
-  $slept = 0
-  while ($slept -lt $wait) {
-    Start-Sleep -Milliseconds 250; $slept += 250
+  while ($true) {
+    $rem = $next - $sw.ElapsedMilliseconds
+    if ($rem -le 0) { break }
+    # the slice is what is LEFT, capped at 250 ms - a fixed 250 ms slice overshoots by the Windows timer
+    # granularity (~15 ms each), and eight of them added ~120-200 ms to the "2 s" period (measured 2026-10-29:
+    # median 2196 ms with fixed slices).
+    Start-Sleep -Milliseconds [Math]::Min(250, $rem)
     $e = Pace
-    if ($e -ne $every) { $faster = $e -lt $every; $every = $e; if ($faster) { $wait = [Math]::Min($wait, [Math]::Max(1000, $slept)) } }   # rates need >= 1 s
+    if ($e -ne $every) {
+      $every = $e
+      $next = $last + [Math]::Max(1000, $every)     # faster: take it now if already due; slower: spread the wait
+    }
   }
-  $wait = $every
+  $last = $sw.ElapsedMilliseconds
   [Console]::Out.Write([AiScopeTop]::Cycle($false) + "---`n"); [Console]::Out.Flush()
   $icons = [AiScopeTop]::Icons(40); if ($icons) { [Console]::Out.Write($icons); [Console]::Out.Flush() }   # read with the next block
+  $next = $last + [Math]::Max(1000, $every)         # the next cycle starts a full $every after THIS one started
 }
