@@ -45,7 +45,10 @@ function pushHist(key) {
   // 075 fix: the point is pushed even when the machine has no detectable graphics cards - the gpus list is
   // simply empty, so the CPU / RAM lenses keep their history there (073's notes already described this, the
   // old `if (luids.length)` guard meant it was not actually true).
-  h.push({ t: r.at, gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util } : { vram: 0, util: null }; }),
+  // 080 review: util defaults to 0 (a family sample with no engine activity on a card uses 0 % of it) - see the
+  // G-line comment in handleBlock; also covers cards the family never touched and the Linux AMD/Intel case,
+  // matching get()'s documented rule.
+  h.push({ t: r.at, gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util == null ? 0 : g.util } : { vram: 0, util: 0 }; }),
     ram: r.ramUnknown && !r.ram ? null : r.ram, ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate,
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
     ioRead: r.ioSeen ? r.ioRead || 0 : null, ioWrite: r.ioSeen ? r.ioWrite || 0 : null });   // AI_SCOPE-076
@@ -133,10 +136,15 @@ function handleBlock(lines) {
       if (p[3] !== '' || p[4] !== '') r.ioSeen = true;
     } else if (p[0] === 'G' && p.length >= 7) {
       const luid = p[3].toLowerCase();
-      const g = r.luids[luid] || (r.luids[luid] = { vram: 0, shared: 0, util: null });
+      // AI_SCOPE-080 (review): when the FAMILY was found, its per-card utilization is known - a card with GPU
+      // memory but no GPU Engine instances (allocating weights, idle on the card) is a real 0 %, not "no data".
+      // Only whole cycles without a sample leave gaps; only the attested states word it. That also makes the
+      // history agree with get()'s documented rule (card not used = { vram: 0, shared: 0, util: 0 }) instead of
+      // drawing line breaks + "n/a" in the GPU% chart while the VRAM chart right beside it is rising.
+      const g = r.luids[luid] || (r.luids[luid] = { vram: 0, shared: 0, util: 0 });
       g.vram += parseFloat(p[4].replace(',', '.')) || 0;
       g.shared += parseFloat(p[5].replace(',', '.')) || 0;
-      if (p[6] !== '') g.util = Math.min(100, (g.util || 0) + (parseFloat(p[6].replace(',', '.')) || 0));
+      if (p[6] !== '') g.util = Math.min(100, g.util + (parseFloat(p[6].replace(',', '.')) || 0));
     }
   });
   Object.keys(results).forEach(function (k) { if (!fresh[k]) delete results[k]; });
@@ -295,7 +303,7 @@ function get(key) {
   if (ps && luids.filter(Boolean).join(',') !== luidsKey) { stopLoop(); startLoop(); }   // card list changed (Windows)
   return {
     pids: r.pids,
-    gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, shared: g.shared, util: g.util } : { vram: 0, shared: 0, util: 0 }; }),
+    gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, shared: g.shared, util: g.util == null ? 0 : g.util } : { vram: 0, shared: 0, util: 0 }; }),   // 080 review: util 0 when no engine activity, never null (see handleBlock)
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
     ram: r.ramUnknown && !r.ram ? null : r.ram,
     ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate,
