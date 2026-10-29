@@ -53,17 +53,24 @@ function pushHist(key) {
 }
 
 // AI_SCOPE-077 (review batch): an offline app really uses nothing, so the mirror tiles should read 0 rather
-// than freeze. The APP MODULES (stratastats / lmapi — not this sampler) attest their app's state every poll,
-// three-valued (review batch 2, user 2026-10-28):
+// than freeze. The APP MODULES (stratastats / lmapi — not this sampler) attest their app's state every poll.
+// 077's three values (review batch 2, user 2026-10-28):
 //   'live' - app reachable and a model / engine instance is loaded: the sampler is the only history writer;
 //            a missed PID/port lookup (PIDs are re-resolved every 15 s) stays a GAP - never a false zero dip.
 //   'idle' - app reachable but its OWN API says nothing is loaded: it genuinely uses nothing, so zeros are
 //            honest (the tiles sub reads "No Model Loaded").
 //   'off'  - app not reachable at all: zeros likewise (sub "<App> Offline").
-// While attested 'idle' or 'off' this module writes explicit zero history points on its own 2 s heartbeat,
-// marked `attest: 'idle' | 'off'` so the tiles can word the state; a stale real reading (no attestation) is
-// what gives the n/a + draining chart.
-const attested = {};    // key -> 'live' | 'idle' | 'off', set by the app module each poll
+// AI_SCOPE-080 added three more, also from the app's OWN API (Strata's instance status; LM Studio's model
+// state) - they word the load window instead of leaving stale zeros or lonely gaps:
+//   'loading'   - a model load is in progress (sub "Loading…")
+//   'unloading' - a model unload is in progress (sub "Unloading…")
+//   'failed'    - the app's API reports the instance / model in error (sub "Load failed")
+// While attested anything but 'live' this module writes explicit zero history points on its own 2 s heartbeat
+// (a real reading always wins first), marked `attest` with the state so the tiles can word it; a stale real
+// reading (no attestation) is what gives the n/a + draining chart. With 080's tree watch mode the loading
+// zeros end early: the app's loading workers (engine manager, launcher - generic runner names) are found via
+// their app-named anchors, so real tree numbers start while the runner itself is still being built.
+const attested = {};    // key -> 'live' | 'idle' | 'off' | 'loading' | 'unloading' | 'failed', set by the app module each poll
 let zeroTimer = null;
 const ZERO_EVERY = 2000;
 function zeroTick() {
@@ -94,7 +101,7 @@ function unattest(key) { delete attested[key]; }
 const PS_FILE = path.join(__dirname, 'procstats.ps1');
 
 function writeWatchFile() {
-  const text = Object.keys(watches).sort().map(function (k) { return k + '|' + watches[k].ports.join(',') + '|' + watches[k].names.join(','); }).join('\n');
+  const text = Object.keys(watches).sort().map(function (k) { return k + '|' + watches[k].ports.join(',') + '|' + watches[k].names.join(',') + '|' + (watches[k].tree ? '1' : '0'); }).join('\n');
   try { fs.writeFileSync(WATCH_FILE, text); } catch (e) { /* the loop just sees no apps */ }
 }
 
@@ -255,12 +262,19 @@ process.on('exit', function () { stopLoop(); try { fs.unlinkSync(WATCH_FILE); } 
 // process is already running (a Strata engine loading / unloading, port not listening yet) - the Windows and
 // nix resolvers then match by exe NAME if the names are app-specific (never for shared runners like
 // llama-server.exe / python.exe, which need a port to attribute them).
-function watch(key, ports, names) {
+// AI_SCOPE-080 opts.tree (Windows; the nix path ignores it for now): the names stop being a filter and become
+// ANCHORS - the app's family is its whole process tree: port owner + descendants, the anchor processes
+// (e.g. Strata's strata.exe / strata-vision.exe) + their descendants, and the anchors' ANCESTRY chains (the
+// engine manager and launcher pythons that do the loading work, found while the port is still unborn).
+// Generically-named ancestors (python.exe) are safe here: the app-named child proves the tree is theirs.
+// The previous instance's leftover idle engine (no named descendant, not the port owner) stays out.
+function watch(key, ports, names, opts) {
   ports = (ports || []).map(Number).filter(function (n) { return n > 0 && n < 65536; });
   names = (names || []).map(String).filter(function (n) { return /^[\w .-]+$/.test(n); });
+  const tree = !!(opts && opts.tree);
   const w = watches[key];
-  if (w && w.ports.join(',') === ports.join(',') && w.names.join(',') === names.join(',')) return;
-  watches[key] = { ports: ports, names: names };
+  if (w && w.ports.join(',') === ports.join(',') && w.names.join(',') === names.join(',') && !!w.tree === tree) return;
+  watches[key] = { ports: ports, names: names, tree: tree };
   if (NIX) nixResolvedAt = 0; else writeWatchFile();   // look the app up again now
   startLoop();
 }

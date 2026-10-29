@@ -137,6 +137,8 @@ function normV0(d) {
       format: m.compatibility_type || null, vision: m.type === 'vlm',
       tools: (m.capabilities || []).indexOf('tool_use') >= 0, reasoning: false,
       instances: m.state === 'loaded' ? [{ id: m.id, context: num(m.loaded_context_length), gpuRatio: null, ttlMs: null }] : [],
+      loading: m.state === 'loading',   // AI_SCOPE-080: v0 reports a load in flight - today that collapsed to 'idle'
+                                        // ("No Model Loaded" during a load); now it attests 'loading'
     };
   });
 }
@@ -168,7 +170,11 @@ function poll() {
     // 077 review batch 2: attestation from Bionic's own API - a model with live instances => 'live' (a
     // missed process lookup stays a gap, never zeros); server reachable, nothing loaded => 'idle'
     // (procstats writes zeros, the tile sub reads "No Model Loaded").
-    procstats.attest('bionic', models.some(function (m) { return m.instances.length; }) ? 'live' : 'idle');
+    // AI_SCOPE-080: v0 also says 'loading' (the v1 list only grows loaded_instances when done, so there
+    // the loading phase stays a short idle / gap - noted, v1 exposes no status to attest). The worded
+    // zeros beat today's "No Model Loaded" lie while Bionic's llama-server child is being brought up.
+    procstats.attest('bionic', models.some(function (m) { return m.instances.length; }) ? 'live'
+      : models.some(function (m) { return m.loading; }) ? 'loading' : 'idle');
     if (Date.now() - reposAt > 60000) scanRepos();
     models.forEach(function (m) { const s = sourceFor(m); m.modelUrl = s.modelUrl; m.publisherUrl = s.publisherUrl; m.source = s.source; m.modified = s.modified; });
     const keys = models.filter(function (m) { return m.instances.length; }).map(function (m) { return m.key; }).join(',');

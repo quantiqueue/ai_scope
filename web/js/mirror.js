@@ -92,7 +92,18 @@ function defineMirror(spec) {
   subscribeSource(key, d => { hist = (d && d.processHistory) || []; cards.length = 0; (d && d.processCards || []).forEach(c => cards.push(c)); });
   // Sub-line wording for the attested states (review batch 2, the user's own words): offline / no model;
   // the lone remaining gap (hiccup while a model is loaded) stays "Inactive".
-  const stateText = st => st === 'off' ? name + ' Offline' : st === 'idle' ? 'No Model Loaded' : 'Inactive';
+  // AI_SCOPE-080: the load window got its own words - the app's own status attests 'loading' /
+  // 'unloading' / 'failed' (zero points marked with them), so "0 GB · No Model Loaded" during a load
+  // becomes "0 GB · Loading…" until the load's own workers are measurable (Strata's tree watch, 080).
+  const stateText = st => st === 'off' ? name + ' Offline' : st === 'idle' ? 'No Model Loaded'
+    : st === 'loading' ? 'Loading\u2026' : st === 'unloading' ? 'Unloading\u2026'
+    : st === 'failed' ? 'Load failed' : 'Inactive';
+  const stateTitle = st => st === 'off' ? name + ' is offline - it uses nothing'
+    : st === 'idle' ? 'No model loaded - nothing is running'
+    : st === 'loading' ? 'A model load is in progress - 0 until the loading processes are measurable'
+    : st === 'unloading' ? 'A model unload is in progress'
+    : st === 'failed' ? "The app reports its model load failed - use the app's own screen for the error"
+    : 'Model process not found right now - the app is online with a model loaded, this is a lookup gap';
 
   // ---------- GPU / VRAM per card (AI_SCOPE-072) ----------
   // One metric per tile (Show picks GPU usage or VRAM); a card picker because VRAM is per card. "Not available
@@ -268,9 +279,7 @@ function defineMirror(spec) {
       el.querySelector('.v').innerHTML = tot == null ? NA_HTML : fmtRate(tot);
       const sub = 'Read ' + fmtRate(r) + ' · Write ' + fmtRate(w);
       el.querySelector('.sub').textContent = c.inactive ? stateText(c.state) + ' · ' + sub : sub;
-      el.querySelector('.sub').title = c.inactive
-        ? (c.state === 'off' ? name + ' is offline - it uses nothing' : c.state === 'idle' ? 'No model loaded - nothing is running' : 'Model process not found right now - the app is online with a model loaded, this is a lookup gap')
-        : IO_TIP;
+      el.querySelector('.sub').title = c.inactive ? stateTitle(c.state) : IO_TIP;
       el.querySelector('.meter > div').style.width = (tot == null ? 0 : Math.max(0, Math.min(100, 100 * tot / max))) + '%';
       el.querySelector('.line:not(.wline)').setAttribute('d', segPath(ioSegs(pts, now, 'ioRead', max)));
       el.querySelector('.wline').setAttribute('d', segPath(ioSegs(pts, now, 'ioWrite', max)));
