@@ -1,48 +1,48 @@
 // Per-process stats for the apps AI_SCOPE watches (AI_SCOPE-038; findings in AI_SCOPE-037): VRAM (dedicated + shared)
 // and GPU % per card, CPU % and RAM of an app's own processes, instead of whole-computer totals.
-// Windows: nvidia-smi can't report per-process memory under WDDM, so the GPU numbers come from the Windows GPU
-// performance counters (same source as Task Manager), read through one query kept open in a long-running PowerShell
-// loop (procstats.ps1). AI_SCOPE-084 (2026-10-29): RAM / CPU time / I/O for every process come from the SAME
-// mechanism proctop.ps1 proved in 059 - one NtQuerySystemInformation(SystemProcessInformation) call per cycle, with
-// the I/O rates diffed inside the sampler and CPU % diffed here between two cycles - so no process handle is opened
-// and the processes that refuse OpenProcess (strata.exe) are covered like the rest. Per-process fallback handles
-// stay for the case where that call does not answer.
-// An app's processes = the process listening on its port + all its child processes (e.g. Bionic's model runs
-// in a child llama-server.exe). PIDs are looked up again every 10 s (every 4 s while an app has none yet), because
-// they change when the app restarts. AI_SCOPE-084: an app whose scope attests 'idle' / 'off' / 'failed' is taken out
-// of the watch file entirely - the sampler does no work for an app that is provably using nothing.
-// Linux / macOS (AI_SCOPE-052): the same numbers from procnix.js - processes from /proc or `ps`, the port owner from
-// /proc/net/tcp or `lsof` (falling back to the process name when the owner belongs to another user, e.g. Ollama's
-// `ollama` service user), NVIDIA VRAM / GPU % per process from nvidia-smi on Linux; macOS has no per-process GPU numbers.
-// Elsewhere get() returns null and callers fall back to whole-computer load. No dependencies; conservative JS.
+// AI_SCOPE-084 item 3 (2026-10-29, the user's "one shared sampler" end state): the NUMBERS for every process come
+// from proctop.js / proctop.ps1 - one all-process sample per cycle for the whole app (059's loop) - and this module
+// only answers WHICH processes belong to each watched app, then aggregates those rows over the family. Before this,
+// procstats ran a second all-process walk plus its own PDH query every 2 s: measured on snow, 8.0 % of one core for
+// this child against proctop's 0.7 %. CPU % / I/O rates and the reused-PID protection (each process's creation time)
+// are proctop's, so the per-cycle handle reading and CPU diffing that used to live here are gone, and
+// procstats.ps1 no longer measures anything (its C# is the port table and the parent / name table only).
+// Windows: the family comes from procstats.ps1 (port owner + children, or with the 080 tree flag the app-named
+// anchors + their descendants + ancestry chains). Linux / macOS (AI_SCOPE-052): the same rules applied by
+// nixResolve() to the procnix snapshot proctop.js already took, so neither platform samples twice.
+// GPU numbers: Windows GPU performance counters read by proctop through ONE PDH query (same source as Task
+// Manager); nvidia-smi can't report per-process memory under WDDM (037/038). On Linux, NVIDIA VRAM per process
+// from nvidia-smi; macOS has no per-process GPU numbers. Elsewhere get() returns null and callers fall back to
+// whole-computer load. No dependencies; conservative JS.
 'use strict';
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const spawn = require('child_process').spawn;
 const hwstats = require('./hwstats');
+const proctop = require('./proctop');
 const procnix = require('./procnix');
-const NIX = procnix.supported();
+const NIX = procnix.supported() && process.platform !== 'win32';   // the same test proctop uses for its own sampler
 
 const WATCH_FILE = path.join(os.tmpdir(), 'ai_scope-procwatch-' + process.pid + '.txt');
 // The filled-in script is run from a temp file: passed with -EncodedCommand it outgrew Windows' 32,767-character
 // command-line limit (spawn ENAMETOOLONG, which crashed the server - AI_SCOPE-051).
 const SCRIPT_FILE = path.join(os.tmpdir(), 'ai_scope-procstats-' + process.pid + '.ps1');
 const STALE_MS = 8000;
-const watches = {};     // key -> [ports]
-const results = {};     // key -> { at, pids: [{ pid, name }], luids: { luid: { vram, shared, util } }, cpu, ram, ramPrivate }
-const lastCpu = {};     // pid -> { t, cpu (100 ns units) }
-let ps = null, luidsKey = null, restartTimer = null;
+const MIRROR_MS = 2000;     // the pace the mirror lenses want (084): the family is aggregated once per proctop sample
+const watches = {};     // key -> { ports, names, tree }  (what the app modules asked for)
+const fams = {};        // key -> { at, pids: [{ pid, name }] }   (WHO the app owns right now)
+const results = {};     // key -> { at, pids, luids: { luid: { vram, shared, util } }, cpu, ram, ramPrivate, ioRead, ioWrite }
+let ps = null, restartTimer = null;
 
 // AI_SCOPE-072: ~5 minutes of per-app GPU numbers (the Strata scope's GPU / VRAM tiles), same cadence as the
 // samples below, Hardware card order, newest last. Only cycles that found the app's processes add a point,
 // so a stopped app leaves a gap instead of invented zeros.
-// AI_SCOPE-073: each point also carries the process's ram / ramPrivate (bytes, whole family — same rule as
-// get(): null when the process refused OpenProcess), for the Strata RAM lens, and AI_SCOPE-075 adds `cpu`
-// (% of the whole CPU, same clamp as get()). AI_SCOPE-076 adds ioRead / ioWrite (file I/O bytes/sec; only the
-// Windows counter path fills them, so they are null on Linux / macOS).
+// AI_SCOPE-073: each point also carries the process's ram / ramPrivate (bytes, whole family), for the Strata RAM
+// lens, and AI_SCOPE-075 adds `cpu` (% of the whole CPU, same clamp as get()). AI_SCOPE-076 adds ioRead / ioWrite
+// (file I/O bytes/sec; only the Windows / Linux counter paths fill them, so they are null on macOS).
 const HIST = 150;
-const hist = {};        // key -> [{ t, gpus: [{ vram, util }], ram, ramPrivate, cpu }]
+const hist = {};        // key -> [{ t, gpus: [{ vram, util }], ram, ramPrivate, cpu, ioRead, ioWrite }]
 function pushHist(key) {
   const r = results[key];
   if (!r) return;
@@ -52,10 +52,10 @@ function pushHist(key) {
   // simply empty, so the CPU / RAM lenses keep their history there (073's notes already described this, the
   // old `if (luids.length)` guard meant it was not actually true).
   // 080 review: util defaults to 0 (a family sample with no engine activity on a card uses 0 % of it) - see the
-  // G-line comment in handleBlock; also covers cards the family never touched and the Linux AMD/Intel case,
+  // G-line comment in proctop's rows; also covers cards the family never touched and the Linux AMD/Intel case,
   // matching get()'s documented rule.
   h.push({ t: r.at, gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util == null ? 0 : g.util } : { vram: 0, util: 0 }; }),
-    ram: r.ramUnknown && !r.ram ? null : r.ram, ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate,
+    ram: r.ram, ramPrivate: r.ramPrivate,
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
     ioRead: r.ioSeen ? r.ioRead || 0 : null, ioWrite: r.ioSeen ? r.ioWrite || 0 : null });   // AI_SCOPE-076
   if (h.length > HIST) h.shift();
@@ -64,8 +64,9 @@ function pushHist(key) {
 // AI_SCOPE-077 (review batch): an offline app really uses nothing, so the mirror tiles should read 0 rather
 // than freeze. The APP MODULES (stratastats / lmapi — not this sampler) attest their app's state every poll.
 // 077's three values (review batch 2, user 2026-10-28):
-//   'live' - app reachable and a model / engine instance is loaded: the sampler is the only history writer;
-//            a missed PID/port lookup (PIDs are re-resolved every 15 s) stays a GAP - never a false zero dip.
+//   'live' - app reachable and a model / engine instance is loaded: the samples are the only history writer;
+//            a missed PID/port lookup (families are re-resolved every 10 s, sooner while an app has none) stays
+//            a GAP - never a false zero dip.
 //   'idle' - app reachable but its OWN API says nothing is loaded: it genuinely uses nothing, so zeros are
 //            honest (the tiles sub reads "No Model Loaded").
 //   'off'  - app not reachable at all: zeros likewise (sub "<App> Offline").
@@ -81,14 +82,13 @@ function pushHist(key) {
 // their app-named anchors, so real tree numbers start while the runner itself is still being built.
 const attested = {};    // key -> 'live' | 'idle' | 'off' | 'loading' | 'unloading' | 'failed', set by the app module each poll
 // AI_SCOPE-084 (item 1 of the user's kickoff notes, 2026-10-29): an attestation that says "this app is using
-// nothing" also says "nothing to measure", so the app leaves the watch file and the sampler stops working for it.
-// Strata open with no model loaded used to run the PowerShell loop around the clock (~0.7 s of work per ~2.7 s
-// loop, ~25 % of one core, plus a netstat + snapshot every 4 s while it found no processes). The zero heartbeat
-// above already writes the points for 'idle' / 'off' / 'loading' / 'unloading' / 'failed', so the tiles keep their
-// wording and their zeros with no sampling at all. A key nobody attests (ComfyUI, Ollama, llama.cpp today) stays
-// watched exactly as before. The app modules keep calling watch() every poll, so arming again - the first moment of
-// a load - is immediate; the sampler PROCESS is left running, because restarting it costs ~2 s (Add-Type compile +
-// opening the PDH query, measured on snow 2026-10-29) and an idle loop costs nothing (procstats.ps1).
+// nothing" also says "nothing to measure", so the app leaves the watch file and the family resolution stops
+// working for it. Strata open with no model loaded used to run the sampler loop around the clock (~0.7 s of work
+// per ~2.7 s loop, ~25 % of one core, plus a netstat + snapshot every 4 s while it found no processes). The zero
+// heartbeat above already writes the points for 'idle' / 'off' / 'loading' / 'unloading' / 'failed', so the tiles
+// keep their wording and their zeros with no sampling at all. A key nobody attests (ComfyUI, Ollama, llama.cpp
+// today) stays watched exactly as before. The app modules keep calling watch() every poll, so arming again - the
+// first moment of a load - is immediate.
 const WATCH_STATES = { live: 1, loading: 1, unloading: 1 };
 function armed(key) { const s = attested[key]; return s === undefined ? true : !!WATCH_STATES[s]; }
 function armedKeys() { return Object.keys(watches).filter(function (k) { return armed(k); }); }
@@ -121,13 +121,22 @@ function attest(key, state) {
 // 084: taking an app out of the watch file (or putting it back). get() must answer null at once, so the tiles
 // fall back to the attested zeros instead of freezing on the last real reading.
 function refreshWatch(key) {
-  if (!armed(key)) { delete results[key]; if (NIX) { delete nixFam[key]; nixResolvedAt = 0; } }
+  if (!armed(key)) { delete results[key]; delete fams[key]; }
   writeWatchFile();
-  if (NIX) { if (armedKeys().length) { if (!nixTimer) { nixTimer = setInterval(nixTick, NIX_EVERY); nixResolvedAt = 0; nixTick(); } } return; }
-  if (armedKeys().length) startLoop();   // an already running loop just reads the shorter watch file (and idles)
+  syncPace();
+  if (NIX) nixResolvedAt = 0;
+  else if (armedKeys().length) startLoop();   // an already running loop just reads the shorter watch file (and idles)
+}
+// Ask proctop for its fastest honest pace while anything needs family numbers, and release it when nothing does
+// (084: one sampler, one rate - the Processes lenses ride the same period rather than a separate display cadence).
+function syncPace() {
+  if (!armedKeys().length) { proctop.release('procstats'); return; }
+  proctop.start();
+  proctop.demand('procstats', MIRROR_MS);
 }
 function unattest(key) { delete attested[key]; }
 
+// ---------- the family answer (Windows: procstats.ps1) ----------
 // The PowerShell side lives in procstats.ps1 (output format described there).
 const PS_FILE = path.join(__dirname, 'procstats.ps1');
 
@@ -137,62 +146,62 @@ function writeWatchFile() {
   try { fs.writeFileSync(WATCH_FILE, text); } catch (e) { /* the loop just sees no apps */ }
 }
 
-function handleBlock(lines) {
-  const now = Date.now(), fresh = {};
+// One block of F lines: the whole family set for every watched app, replacing what we had. A block with no lines
+// for an app means nothing was found for it right now (the mirror keeps its attested wording, 072's rule).
+function handleFamBlock(lines) {
+  const at = Date.now(), fresh = {};
   lines.forEach(function (l) {
     const p = l.split('|');
-    const r = fresh[p[1]] || (fresh[p[1]] = { at: now, pids: [], luids: {}, cpu: null, ram: 0, ramPrivate: 0 });
-    if (p[0] === 'P' && p.length >= 7) {
-      const pid = +p[2], cpu = p[6] === '' ? null : +p[6];
-      // 8th field: CPU % straight from the process counters (process refused OpenProcess, so no CPU time to diff)
-      if (p.length >= 8 && p[7] !== '') { const c = parseFloat(p[7].replace(',', '.')); if (isFinite(c)) r.cpu = (r.cpu || 0) + Math.max(0, c); }
-      r.pids.push({ pid: pid, name: p[3] });
-      if (p[4] === '') r.ramUnknown = true;   // the process refused OpenProcess: GPU numbers only
-      r.ram += +p[4] || 0; r.ramPrivate += +p[5] || 0;
-      const ck = p[1] + ':' + pid;   // per key: one process can be watched under two keys (llama.cpp router + its model)
-      const prev = lastCpu[ck];
-      if (cpu != null) {
-        // 084: the diff only counts across a short gap. After an idle stretch (the app left the watch file,
-        // item 2) the remembered CPU time is minutes old and dividing by that span would read as a dip; a
-        // cycle's own spacing is ~2 s, so a gap over 8 s is not a sample - it is the resume. The point still
-        // carries its real numbers (working set, private, I/O from the sampler's own diff); only CPU waits for
-        // the next cycle, which is one 2 s gap in the chart.
-        if (prev && now - prev.t > 200 && now - prev.t < 8000) {
-          // CPU time used since the last sample, as % of the whole CPU (all cores), like Task Manager
-          const pct = 100 * ((cpu - prev.cpu) / 10000) / (now - prev.t) / (os.cpus().length || 1);
-          r.cpu = (r.cpu || 0) + Math.max(0, pct);
-        }
-        lastCpu[ck] = { t: now, cpu: cpu };
-      }
-    } else if (p[0] === 'I' && p.length >= 5) {   // AI_SCOPE-076: file I/O rates (bytes/sec) for one process
-      r.ioRead = (r.ioRead || 0) + (p[3] === '' ? 0 : parseFloat(p[3].replace(',', '.')) || 0);
-      r.ioWrite = (r.ioWrite || 0) + (p[4] === '' ? 0 : parseFloat(p[4].replace(',', '.')) || 0);
-      if (p[3] !== '' || p[4] !== '') r.ioSeen = true;
-    } else if (p[0] === 'G' && p.length >= 7) {
-      const luid = p[3].toLowerCase();
-      // AI_SCOPE-080 (review): when the FAMILY was found, its per-card utilization is known - a card with GPU
-      // memory but no GPU Engine instances (allocating weights, idle on the card) is a real 0 %, not "no data".
-      // Only whole cycles without a sample leave gaps; only the attested states word it. That also makes the
-      // history agree with get()'s documented rule (card not used = { vram: 0, shared: 0, util: 0 }) instead of
-      // drawing line breaks + "n/a" in the GPU% chart while the VRAM chart right beside it is rising.
-      const g = r.luids[luid] || (r.luids[luid] = { vram: 0, shared: 0, util: 0 });
-      g.vram += parseFloat(p[4].replace(',', '.')) || 0;
-      g.shared += parseFloat(p[5].replace(',', '.')) || 0;
-      if (p[6] !== '') g.util = Math.min(100, g.util + (parseFloat(p[6].replace(',', '.')) || 0));
-    }
+    if (p[0] !== 'F' || p.length < 4) return;
+    const f = fresh[p[1]] || (fresh[p[1]] = { at: at, pids: [] });
+    f.pids.push({ pid: +p[2], name: p[3] });
   });
-  Object.keys(results).forEach(function (k) { if (!fresh[k]) delete results[k]; });
-  Object.keys(fresh).forEach(function (k) { if (fresh[k].pids.length) { results[k] = fresh[k]; pushHist(k); } });   // 072: history for every cycle that found the app
+  Object.keys(fams).forEach(function (k) { if (!fresh[k]) delete fams[k]; });
+  Object.keys(fresh).forEach(function (k) { fams[k] = fresh[k]; });
+  Object.keys(results).forEach(function (k) { if (!fresh[k]) delete results[k]; });   // no family => no numbers
 }
 
-// ---------- Linux / macOS (AI_SCOPE-052) ----------
-const NIX_EVERY = 2000, NIX_RESOLVE = 10000, NIX_RESOLVE_MISSING = 4000;
+// ---------- the numbers: aggregate one proctop sample over the families (084 item 3) ----------
+// One row per process from proctop: { pid, name, cpu (% of the whole CPU), ram (working set), priv (private
+// bytes), ioRead / ioWrite (bytes/s), luids: { luid -> { vram, shared, util } } }. Rates and the reused-PID check
+// are proctop's (each process's creation time), so nothing is diffed here.
+function aggregate(sample) {
+  if (!sample || sample.partial) return;   // proctop's first block carries no rates (059)
+  const rows = {};
+  sample.procs.forEach(function (r) { rows[r.pid] = r; });
+  armedKeys().forEach(function (k) {
+    const fam = fams[k];
+    if (!fam || !fam.pids.length) { delete results[k]; return; }
+    const r = { at: sample.at, pids: [], luids: {}, cpu: null, ram: 0, ramPrivate: 0, ioRead: 0, ioWrite: 0, ioSeen: false, privSeen: false };
+    fam.pids.forEach(function (x) {
+      const row = rows[x.pid];
+      if (!row) return;   // gone between re-resolves: no invented numbers, and the tile keeps the family it did find
+      r.pids.push({ pid: row.pid || x.pid, name: row.name || x.name });
+      if (row.cpu != null) r.cpu = (r.cpu || 0) + row.cpu;
+      if (row.ram != null) r.ram += row.ram;
+      if (row.priv != null) { r.ramPrivate += row.priv; r.privSeen = true; }
+      if (row.ioRead != null || row.ioWrite != null) { r.ioSeen = true; r.ioRead += row.ioRead || 0; r.ioWrite += row.ioWrite || 0; }
+      Object.keys(row.luids || {}).forEach(function (l) {
+        const g = row.luids[l], o = r.luids[l] || (r.luids[l] = { vram: 0, shared: 0, util: 0 });
+        o.vram += g.vram || 0; o.shared += g.shared || 0;
+        if (g.util != null) o.util = Math.min(100, o.util + g.util);   // summed over the family, capped like get()
+      });
+    });
+    if (!r.pids.length) { delete results[k]; return; }
+    if (!r.privSeen) r.ramPrivate = r.ram;   // macOS: no private / resident split (052)
+    results[k] = r;
+    pushHist(k);   // 072: a point for every sample that found the app's processes
+  });
+  Object.keys(results).forEach(function (k) { if (!watches[k] || !armed(k) || !fams[k]) delete results[k]; });
+}
+proctop.onSample(aggregate);
+
+// ---------- family resolving on Linux / macOS (AI_SCOPE-052, now reading proctop's snapshot) ----------
+const NIX_RESOLVE = 10000, NIX_RESOLVE_MISSING = 4000;
 // Model runners that several apps start (Bionic, Ollama and a llama.cpp server all run llama-server): when an app is
 // found by name only, these only count if one of their parent processes is named after the app.
 const GENERIC = { 'llama-server': 1, 'python': 1, 'python3': 1, 'node': 1 };
-let nixTimer = null, nixBusy = false, nixResolvedAt = 0;
-const nixFam = {};    // key -> [pids] (looked up again every NIX_RESOLVE, sooner while an app has none)
-const nixPrev = {};   // key:pid -> { t, cpu (s), start } for CPU % between two looks
+let nixResolvedAt = 0;
 function nixResolve(snap, owners, key, w) {
   let roots = [];
   w.ports.forEach(function (p) { roots = roots.concat(owners[p] || []); });
@@ -208,68 +217,32 @@ function nixResolve(snap, owners, key, w) {
   };
   return all.filter(function (pid) { return !GENERIC[String(snap.procs[pid].name).toLowerCase().replace(/\.exe$/, '')] || underApp(pid); });
 }
-function nixTick() {
-  if (nixBusy || !armedKeys().length) return;
-  nixBusy = true;
-  procnix.snapshot(function (snap) {
-    if (!snap) { nixBusy = false; return; }
-    const now = Date.now(), keys = armedKeys();   // 084: an app that attests idle / off / failed is not sampled here either
-    const compute = function () {
-      procnix.nvidia(function (gpu) {
-        const cores = os.cpus().length || 1;
-        keys.forEach(function (k) {
-          const pids = (nixFam[k] || []).filter(function (pid) { return snap.procs[pid]; });
-          if (!pids.length) { delete results[k]; return; }
-          const r = { at: now, pids: [], luids: {}, cpu: null, ram: 0, ramPrivate: null };
-          pids.forEach(function (pid) {
-            const p = snap.procs[pid], ck = k + ':' + pid, prev = nixPrev[ck];
-            r.pids.push({ pid: pid, name: p.name });
-            r.ram += p.rss || 0;
-            if (p.priv != null) r.ramPrivate = (r.ramPrivate || 0) + p.priv;
-            if (prev && prev.start === p.start && now > prev.t) r.cpu = (r.cpu || 0) + Math.max(0, 100 * (p.cpu - prev.cpu) / ((now - prev.t) / 1000) / cores);
-            nixPrev[ck] = { t: now, cpu: p.cpu, start: p.start };
-            const g = gpu && gpu[pid];
-            if (g) Object.keys(g).forEach(function (card) {
-              const x = r.luids[card] || (r.luids[card] = { vram: 0, shared: 0, util: null });
-              x.vram += g[card].vram; if (g[card].util != null) x.util = Math.min(100, (x.util || 0) + g[card].util);
-            });
-          });
-          if (r.ramPrivate == null) r.ramPrivate = r.ram;   // macOS: no private / resident split
-          results[k] = r;
-          pushHist(k);   // 072
-        });
-        Object.keys(results).forEach(function (k) { if (!watches[k] || !armed(k)) delete results[k]; });   // 084: a disarmed app answers null at once
-        Object.keys(nixPrev).forEach(function (ck) { if (!snap.procs[ck.split(':').pop()]) delete nixPrev[ck]; });
-        nixBusy = false;
-      });
-    };
-    const missing = keys.some(function (k) { return !(nixFam[k] && nixFam[k].length); });
-    if (now - nixResolvedAt < (missing ? NIX_RESOLVE_MISSING : NIX_RESOLVE)) return compute();
-    let ports = [];
-    keys.forEach(function (k) { watches[k].ports.forEach(function (p) { if (ports.indexOf(p) < 0) ports.push(p); }); });
-    procnix.portOwners(ports, function (owners) {
-      nixResolvedAt = now;
-      keys.forEach(function (k) { nixFam[k] = nixResolve(snap, owners, k, watches[k]); });
-      Object.keys(nixFam).forEach(function (k) { if (!watches[k] || !armed(k)) delete nixFam[k]; });
-      compute();
+function nixFamilies(sample) {
+  const snap = proctop.snapshot();
+  if (!snap || !sample) return;
+  const now = Date.now(), keys = armedKeys();
+  if (!keys.length) return;
+  const missing = keys.some(function (k) { return !(fams[k] && fams[k].pids.length); });
+  if (now - nixResolvedAt < (missing ? NIX_RESOLVE_MISSING : NIX_RESOLVE)) return;
+  nixResolvedAt = now;
+  let ports = [];
+  keys.forEach(function (k) { watches[k].ports.forEach(function (p) { if (ports.indexOf(p) < 0) ports.push(p); }); });
+  procnix.portOwners(ports, function (owners) {
+    keys.forEach(function (k) {
+      const pids = nixResolve(snap, owners, k, watches[k]);
+      fams[k] = { at: now, pids: pids.map(function (pid) { return { pid: pid, name: String((snap.procs[pid] || {}).name || '') }; }) };
     });
   });
 }
 
+let buf = '', block = [];   // the stdout line buffer of the membership loop
 function startLoop() {
-  if (NIX) {
-    if (!nixTimer && armedKeys().length) { nixTimer = setInterval(nixTick, NIX_EVERY); nixResolvedAt = 0; nixTick(); }
-    return;
-  }
-  if (ps || process.platform !== 'win32' || !armedKeys().length) return;
-  const luids = hwstats.cardLuids().filter(Boolean);
-  if (!luids.length) { if (!restartTimer) restartTimer = setTimeout(function () { restartTimer = null; startLoop(); }, 5000); return; }  // cards not detected yet
-  luidsKey = luids.join(',');
+  if (NIX || ps || process.platform !== 'win32' || !armedKeys().length) return;
   let src; try { src = fs.readFileSync(PS_FILE, 'utf8'); } catch (e) { return; }
   const fill = function (text, k, v) { return text.split(k).join(v); };
-  const script = fill(fill(fill(src, '__LUIDS__', luids.map(function (l) { return l.toUpperCase(); }).join(',')),
-    '__FILE__', WATCH_FILE.replace(/'/g, "''")), '__PARENT__', String(process.pid));
-  let buf = '', block = [];
+  // __FILE__ is the watch file, __PARENT__ this process (the script exits when we die, so a server crash can't
+  // leave a sampler running). 084 slimmed the script down to membership, so it no longer takes __LUIDS__.
+  const script = fill(fill(src, '__FILE__', WATCH_FILE.replace(/'/g, "''")), '__PARENT__', String(process.pid));
   let child;
   try {
     fs.writeFileSync(SCRIPT_FILE, '\ufeff' + script, 'utf8');   // BOM: Windows PowerShell 5.1 reads BOM-less files as ANSI
@@ -282,7 +255,7 @@ function startLoop() {
   ps = child;
   child.on('error', function () { if (ps === child) ps = null; });
   child.on('exit', function () {
-    if (ps !== child) return;   // replaced by a newer loop (card list changed)
+    if (ps !== child) return;   // replaced by a newer loop
     ps = null;
     if (armedKeys().length && !restartTimer) restartTimer = setTimeout(function () { restartTimer = null; startLoop(); }, 10000);
   });
@@ -291,11 +264,11 @@ function startLoop() {
     const lines = buf.split(/\r?\n/);
     buf = lines.pop();
     lines.forEach(function (l) {
-      if (l.trim() === '---') { handleBlock(block); block = []; } else if (l.trim()) block.push(l.trim());
+      if (l.trim() === '---') { handleFamBlock(block); block = []; } else if (l.trim()) block.push(l.trim());
     });
   });
 }
-function stopLoop() { if (ps) { try { ps.kill(); } catch (e) {} ps = null; } if (nixTimer) { clearInterval(nixTimer); nixTimer = null; } }
+function stopLoop() { if (ps) { try { ps.kill(); } catch (e) {} ps = null; } }
 process.on('exit', function () { stopLoop(); try { fs.unlinkSync(WATCH_FILE); } catch (e) {} try { fs.unlinkSync(SCRIPT_FILE); } catch (e) {} });
 
 // Watch an app's processes: key (e.g. 'comfyui'), the port(s) it listens on, and optionally the exe names to count
@@ -322,10 +295,12 @@ function watch(key, ports, names, opts) {
 }
 function unwatch(key) {
   if (!watches[key]) return;
-  delete watches[key]; delete results[key];
-  if (!NIX) writeWatchFile();
-  if (!Object.keys(watches).length) stopLoop();
+  delete watches[key]; delete results[key]; delete fams[key];
+  if (!NIX) writeWatchFile(); else nixResolvedAt = 0;
+  syncPace();
 }
+// The family for a key (mostly for diagnostics / tests).
+function family(key) { return fams[key] || null; }
 
 // Latest numbers for an app, or null (unsupported system, app not found, or no fresh sample). gpus[] follows the
 // Hardware card order (info.gpus); a card the app doesn't use, or one without per-process numbers (Linux AMD / Intel
@@ -334,23 +309,21 @@ function get(key) {
   const r = results[key];
   if (!r || Date.now() - r.at > STALE_MS) return null;
   const luids = hwstats.cardKeys();
-  if (ps && luids.filter(Boolean).join(',') !== luidsKey) { stopLoop(); startLoop(); }   // card list changed (Windows)
   return {
     pids: r.pids,
-    gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, shared: g.shared, util: g.util == null ? 0 : g.util } : { vram: 0, shared: 0, util: 0 }; }),   // 080 review: util 0 when no engine activity, never null (see handleBlock)
+    gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, shared: g.shared, util: g.util == null ? 0 : g.util } : { vram: 0, shared: 0, util: 0 }; }),   // 080 review: util 0 when no engine activity, never null (see aggregate)
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
-    ram: r.ramUnknown && !r.ram ? null : r.ram,
-    ramPrivate: r.ramUnknown && !r.ramPrivate ? null : r.ramPrivate,
-    ioRead: r.ioSeen ? r.ioRead || 0 : null,     // AI_SCOPE-076: file I/O bytes/sec (Windows counters only)
+    ram: r.ram, ramPrivate: r.ramPrivate,
+    ioRead: r.ioSeen ? r.ioRead || 0 : null,     // AI_SCOPE-076: file I/O bytes/sec (not on macOS)
     ioWrite: r.ioSeen ? r.ioWrite || 0 : null,
   };
 }
 
 // Whether per-process stats can work here at all: Windows, Linux, macOS (AI_SCOPE-052).
-function supported() { return process.platform === 'win32' || NIX; }
-module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get,
+function supported() { return process.platform === 'win32' || procnix.supported(); }
+module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get, family: family,
   // 072: 5-min per-app GPU history. AI_SCOPE-084 (item 7): with since > 0 only the points newer than it are
   // sent - web/js/lens.js asks for exactly that, web/js/mirror.js appends what arrives to the ring it holds.
   history: function (key, since) { const h = hist[key] || []; return since ? h.filter(function (p) { return p.t > since; }) : h; },
   attest: attest, unattest: unattest,   // AI_SCOPE-077 review: offline attestation drives the zero heartbeat
-  _test: { handleBlock: handleBlock, results: results, nixResolve: nixResolve, nixTick: nixTick } };
+  _test: { handleFamBlock: handleFamBlock, aggregate: aggregate, results: results, fams: fams, nixResolve: nixResolve } };

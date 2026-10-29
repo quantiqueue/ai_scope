@@ -1,7 +1,7 @@
 # AI_SCOPE proctop loop (AI_SCOPE-023): numbers for EVERY process, for the Processes scope's top-5 lenses.
 # proctop.js runs it from a temp file (-File) after filling in __PARENT__ (Node's PID) and __EVERY__ (ms between samples).
 # Every cycle prints:
-#   P|pid|exe|cpuPercent|workingSet|path|ioRead|ioWrite   one line per process (CPU % of the whole CPU, all cores); path (full exe path)
+#   P|pid|exe|cpuPercent|workingSet|path|ioRead|ioWrite|privateBytes   one line per process (CPU % of the whole CPU, all cores); path (full exe path)
 #                                            only the first time a process is seen, '' after that or when Windows won't tell
 #                                            (refused: System32\<exe> if it exists, e.g. svchost.exe / dwm.exe); ioRead / ioWrite =
 #                                            bytes/s of ALL the process's I/O (disk, network, devices - AI_SCOPE-030)
@@ -71,7 +71,7 @@ public static class AiScopeTop {
     return res;
   }
   // ---- Every process in one call (AI_SCOPE-059): SYSTEM_PROCESS_INFORMATION entries, read by offset ----
-  class Snap { public long Cpu, Create, Rd, Wr; }   // CPU time (user + kernel, 100 ns), creation time (tells a reused PID apart), I/O bytes
+  class Snap { public long Cpu, Create, Rd, Wr, Priv; }   // CPU time (user + kernel, 100 ns), creation time (tells a reused PID apart), I/O bytes, private bytes (AI_SCOPE-084: the mirror's RAM (Committed) lens needs it)
   static Dictionary<int, Snap> prevSnap = null; static long prevTicks = 0;
   static IntPtr spiBuf = IntPtr.Zero; static int spiLen = 0;
   // pid -> name, pid -> working set, pid -> counters. false if Windows refused (then the cycle has no per-process numbers).
@@ -85,7 +85,10 @@ public static class AiScopeTop {
       if (st != 0) return false;
       bool x64 = IntPtr.Size == 8;
       // offsets: 32 CreateTime, 40 UserTime, 48 KernelTime, 56 ImageName (UNICODE_STRING); then by pointer size:
-      int oNameBuf = x64 ? 64 : 60, oPid = x64 ? 80 : 68, oWs = x64 ? 144 : 104, oRd = x64 ? 232 : 160;   // oRd: ReadTransferCount, + 8 = WriteTransferCount
+      // oRd: ReadTransferCount, + 8 = WriteTransferCount.
+      // oPriv (AI_SCOPE-084) = PrivateUsage, 32 bytes before ReadTransferCount; verified on snow 2026-10-29 against
+      // Get-Process PrivateMemorySize64 (and it equals PagefileUsage there, as psapi's PROCESS_MEMORY_COUNTERS reports).
+      int oNameBuf = x64 ? 64 : 60, oPid = x64 ? 80 : 68, oWs = x64 ? 144 : 104, oRd = x64 ? 232 : 160, oPriv = oRd - 32;
       long p = spiBuf.ToInt64();
       while (true) {
         IntPtr e = new IntPtr(p);
@@ -94,7 +97,7 @@ public static class AiScopeTop {
         int nlen = Marshal.ReadInt16(e, 56) & 0xFFFF; IntPtr nbuf = Marshal.ReadIntPtr(e, oNameBuf);
         string name = pid == 0 ? "Idle" : nbuf != IntPtr.Zero && nlen > 0 ? Marshal.PtrToStringUni(nbuf, nlen / 2) : pid == 4 ? "System" : "";
         Snap s = new Snap(); s.Create = Marshal.ReadInt64(e, 32); s.Cpu = Marshal.ReadInt64(e, 40) + Marshal.ReadInt64(e, 48);
-        s.Rd = Marshal.ReadInt64(e, oRd); s.Wr = Marshal.ReadInt64(e, oRd + 8);
+        s.Rd = Marshal.ReadInt64(e, oRd); s.Wr = Marshal.ReadInt64(e, oRd + 8); s.Priv = Marshal.ReadInt64(e, oPriv);
         inst[pid] = name; ws[pid] = (double)Marshal.ReadIntPtr(e, oWs).ToInt64(); now[pid] = s;
         if (next <= 0) break;
         p += next;
@@ -170,8 +173,9 @@ public static class AiScopeTop {
         if (path != "" && !iconSent.Contains(path)) { iconSent.Add(path); iconQueue.Enqueue(path); }
       }
       double rv, xv; bool hr = ior.TryGetValue(pid, out rv), hx = iow.TryGetValue(pid, out xv);
+      Snap snp; string pv = now.TryGetValue(pid, out snp) ? F(snp.Priv) : "";   // AI_SCOPE-084: private bytes (the mirror's RAM (Committed) lens)
       sb.Append("P|" + pid + "|" + name.Replace("|", "/") + "|" + (hc ? F(Math.Max(0, cv)) : "") + "|" + (hw ? F(wv) : "") + "|" + path + "|" +
-        (hr ? F(Math.Max(0, rv)) : "") + "|" + (hx ? F(Math.Max(0, xv)) : "") + "\n");
+        (hr ? F(Math.Max(0, rv)) : "") + "|" + (hx ? F(Math.Max(0, xv)) : "") + "|" + pv + "\n");
     }
     // forget processes that are gone
     List<int> gone = new List<int>(); foreach (int k in seen.Keys) if (!inst.ContainsKey(k)) gone.Add(k); foreach (int k in gone) seen.Remove(k);
