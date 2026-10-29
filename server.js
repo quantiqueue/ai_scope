@@ -260,8 +260,11 @@ http.createServer((req, res) => {
   }
   if (url.pathname === '/api/strata') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    // AI_SCOPE-084 (item 7): since=<t> returns only processHistory points newer than t - the mirror lenses keep
+    // the ring on the client, so re-sending all 150 points every 2 s (tens of KB per poll) is pure payload cost.
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(stratastats.getState(limit)));
+    return res.end(JSON.stringify(stratastats.getState(limit, since)));
   }
   if (url.pathname === '/api/llamacpp') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
@@ -313,7 +316,8 @@ http.createServer((req, res) => {
       // AI_SCOPE-077: the Hardware Mirror Lens family (web/js/mirror.js) also needs the 5-minute process
       // history and the Hardware card names / totals, like stratastats.js sends for Strata (072). The history
       // is kept for every cycle procstats finds Bionic's processes, so the tiles ride through "Inactive".
-      body.processHistory = procstats.history('bionic');
+      // AI_SCOPE-084 (item 7): ?since=<t> narrows it to the new points (see the /api/strata route).
+      body.processHistory = procstats.history('bionic', parseInt(url.searchParams.get('since'), 10) || 0);
       body.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
     }
     catch (e) { body = { rows: [], error: String(e && e.message || e) }; }

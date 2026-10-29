@@ -86,10 +86,24 @@ function defineMirror(spec) {
   const key = spec.key, name = spec.name, p = spec.letter;
   // The scope's process history, newest last — kept for the hover handlers (same role window.STRATA_PROC_HIST
   // had before 077; the global stays for debugging and for anything that already reads it).
-  let hist = [];
+  const hist = [];   // 084: never replaced, only appended to and trimmed - the array identity is what the global and the hover handlers read
   window[name.toUpperCase().replace(/[^A-Z0-9]/g, '') + '_PROC_HIST'] = hist;   // e.g. STRATA_PROC_HIST, BIONIC_PROC_HIST
   const cards = [];   // per-card { name, vramTotal } from the payload, for the GPU tile labels and the hover ceiling
-  subscribeSource(key, d => { hist = (d && d.processHistory) || []; cards.length = 0; (d && d.processCards || []).forEach(c => cards.push(c)); });
+  // AI_SCOPE-084 (item 7): the payload now carries only the points newer than what the page holds (web/js/lens.js
+  // asks with &since=, the server slices its ring), so APPEND rather than replace - into the same array the global
+  // above and the hover handlers read, trimmed to the window the sparkline shows. A whole-ring answer (the first
+  // poll, after a failed one, or when a mirror lens is re-mounted in edit mode) lands the same way: the merge keeps
+  // only points newer than the newest one held, so nothing doubles and nothing older than the ring is invented.
+  subscribeSource(key, d => {
+    const add = (d && d.processHistory) || [];
+    if (add.length) {
+      const last = hist.length ? hist[hist.length - 1].t : 0;
+      for (const p of add) if (p && p.t > last) hist.push(p);
+      const cut = Date.now() - MWIN;
+      while (hist.length && (hist[0].t < cut || hist.length > 240)) hist.shift();
+    }
+    cards.length = 0; (d && d.processCards || []).forEach(c => cards.push(c));
+  });
   // Sub-line wording for the attested states (review batch 2, the user's own words): offline / no model;
   // the lone remaining gap (hiccup while a model is loaded) stays "Inactive".
   // AI_SCOPE-080: the load window got its own words - the app's own status attests 'loading' /

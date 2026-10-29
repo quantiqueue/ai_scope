@@ -8,11 +8,15 @@
 // ---------- Sources: one poll per endpoint, shared by every subscriber ----------
 // A scope usually has one source named like the scope ('strata'); a scope with several endpoints names the
 // others 'scope.part' (e.g. 'bionic.models'). Polling stops while the scope is not installed.
-const SOURCES = {};   // source id -> { id, scope, url, every, visibleOnly, subs, els, data, error, busy, timer, kick }
+const SOURCES = {};   // source id -> { id, scope, url, every, visibleOnly, deltaField, since, subs, els, data, error, busy, timer, kick }
 // visibleOnly: poll only while one of its lenses is on screen (a shown tab, window not minimized) - for endpoints that
 // cost something to keep fresh, e.g. the Processes scope (the server samples all processes only while it's asked).
-function defineSource(id, url, scope, every, visibleOnly) {
-  SOURCES[id] = { id, scope: scope || id, url, every: every || 2000, visibleOnly: !!visibleOnly, subs: new Set(), els: new Map(), data: null, error: null };
+// AI_SCOPE-084 (item 7) deltaField: name a field of the payload whose array the client already holds (the mirror
+// family's processHistory ring, ~150 points). With it set, every poll after the first adds &since=<newest t seen>
+// and the server answers with only the newer points - the first poll and any poll that follows a failed one ask
+// for the whole ring, so a gap never has to be re-derived.
+function defineSource(id, url, scope, every, visibleOnly, deltaField) {
+  SOURCES[id] = { id, scope: scope || id, url, every: every || 2000, visibleOnly: !!visibleOnly, deltaField: deltaField || null, since: 0, subs: new Set(), els: new Map(), data: null, error: null };
 }
 function sourceSeen(src) {
   if (!src.visibleOnly) return true;
@@ -23,8 +27,16 @@ function sourceSeen(src) {
 async function pollSource(src) {
   if (src.busy || !src.subs.size || !isInstalled(src.scope) || !sourceSeen(src)) return;
   src.busy = true;
-  try { src.data = await (await fetch(src.url, { cache:'no-store' })).json(); src.error = null; }
-  catch (e) { src.error = e; }
+  let u = src.url;
+  if (src.deltaField && src.since) u += (u.indexOf('?') >= 0 ? '&' : '?') + 'since=' + src.since;   // 084: only what came after
+  try {
+    const d = await (await fetch(u, { cache: 'no-store' })).json();
+    src.data = d; src.error = null;
+    // Remember the newest point we now hold. A poll that failed or was skipped while the tab was hidden asks for
+    // the whole ring again (since = 0), so a gap is filled from the server instead of being re-derived.
+    if (src.deltaField) { const a = d && d[src.deltaField]; if (Array.isArray(a)) for (const p of a) if (p && p.t > src.since) src.since = p.t; }
+  }
+  catch (e) { src.error = e; if (src.deltaField) src.since = 0; }
   src.busy = false;
   src.subs.forEach(fn => fn(src.data, src.error));
 }
@@ -33,7 +45,10 @@ function subscribeSource(id, fn, el) {
   const src = SOURCES[id];
   src.subs.add(fn);
   src.els.set(fn, el || null);
-  if (!src.timer) src.timer = setInterval(() => pollSource(src), src.every);
+  if (!src.timer) {
+    if (src.deltaField) src.since = 0;   // 084: the first poll for a (re)mounted lens carries the whole ring
+    src.timer = setInterval(() => pollSource(src), src.every);
+  }
   if (!src.kick) src.kick = setTimeout(() => { src.kick = null; pollSource(src); }, 0);   // first poll right away (once for a batch of subscribers)
   return () => {
     src.subs.delete(fn);

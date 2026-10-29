@@ -2,7 +2,7 @@
 // Data: /api/bionic (server log parser) and /api/bionic/models (the REST API of Bionic's local server).
 // Every card/table is a lens (lens.js), so it can also be shown on custom scopes, more than once.
 
-defineSource('bionic', '/api/bionic?limit=100');
+defineSource('bionic', '/api/bionic?limit=100', null, null, null, 'processHistory');   // AI_SCOPE-084: the history ring goes out as a delta (?since=)
 defineSource('bionic.models', '/api/bionic/models', 'bionic');
 
 // ---------- Hardware Mirror Lenses for Bionic (AI_SCOPE-077) ----------

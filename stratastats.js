@@ -202,7 +202,7 @@ function gpuNames(d, indexes) {
 }
 const ACTIVE = { loading: 1, reading: 1, thinking: 1, generating: 1 };
 
-function getState(limit) {
+function getState(limit, since) {
   const d = native;
   const out = { online: online, url: base, error: lastError, fetchedAt: fetchedAt || null,
                 version: null, engineVersion: null, updateNotice: null,
@@ -215,7 +215,7 @@ function getState(limit) {
   // carry the process's ram / ramPrivate for the Strata RAM lens (per-process RAM exists on macOS / Linux too,
   // so that lens is not gated on per-process GPU support).
   out.process = procstats.get('strata'); out.processSupported = procstats.supported();
-  out.processHistory = procstats.history('strata');
+  out.processHistory = procstats.history('strata', since);   // AI_SCOPE-084: ?since=<t> sends only the new points
   out.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
   if (!d) return out;
   out.version = d.version || null;

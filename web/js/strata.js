@@ -7,7 +7,7 @@ const fmtK = n => n == null ? '—' : n >= 1000 ? (n / 1000).toFixed(n >= 10000 
 const fmtCtx = n => n == null ? '—' : n % 1024 === 0 ? (n / 1024) + 'K' : fmtK(n);
 const fmtPct = f => f == null ? '—' : Math.round(f * 100) + '%';
 
-defineSource('strata', '/api/strata?limit=100');
+defineSource('strata', '/api/strata?limit=100', null, null, null, 'processHistory');   // AI_SCOPE-084: the history ring goes out as a delta (?since=)
 
 // ---------- Current request ----------
 defineLens({

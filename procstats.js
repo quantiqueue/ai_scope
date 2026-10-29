@@ -1,10 +1,16 @@
 // Per-process stats for the apps AI_SCOPE watches (AI_SCOPE-038; findings in AI_SCOPE-037): VRAM (dedicated + shared)
 // and GPU % per card, CPU % and RAM of an app's own processes, instead of whole-computer totals.
-// Windows only: nvidia-smi can't report per-process memory under WDDM, so this uses the Windows GPU performance
-// counters (same source as Task Manager), read through counter objects kept open in one long-running PowerShell
-// (each read well under 1 ms), plus OpenProcess/GetProcessMemoryInfo/GetProcessTimes for RAM and CPU.
+// Windows: nvidia-smi can't report per-process memory under WDDM, so the GPU numbers come from the Windows GPU
+// performance counters (same source as Task Manager), read through one query kept open in a long-running PowerShell
+// loop (procstats.ps1). AI_SCOPE-084 (2026-10-29): RAM / CPU time / I/O for every process come from the SAME
+// mechanism proctop.ps1 proved in 059 - one NtQuerySystemInformation(SystemProcessInformation) call per cycle, with
+// the I/O rates diffed inside the sampler and CPU % diffed here between two cycles - so no process handle is opened
+// and the processes that refuse OpenProcess (strata.exe) are covered like the rest. Per-process fallback handles
+// stay for the case where that call does not answer.
 // An app's processes = the process listening on its port + all its child processes (e.g. Bionic's model runs
-// in a child llama-server.exe). PIDs are looked up again every 15 s, because they change when the app restarts.
+// in a child llama-server.exe). PIDs are looked up again every 10 s (every 4 s while an app has none yet), because
+// they change when the app restarts. AI_SCOPE-084: an app whose scope attests 'idle' / 'off' / 'failed' is taken out
+// of the watch file entirely - the sampler does no work for an app that is provably using nothing.
 // Linux / macOS (AI_SCOPE-052): the same numbers from procnix.js - processes from /proc or `ps`, the port owner from
 // /proc/net/tcp or `lsof` (falling back to the process name when the owner belongs to another user, e.g. Ollama's
 // `ollama` service user), NVIDIA VRAM / GPU % per process from nvidia-smi on Linux; macOS has no per-process GPU numbers.
@@ -74,6 +80,18 @@ function pushHist(key) {
 // zeros end early: the app's loading workers (engine manager, launcher - generic runner names) are found via
 // their app-named anchors, so real tree numbers start while the runner itself is still being built.
 const attested = {};    // key -> 'live' | 'idle' | 'off' | 'loading' | 'unloading' | 'failed', set by the app module each poll
+// AI_SCOPE-084 (item 1 of the user's kickoff notes, 2026-10-29): an attestation that says "this app is using
+// nothing" also says "nothing to measure", so the app leaves the watch file and the sampler stops working for it.
+// Strata open with no model loaded used to run the PowerShell loop around the clock (~0.7 s of work per ~2.7 s
+// loop, ~25 % of one core, plus a netstat + snapshot every 4 s while it found no processes). The zero heartbeat
+// above already writes the points for 'idle' / 'off' / 'loading' / 'unloading' / 'failed', so the tiles keep their
+// wording and their zeros with no sampling at all. A key nobody attests (ComfyUI, Ollama, llama.cpp today) stays
+// watched exactly as before. The app modules keep calling watch() every poll, so arming again - the first moment of
+// a load - is immediate; the sampler PROCESS is left running, because restarting it costs ~2 s (Add-Type compile +
+// opening the PDH query, measured on snow 2026-10-29) and an idle loop costs nothing (procstats.ps1).
+const WATCH_STATES = { live: 1, loading: 1, unloading: 1 };
+function armed(key) { const s = attested[key]; return s === undefined ? true : !!WATCH_STATES[s]; }
+function armedKeys() { return Object.keys(watches).filter(function (k) { return armed(k); }); }
 let zeroTimer = null;
 const ZERO_EVERY = 2000;
 function zeroTick() {
@@ -95,8 +113,18 @@ function zeroTick() {
 }
 function attest(key, state) {
   if (attested[key] === state) return;
+  const wasArmed = armed(key);
   attested[key] = state;
   if (state !== 'live' && !zeroTimer) zeroTimer = setInterval(zeroTick, ZERO_EVERY);
+  if (armed(key) !== wasArmed) refreshWatch(key);   // 084: idle / off / failed stop the sampling, live / loading / unloading resume it
+}
+// 084: taking an app out of the watch file (or putting it back). get() must answer null at once, so the tiles
+// fall back to the attested zeros instead of freezing on the last real reading.
+function refreshWatch(key) {
+  if (!armed(key)) { delete results[key]; if (NIX) { delete nixFam[key]; nixResolvedAt = 0; } }
+  writeWatchFile();
+  if (NIX) { if (armedKeys().length) { if (!nixTimer) { nixTimer = setInterval(nixTick, NIX_EVERY); nixResolvedAt = 0; nixTick(); } } return; }
+  if (armedKeys().length) startLoop();   // an already running loop just reads the shorter watch file (and idles)
 }
 function unattest(key) { delete attested[key]; }
 
@@ -104,7 +132,8 @@ function unattest(key) { delete attested[key]; }
 const PS_FILE = path.join(__dirname, 'procstats.ps1');
 
 function writeWatchFile() {
-  const text = Object.keys(watches).sort().map(function (k) { return k + '|' + watches[k].ports.join(',') + '|' + watches[k].names.join(',') + '|' + (watches[k].tree ? '1' : '0'); }).join('\n');
+  // 084: only the armed apps go in the file - an app whose scope attests 'idle' / 'off' / 'failed' is not sampled
+  const text = Object.keys(watches).filter(function (k) { return armed(k); }).sort().map(function (k) { return k + '|' + watches[k].ports.join(',') + '|' + watches[k].names.join(',') + '|' + (watches[k].tree ? '1' : '0'); }).join('\n');
   try { fs.writeFileSync(WATCH_FILE, text); } catch (e) { /* the loop just sees no apps */ }
 }
 
@@ -123,7 +152,12 @@ function handleBlock(lines) {
       const ck = p[1] + ':' + pid;   // per key: one process can be watched under two keys (llama.cpp router + its model)
       const prev = lastCpu[ck];
       if (cpu != null) {
-        if (prev && now > prev.t) {
+        // 084: the diff only counts across a short gap. After an idle stretch (the app left the watch file,
+        // item 2) the remembered CPU time is minutes old and dividing by that span would read as a dip; a
+        // cycle's own spacing is ~2 s, so a gap over 8 s is not a sample - it is the resume. The point still
+        // carries its real numbers (working set, private, I/O from the sampler's own diff); only CPU waits for
+        // the next cycle, which is one 2 s gap in the chart.
+        if (prev && now - prev.t > 200 && now - prev.t < 8000) {
           // CPU time used since the last sample, as % of the whole CPU (all cores), like Task Manager
           const pct = 100 * ((cpu - prev.cpu) / 10000) / (now - prev.t) / (os.cpus().length || 1);
           r.cpu = (r.cpu || 0) + Math.max(0, pct);
@@ -175,11 +209,11 @@ function nixResolve(snap, owners, key, w) {
   return all.filter(function (pid) { return !GENERIC[String(snap.procs[pid].name).toLowerCase().replace(/\.exe$/, '')] || underApp(pid); });
 }
 function nixTick() {
-  if (nixBusy || !Object.keys(watches).length) return;
+  if (nixBusy || !armedKeys().length) return;
   nixBusy = true;
   procnix.snapshot(function (snap) {
     if (!snap) { nixBusy = false; return; }
-    const now = Date.now(), keys = Object.keys(watches);
+    const now = Date.now(), keys = armedKeys();   // 084: an app that attests idle / off / failed is not sampled here either
     const compute = function () {
       procnix.nvidia(function (gpu) {
         const cores = os.cpus().length || 1;
@@ -204,7 +238,7 @@ function nixTick() {
           results[k] = r;
           pushHist(k);   // 072
         });
-        Object.keys(results).forEach(function (k) { if (!watches[k]) delete results[k]; });
+        Object.keys(results).forEach(function (k) { if (!watches[k] || !armed(k)) delete results[k]; });   // 084: a disarmed app answers null at once
         Object.keys(nixPrev).forEach(function (ck) { if (!snap.procs[ck.split(':').pop()]) delete nixPrev[ck]; });
         nixBusy = false;
       });
@@ -216,7 +250,7 @@ function nixTick() {
     procnix.portOwners(ports, function (owners) {
       nixResolvedAt = now;
       keys.forEach(function (k) { nixFam[k] = nixResolve(snap, owners, k, watches[k]); });
-      Object.keys(nixFam).forEach(function (k) { if (!watches[k]) delete nixFam[k]; });
+      Object.keys(nixFam).forEach(function (k) { if (!watches[k] || !armed(k)) delete nixFam[k]; });
       compute();
     });
   });
@@ -224,10 +258,10 @@ function nixTick() {
 
 function startLoop() {
   if (NIX) {
-    if (!nixTimer && Object.keys(watches).length) { nixTimer = setInterval(nixTick, NIX_EVERY); nixResolvedAt = 0; nixTick(); }
+    if (!nixTimer && armedKeys().length) { nixTimer = setInterval(nixTick, NIX_EVERY); nixResolvedAt = 0; nixTick(); }
     return;
   }
-  if (ps || process.platform !== 'win32' || !Object.keys(watches).length) return;
+  if (ps || process.platform !== 'win32' || !armedKeys().length) return;
   const luids = hwstats.cardLuids().filter(Boolean);
   if (!luids.length) { if (!restartTimer) restartTimer = setTimeout(function () { restartTimer = null; startLoop(); }, 5000); return; }  // cards not detected yet
   luidsKey = luids.join(',');
@@ -250,7 +284,7 @@ function startLoop() {
   child.on('exit', function () {
     if (ps !== child) return;   // replaced by a newer loop (card list changed)
     ps = null;
-    if (Object.keys(watches).length && !restartTimer) restartTimer = setTimeout(function () { restartTimer = null; startLoop(); }, 10000);
+    if (armedKeys().length && !restartTimer) restartTimer = setTimeout(function () { restartTimer = null; startLoop(); }, 10000);
   });
   child.stdout.on('data', function (d) {
     buf += d;
@@ -283,8 +317,8 @@ function watch(key, ports, names, opts) {
   const w = watches[key];
   if (w && w.ports.join(',') === ports.join(',') && w.names.join(',') === names.join(',') && !!w.tree === tree) return;
   watches[key] = { ports: ports, names: names, tree: tree };
-  if (NIX) nixResolvedAt = 0; else writeWatchFile();   // look the app up again now
-  startLoop();
+  if (NIX) nixResolvedAt = 0;
+  refreshWatch(key);   // AI_SCOPE-084: the watch file and the sampling only follow while the app's state asks for numbers
 }
 function unwatch(key) {
   if (!watches[key]) return;
@@ -314,6 +348,9 @@ function get(key) {
 
 // Whether per-process stats can work here at all: Windows, Linux, macOS (AI_SCOPE-052).
 function supported() { return process.platform === 'win32' || NIX; }
-module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get, history: function (key) { return hist[key] || []; },   // 072: 5-min per-app GPU history
+module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: get,
+  // 072: 5-min per-app GPU history. AI_SCOPE-084 (item 7): with since > 0 only the points newer than it are
+  // sent - web/js/lens.js asks for exactly that, web/js/mirror.js appends what arrives to the ring it holds.
+  history: function (key, since) { const h = hist[key] || []; return since ? h.filter(function (p) { return p.t > since; }) : h; },
   attest: attest, unattest: unattest,   // AI_SCOPE-077 review: offline attestation drives the zero heartbeat
   _test: { handleBlock: handleBlock, results: results, nixResolve: nixResolve, nixTick: nixTick } };
