@@ -1,5 +1,8 @@
 # Checks every push and pull request: syntax on all supported Node versions,
-# the package contents, and that the CLI starts and serves the page.
+# the package contents, that the CLI starts and serves the page, and that a
+# freshly INSTALLED copy of the packed tarball starts and serves it too
+# (AI_SCOPE-079: the release assets are built from `npm pack`, so a file that
+# is in git but not in package.json's `files` list ships broken).
 name: CI
 on:
   push:
@@ -50,3 +53,33 @@ jobs:
           curl -sf -o /dev/null http://127.0.0.1:9123/js/shell.js
           curl -sf -o /dev/null http://127.0.0.1:9123/app.css
           echo "Dashboard responded"
+      # Packed-copy smoke test (AI_SCOPE-079): the release assets (ai_scope.zip /
+      # ai_scope.tar.gz, npx ai_scope) are built from `npm pack`, and `files` in
+      # package.json is an allowlist — a module that is in git but not listed
+      # there is simply absent from an installed copy (a missing settings.js
+      # once broke every installed start with "Cannot find module"). The smoke
+      # test above runs from the checkout and cannot see that. So: pack, install
+      # the tarball into a throwaway folder, and start the INSTALLED copy.
+      # This runs on every push, so it also guards against the next missing file.
+      - name: Packed-install smoke test
+        shell: bash
+        env:
+          AI_SCOPE_DATA: ${{ runner.temp }}/ai_scope_data_packed
+        run: |
+          TGZ=$(npm pack --silent)
+          [ -n "$TGZ" ]
+          mkdir -p packsmoke && cd packsmoke
+          echo '{"name":"ai_scope-packsmoke","private":true}' > package.json
+          npm install --no-audit --no-fund "../$TGZ"
+          node node_modules/ai_scope/bin/ai_scope.js --version
+          node node_modules/ai_scope/bin/ai_scope.js --port 9124 &
+          PID=$!
+          for i in $(seq 1 20); do curl -sf -o /dev/null http://127.0.0.1:9124/ && break; sleep 1; done
+          curl -sf -o /dev/null http://127.0.0.1:9124/
+          curl -sf http://127.0.0.1:9124/api/scopes | grep -q '"hardware"'
+          curl -sf -o /dev/null http://127.0.0.1:9124/js/core.js
+          curl -sf -o /dev/null http://127.0.0.1:9124/js/mirror.js
+          curl -sf -o /dev/null http://127.0.0.1:9124/js/settings.js
+          curl -sf -o /dev/null http://127.0.0.1:9124/app.css
+          curl -sf -X POST -H 'X-AI-Scope: stop' -o /dev/null http://127.0.0.1:9124/api/stop || kill $PID
+          echo "Installed copy responded"
