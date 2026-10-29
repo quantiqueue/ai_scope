@@ -16,6 +16,8 @@ const proctop = require('./proctop');       // all processes, for the Processes 
 const scopelayouts = require('./scopelayouts');   // edited layouts of the scope pages (AI_SCOPE-020)
 const scopes = require('./scopes');
 const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
+const settings = require('./settings');           // app-wide settings, AI_SCOPE-010
+const spawn = require('child_process').spawn;     // Restart Now (AI_SCOPE-010)
 hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
 proctop.start();   // Processes is built in: its sampler stays warm (slow while nobody looks), AI_SCOPE-059
 scopes.init();      // starts the modules of every installed scope (scopes.json + data/installed.json)
@@ -24,8 +26,19 @@ scopes.init();      // starts the modules of every installed scope (scopes.json 
 // 127.0.0.1 = this PC only; 0.0.0.0 = also other devices on your network.
 // `npx ai_scope` defaults to 127.0.0.1; running server.js directly (dev.js / start.bat) defaults to 0.0.0.0.
 const PORT = parseInt(process.env.AI_SCOPE_PORT, 10) || 9000;
-const HOST = process.env.AI_SCOPE_HOST || '0.0.0.0';
+let HOST = process.env.AI_SCOPE_HOST || '0.0.0.0';
 const BOOT_ID = Date.now().toString(); // changes on every restart; the page uses it to auto-reload
+// The settings files (data folder) beat the launch flags - settings are local and win (user, 2026-10-27) -
+// and they set the sampler's watched pace and the extra host names before anything else reads them.
+settings.setPaceApplier(proctop.setFastMs);
+settings.setScopeChecker(function (id) { return scopes.isInstalled(id) || customscopes.list().some(function (c) { return c.id === id; }); });
+settings.boot(HOST, PORT);   // AI_SCOPE-069: the allowed-host-names env var is gone; the setting's own file is the source
+// A saved choice wins in both directions (settings are Local and win over the launch flags), so the row
+// always says what the next start will do; what is bound right now only changes on that start.
+const savedNa = settings.savedValue('networkAccess');
+if (savedNa !== undefined) HOST = savedNa ? '0.0.0.0' : '127.0.0.1';
+settings.setBound(HOST);   // "needs a restart" compares against what this process is actually bound to
+function landing() { const v = settings.list().landing; return v || 'home'; }  // which page "/" opens (AI_SCOPE-010)
 
 // ---------- The dashboard page: web/index.html + web/app.css + web/js/*.js ----------
 // Plain files (no build step). Read on each request - they're small - so they're never stale.
@@ -103,11 +116,20 @@ function readJson(req, cb) {
   req.on('end', () => { let v = null; try { v = JSON.parse(body || '{}'); } catch (e) {} cb(v); });
 }
 // The installed scopes go into the page itself, so the first render already shows the right tabs.
+function pageSettings() {
+  // AI_SCOPE-070: the theme must be ABSENT from the page data until it is actually saved - shell.js moves a
+  // browser's old per-browser choice into the setting once, and its guard tests for a missing value. list()
+  // always carries theme's 'default' def, which made that guard dead and silently lost every saved theme.
+  const s = settings.list();
+  if (settings.savedValue('theme') === undefined) delete s.theme;
+  return s;
+}
 function pageHtml() {
   const html = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8');
   const js = v => JSON.stringify(v).replace(/</g, '\\u003c');
   return html.split('/*__SCOPES__*/[]').join(js(scopes.list())).split('/*__CUSTOM__*/[]').join(js(customscopes.list()))
-    .split('/*__LAYOUTS__*/{}').join(js(scopelayouts.list())).split("/*__OS__*/''").join(js(process.platform));
+    .split('/*__LAYOUTS__*/{}').join(js(scopelayouts.list())).split("/*__OS__*/''").join(js(process.platform))
+    .split('/*__SETTINGS__*/{}').join(js(pageSettings()));   // AI_SCOPE-010: theme + landing before the page paints (theme only once saved - 070)
 }
 
 http.createServer((req, res) => {
@@ -117,20 +139,21 @@ http.createServer((req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   if (!hostAllowed(req)) {   // AI_SCOPE-021: not a name of this machine (DNS rebinding)
     res.writeHead(403, { 'Content-Type': 'text/plain' });
-    return res.end('AI_SCOPE: unknown host name. Open AI_SCOPE by this computer\'s name or address, or add the name to AI_SCOPE_ALLOWED_HOSTS.');
+    return res.end('AI_SCOPE: unknown host name. Open AI_SCOPE by this computer\'s name or address, or add the name in AI_SCOPE Settings (Server - Allowed host names).');
   }
   if (req.method === 'POST' && url.pathname !== '/api/stop' && !postAllowed(req, true)) return sendJson(res, 403, NOT_ALLOWED);
   if (url.pathname === '/__boot') {
     res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
     return res.end(BOOT_ID);
   }
-  if (url.pathname === '/home') { res.writeHead(302, { Location: '/#home' }); return res.end(); }
+  if (url.pathname === '/home') { res.writeHead(302, { Location: '/#' + landing() }); return res.end(); }   // AI_SCOPE-010: General -> Default Scope
   if (url.pathname === '/favicon.ico') return sendIcon(res);
   if (WEB_FILES[url.pathname]) return sendWebFile(res, WEB_FILES[url.pathname][0], WEB_FILES[url.pathname][1]);
   const js = WEB_JS.exec(url.pathname);
   if (js) return sendWebFile(res, 'js/' + js[1] + '.js', 'text/javascript; charset=utf-8');
   // "Is AI_SCOPE running here?" for `ai_scope --app` / `--stop`; `local` = request from this PC (shows the Stop button).
-  if (url.pathname === '/api/ping') return sendJson(res, 200, { app: 'ai_scope', version: PKG_VERSION, pid: process.pid, port: PORT, local: isLocal(req) });
+  // `landing` so the launchers open the Default Scope the settings chose (settings are local and win).
+  if (url.pathname === '/api/ping') return sendJson(res, 200, { app: 'ai_scope', version: PKG_VERSION, pid: process.pid, port: PORT, local: isLocal(req), landing: landing() });
   // Stop AI_SCOPE (ai_scope --stop, or the Stop button). Only from this PC, and only with the custom header,
   // so other web pages can't trigger it (a cross-site request with that header needs CORS, which we never allow).
   if (url.pathname === '/api/stop' && req.method === 'POST') {
@@ -168,6 +191,37 @@ http.createServer((req, res) => {
       r.layouts = scopelayouts.list();
       sendJson(res, r.ok ? 200 : 400, r);
     });
+  }
+  // App-wide settings (AI_SCOPE-010): the dialog's sections and values, one change per POST (on blur).
+  if (url.pathname === '/api/settings' && req.method === 'GET') return sendJson(res, 200, { settings: settings.describe() });
+  if (url.pathname === '/api/settings/change' && req.method === 'POST') {
+    return readJson(req, body => {
+      if (!body || !body.key) return sendJson(res, 400, { ok: false, error: 'Bad request' });
+      const r = settings.change(String(body.section || ''), String(body.key), body.value, isLocal(req));
+      sendJson(res, r.ok ? 200 : 400, r);
+    });
+  }
+  // Restart Now: only from this PC (like /api/stop), and only when AI_SCOPE runs from its own launcher -
+  // the dev copy (dev.js / start.bat) reloads changed files itself and is started again by hand (user, 2026-10-27).
+  if (url.pathname === '/api/settings/restart' && req.method === 'POST') {
+    if (!isLocal(req)) return sendJson(res, 403, { ok: false, error: 'Only allowed from this computer' });
+    const launcher = path.join(__dirname, 'bin', 'ai_scope.js');
+    if (path.basename(process.argv[1] || '') !== 'ai_scope.js' || !fs.existsSync(launcher)) {
+      return sendJson(res, 400, { ok: false, error: 'AI_SCOPE is not running from its own launcher - it reloads changed files by itself, so start it again from the command line to apply this change.' });
+    }
+    const env = Object.assign({}, process.env);
+    env.AI_SCOPE_BACKGROUND = '1';
+    env.AI_SCOPE_PORT = String(PORT);
+    env.AI_SCOPE_HOST = settings.list().networkAccess ? '0.0.0.0' : '127.0.0.1';
+    env.AI_SCOPE_DATA = require('./paths').DATA_DIR;
+    delete env.AI_SCOPE_OPEN;
+    try {
+      const child = spawn(process.execPath, [launcher], { detached: true, windowsHide: true, stdio: 'ignore', env: env, cwd: os.homedir() });
+      child.unref();
+    } catch (e) { return sendJson(res, 500, { ok: false, error: 'Could not restart AI_SCOPE: ' + e.message }); }
+    console.log('[server] restart requested - exiting, the new AI_SCOPE starts on its own');
+    sendJson(res, 200, { ok: true });
+    return setTimeout(() => process.exit(0), 150);
   }
   // The last 5 minutes of samples, for the Processes lenses' lines (AI_SCOPE-059)
   if (url.pathname === '/api/processes/history') return sendJson(res, 200, proctop.history());
@@ -256,6 +310,11 @@ http.createServer((req, res) => {
       body.average = lmstats.getAverage(body.rows);
       body.process = procstats.get('bionic');   // Bionic's model process (AI_SCOPE-049)
       body.processSupported = procstats.supported();
+      // AI_SCOPE-077: the Hardware Mirror Lens family (web/js/mirror.js) also needs the 5-minute process
+      // history and the Hardware card names / totals, like stratastats.js sends for Strata (072). The history
+      // is kept for every cycle procstats finds Bionic's processes, so the tiles ride through "Inactive".
+      body.processHistory = procstats.history('bionic');
+      body.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
     }
     catch (e) { body = { rows: [], error: String(e && e.message || e) }; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -283,6 +342,6 @@ http.createServer((req, res) => {
     console.log('  (this PC only - use --host 0.0.0.0 to open it from other devices)');
   }
   console.log(`  Data:    ${require('./paths').DATA_DIR}`);
-  // --open (and so the Start Menu shortcut and the installer's first start) lands on the Home page.
-  if (process.env.AI_SCOPE_OPEN === '1') require('./bin/open')(`http://localhost:${PORT}/#home`);
+  // --open (and so the Start Menu shortcut and the installer's first start) lands on the Default Scope.
+  if (process.env.AI_SCOPE_OPEN === '1') require('./bin/open')(`http://localhost:${PORT}/#${landing()}`);
 });

@@ -24,7 +24,7 @@ function tileValues(s) {
   const v = { cpu: s.cpu, ram: pct(s.ramUsed, s.ramTotal) };
   // Older samples (or no per-card data): fall back to the whole-PC numbers for the first card.
   const cards = s.gpus && s.gpus.length ? s.gpus : [{ util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal }];
-  cards.forEach((g, i) => { v['gpu' + i] = g.util; v['vram' + i] = pct(g.vramUsed, g.vramTotal); });
+  cards.forEach((g, i) => { v['gpu' + i] = g.util; v['vram' + i] = pct(g.vramUsed, g.vramTotal); v['pow' + i] = pct(g.power, g.powerLimit); });
   return v;
 }
 function setTile(el, value, big, sub, series) {
@@ -59,6 +59,12 @@ const hwLatest = d => d.history[d.history.length - 1];
 const hwSeries = (d, id) => d.history.map(h => tileValues(h)[id]);
 const NA_HTML = '<span class="na">n/a</span>';
 
+// AI_SCOPE-077: hover registry for the Hardware Mirror Lens family (web/js/mirror.js). mirror.js pushes one
+// entry per tile-id prefix ({ prefix, fn(spark, f, guide, tip) }) and the sparkline hover below dispatches to
+// them, so each app scope's tiles read their own process history. Declared here (classic scripts share one
+// global lexical scope) because mirror.js loads after this file and the hover handler reads it.
+const MIRROR_HOVER = [];
+
 defineLens({
   id: 'hardware.cpu', scope: 'hardware', size: 'tile',
   name: 'CPU', description: 'CPU usage with a 5-minute history.',
@@ -71,12 +77,28 @@ defineLens({
 });
 defineLens({
   id: 'hardware.ram', scope: 'hardware', size: 'tile',
-  name: 'RAM', description: 'Memory in use with a 5-minute history.',
-  markup: tileHtml({ id:'ram', label:'RAM' }),
+  name: 'RAM', description: 'Memory in use with a 5-minute history; Show can switch it to committed memory over the commit limit.',
+  settings: [
+    { id:'show', label:'Show', type:'choice', default:'usage', options:[['usage', 'Usage'], ['committed', 'Committed']] },
+  ],
+  markup: st => tileHtml({ id:'ram' + (st.show === 'committed' ? 'C' : ''),
+    label:'RAM' + (st.show === 'committed' ? ' (Committed)' : '') }),
   render(L, d) {
     const s = hwLatest(d); if (!s) return;
+    const box = L.el.querySelector('[data-tile="ram' + (L.settings.show === 'committed' ? 'C' : '') + '"]'); if (!box) return;
+    if (L.settings.show === 'committed') {
+      // Committed (reserved against RAM + pagefile) - the numbers 073 / 074 read in one CIM / meminfo call.
+      const lim = s.commitLimit;
+      if (lim == null) { setTile(box, null, NA_HTML, 'Committed memory: not available on this system', []); return; }
+      const pctC = b => (b != null && lim) ? Math.min(100, 100 * b / lim) : null;
+      const val = pctC(s.commitUsed);
+      setTile(box, val, (s.commitUsed != null ? GB(s.commitUsed) + '<small> / ' + GB(lim) + ' GB</small>' : NA_HTML),
+        (val == null ? 'detecting…' : val.toFixed(0) + '% of commit limit'),
+        d.history.map(h => h.commitLimit ? pctC(h.commitUsed) : null));   // samples before the field landed stay gaps
+      return;
+    }
     const v = tileValues(s);
-    setTile(L.el.querySelector('.tile'), v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', hwSeries(d, 'ram'));
+    setTile(box, v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', hwSeries(d, 'ram'));
   },
 });
 // One graphics card: GPU usage (with temperature and power), VRAM, or both side by side.
@@ -120,6 +142,96 @@ defineLens({
       }
       setTile(vEl, vram, vramBig, vramSub, hwSeries(d, 'vram' + i));
     }
+  },
+});
+
+// ---------- Power (AI_SCOPE-027): one card's power draw vs its power limit, own quarter-size tile ----------
+// NVIDIA only (Windows' GPU counters report no power for AMD / Intel cards) - those cards show "not available".
+// The chart and meter are % of the card's power limit, so cards compare fairly; hover gives the watts.
+defineLens({
+  id: 'hardware.power', scope: 'hardware', size: 'tile',
+  name: 'Power', description: "One graphics card's power draw vs its power limit, with a 5-minute history (NVIDIA cards report it; others don't).",
+  settings: [
+    { id:'card', label:'Graphics card', type:'gpu', default:0 },
+  ],
+  markup: st => tileHtml({ id:'pow' + st.card, label:'Power' + (st.card ? ' ' + (st.card + 1) : '') }),
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="pow' + L.settings.card + '"]'); if (!box) return;
+    const info = d.info, gpus = info.gpus || [], i = L.settings.card;
+    const num = gpus.length > 1 ? ' ' + (i + 1) : '';   // "Power 2" with several cards, plain "Power" with one
+    if (box.querySelector('.ltitle').textContent !== 'Power' + num) box.querySelector('.ltitle').textContent = 'Power' + num;
+    const s = hwLatest(d); if (!s) return;
+    const g = (s.gpus && s.gpus[i]) || {};
+    const name = gpus[i] ? gpus[i].name : (info.gpuSource === 'none' ? 'No GPU stats available' : gpus.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
+    const big = g.power != null
+      ? Math.round(g.power) + (g.powerLimit != null ? '<small> / ' + Math.round(g.powerLimit) + ' W</small>' : '<small> W</small>')
+      : NA_HTML;
+    const sub = g.power != null ? name : name + ' · power not available for this card';
+    setTile(box, tileValues(s)['pow' + i], big, sub, hwSeries(d, 'pow' + i));
+    box.querySelector('.spark').title = g.powerLimit != null ? 'Top of the chart = ' + Math.round(g.powerLimit) + ' W (the card\'s power limit)' : '';
+  },
+});
+
+// ---------- PCIe (AI_SCOPE-065): one card's bus traffic (RX / TX MB/s, chart like the disk tile) + link ----------
+// NVIDIA only (dmon stream); "link" = current vs max negotiated PCIe link from nvidia-smi (info.gpus[].link).
+// Sub line: link text then the card name (AI_SCOPE-068) — "Gen 5 ×8 of Gen 5 ×16 · NVIDIA GeForce RTX 5060 Ti".
+// MB/s values; chart scaled to the busiest moment of the 5 minutes (+25 %), minimum 1 MB/s.
+const pcieOf = (s, i) => { const g = s && s.gpus && s.gpus[i]; return g && g.pcieRx != null ? g : null; };
+const pcieScale = (hist, i) => Math.max(1, 1.25 * hist.reduce((a, s) => { const g = pcieOf(s, i); return g ? Math.max(a, g.pcieRx || 0, g.pcieTx || 0) : a; }, 0));
+function pciePath(hist, i, key, max) {
+  const n = hist.length;
+  return hist.map((s, k) => { const g = s.gpus && s.gpus[i]; return g && g[key] != null ? [n < 2 ? 100 : 100 * k / (n - 1), 100 - Math.min(100, 100 * (g[key] || 0) / max)] : null; })
+    .filter(Boolean).map((p, j) => (j ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join(' ');
+}
+const fmtMb = m => m == null ? '—' : m >= 1024 ? (m / 1024).toFixed(2) + ' GB/s' : Math.round(m) + ' MB/s';
+function linkText(l) {
+  if (!l) return '';
+  const cur = 'Gen ' + l.gen + ' ×' + l.width, max = 'Gen ' + l.genMax + ' ×' + l.widthMax;
+  return cur === max ? max : cur + ' of ' + max;
+}
+defineLens({
+  id: 'hardware.pcie', scope: 'hardware', size: 'tile',
+  name: 'PCIe', description: "One graphics card's PCIe bus traffic (RX / TX MB/s; model loads spike it) and its link vs what the card can use at most. NVIDIA cards only.",
+  settings: [
+    { id:'card', label:'Graphics card', type:'gpu', default:0 },
+  ],
+  markup: st => `
+  <div class="tilebox" data-tile="pcie${st.card}">` + lensHeadMarkup('PCIe') + `
+  <div class="tile">
+    <div class="v">—</div>
+    <div class="sub">&nbsp;</div>
+    <div class="meter"><div></div></div>
+    <div class="spark"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
+      <path class="line"></path><path class="line wline"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
+      <div class="tip" hidden></div></div>
+    <div class="spark-axis"><span>5 min ago</span><span class="dlegend"><i class="rd"></i>rx <i class="wr"></i>tx</span><span>now</span></div>
+  </div></div>`,
+  render(L, d) {
+    const info = d.info, gpus = info.gpus || [], i = L.settings.card;
+    const box = L.el.querySelector('[data-tile="pcie' + i + '"]'); if (!box) return;
+    const num = gpus.length > 1 ? ' ' + (i + 1) : '';   // "PCIe 2" with several cards, plain with one
+    if (box.querySelector('.ltitle').textContent !== 'PCIe' + num) box.querySelector('.ltitle').textContent = 'PCIe' + num;
+    const s = hwLatest(d); if (!s) return;
+    const v = box.querySelector('.tile');
+    const name = gpus[i] ? gpus[i].name : (info.gpuSource === 'none' ? 'No GPU stats available' : gpus.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
+    const g = (s.gpus && s.gpus[i]) || {};
+    if (g.pcieRx == null) {
+      v.querySelector('.v').innerHTML = NA_HTML;
+      v.querySelector('.sub').textContent = name + ' · ' + (gpus[i] && gpus[i].source !== 'nvidia' ? 'PCIe traffic: NVIDIA cards only' : 'detecting…');
+      v.querySelector('.meter > div').style.width = '0%';
+      v.querySelector('.spark').title = '';
+      return;
+    }
+    const rx = g.pcieRx || 0, tx = g.pcieTx || 0, both = rx + tx;
+    const scale = pcieScale(d.history, i);
+    v.querySelector('.v').innerHTML = both + '<small> MB/s</small>';
+    const lt = linkText(gpus[i] && gpus[i].link);
+    v.querySelector('.sub').textContent = lt ? lt + ' · ' + name : name;   // 068: name the card next to the link text
+    if (lt) v.querySelector('.sub').title = 'PCIe link between card and PC: Gen sets the per-lane speed, × the lanes (Gen 4 ×16 = 16 GB/s). Showing current vs what the card could use at most — current can drop while the card is idle; below max explains slow model loads.';
+    v.querySelector('.meter > div').style.width = Math.max(0, Math.min(100, 100 * both / scale)) + '%';
+    v.querySelector('.line').setAttribute('d', pciePath(d.history, i, 'pcieRx', scale));
+    v.querySelector('.wline').setAttribute('d', pciePath(d.history, i, 'pcieTx', scale));
+    v.querySelector('.spark').title = 'Top of the chart = ' + fmtMb(scale) + ' (rx / tx MB/s)';
   },
 });
 
@@ -258,19 +370,55 @@ function peakCell(p) {
 
 // Hover on a sparkline (any tile, on any page): show the value at that point in time.
 document.addEventListener('mousemove', e => {
-  const spark = e.target.closest && e.target.closest('[data-tile] .spark'); if (!spark || !hwHist.length) return;
+  const spark = e.target.closest && e.target.closest('[data-tile] .spark'); if (!spark) return;
   const id = spark.closest('[data-tile]').dataset.tile;
+  // Hardware pages need the Hardware history; mirror tiles (mirror.js) carry their own, so they do not wait for it.
+  const mirrorTile = typeof MIRROR_HOVER !== 'undefined' && MIRROR_HOVER.some(m => id.indexOf(m.prefix) === 0);
+  if (!hwHist.length && !mirrorTile) return;
   const r = spark.getBoundingClientRect();
   const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-  const i = Math.round(f * (hwHist.length - 1));
-  const h = hwHist[i], v = id.indexOf('disk:') === 0 ? null : tileValues(h)[id];
   const tip = spark.querySelector('.tip'), guide = spark.querySelector('.guide');
+  // 077: a mirror tile can be hovered before the Hardware sampler has any history (its branches read their own
+  // history). hwHist is non-empty whenever we are not in that case, so the guard below covers every read of h / v.
+  const h = hwHist.length ? hwHist[Math.round(f * (hwHist.length - 1))] : null;
+  if (mirrorTile && !h) {
+    for (let mi = 0; mi < MIRROR_HOVER.length; mi++) {
+      if (id.indexOf(MIRROR_HOVER[mi].prefix) === 0) { MIRROR_HOVER[mi].fn(spark, f, guide, tip); return; }
+    }
+  }
+  const i = Math.round(f * (hwHist.length - 1));
+  const v = id.indexOf('disk:') === 0 ? null : tileValues(h)[id];
   const x = hwHist.length < 2 ? 100 : 100 * i / (hwHist.length - 1);
   guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
   tip.hidden = false; tip.style.left = x + '%';
   if (id.indexOf('disk:') === 0) {   // disk tile: read / write / active at that time
     const x = diskOf(h, id.slice(5));
     tip.textContent = (x ? 'R ' + fmtRate(x.read) + ' · W ' + fmtRate(x.write) + ' · ' + (x.active != null ? x.active.toFixed(0) : '—') + '%' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
+    return;
+  }
+  if (id.indexOf('pcie') === 0) {   // PCIe tile (AI_SCOPE-065): rx / tx at that time
+    const g = h.gpus && h.gpus[+id.slice(4)];
+    tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
+    return;
+  }
+  if (id === 'ramC') {   // Committed RAM tile (AI_SCOPE-074): reserved memory against the commit limit at that time
+    const lim = h.commitLimit;
+    tip.textContent = (lim != null && h.commitUsed != null
+      ? GB(h.commitUsed) + ' / ' + GB(lim) + ' GB (' + Math.min(100, Math.round(100 * h.commitUsed / lim)) + '%)'
+      : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
+    return;
+  }
+  // Hardware Mirror Lens tiles (AI_SCOPE-072/073/075/076, shared family since 077): the per-scope hover is
+  // registered by mirror.js against the tile-id prefix, so every scope's tiles read their OWN history.
+  // (Before 077 this handler held four hardcoded branches reading window.STRATA_PROC_HIST by name.)
+  if (typeof MIRROR_HOVER !== 'undefined') {
+    for (let mi = 0; mi < MIRROR_HOVER.length; mi++) {
+      if (id.indexOf(MIRROR_HOVER[mi].prefix) === 0) { MIRROR_HOVER[mi].fn(spark, f, guide, tip); return; }
+    }
+  }
+  if (id.indexOf('pow') === 0) {   // power tile (AI_SCOPE-027): watts at that time
+    const g = h.gpus && h.gpus[+id.slice(3)];
+    tip.textContent = (g && g.power != null ? Math.round(g.power) + ' W' + (g.powerLimit ? ' of ' + Math.round(g.powerLimit) + ' W limit' : '') : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
     return;
   }
   tip.textContent = (v == null ? 'n/a' : v.toFixed(0) + '%') + ' · ' + new Date(h.t).toLocaleTimeString();
@@ -284,7 +432,14 @@ document.addEventListener('mouseout', e => {
 defineScopeLayout('hardware', () => {
   const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
   const items = layoutOf(['hardware.cpu', 'hardware.ram']);
-  for (let i = 0; i < Math.max(1, gpus.length); i++) items.push({ lens: 'hardware.gpu', settings: { card: i, show: 'both' } });
+  // AI_SCOPE-074: a second RAM tile showing committed memory over the commit limit - left out of the macOS
+  // default (no commit-limit concept there); still addable by hand, where it answers "not available".
+  if (SERVER_OS !== 'darwin') items.push({ lens: 'hardware.ram', settings: { show: 'committed' } });
+  for (let i = 0; i < Math.max(1, gpus.length); i++) {   // power + PCIe tile per card (027 / 065)
+    items.push({ lens: 'hardware.gpu', settings: { card: i, show: 'both' } });
+    items.push({ lens: 'hardware.power', settings: { card: i } });
+    items.push({ lens: 'hardware.pcie', settings: { card: i } });
+  }
   const disks = (SOURCES.hardware.data && SOURCES.hardware.data.info.disks) || [];
   disks.forEach(x => items.push({ lens: 'hardware.disk', settings: { disk: x.id } }));   // AI_SCOPE-030
   return items;

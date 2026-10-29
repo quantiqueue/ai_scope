@@ -137,6 +137,8 @@ function normV0(d) {
       format: m.compatibility_type || null, vision: m.type === 'vlm',
       tools: (m.capabilities || []).indexOf('tool_use') >= 0, reasoning: false,
       instances: m.state === 'loaded' ? [{ id: m.id, context: num(m.loaded_context_length), gpuRatio: null, ttlMs: null }] : [],
+      loading: m.state === 'loading',   // AI_SCOPE-080: v0 reports a load in flight - today that collapsed to 'idle'
+                                        // ("No Model Loaded" during a load); now it attests 'loading'
     };
   });
 }
@@ -161,10 +163,18 @@ function tryBase(list, i, cb) {
 function poll() {
   const list = base ? [base].concat(CANDIDATES.filter(function (c) { return c !== base; })) : CANDIDATES;
   tryBase(list, 0, function (err, b, ver, d) {
-    if (err) { online = false; lastError = err.message; models = []; return; }
+    if (err) { online = false; lastError = err.message; models = []; procstats.attest('bionic', 'off'); return; }   // 077 review: offline attestation drives procstats' zero history
     base = b; online = true; apiVersion = ver; lastError = null; raw = d;
     procstats.watch('bionic', portsOf([b]), MODEL_PROCS);
     models = ver === 'v1' ? normV1(d) : normV0(d);
+    // 077 review batch 2: attestation from Bionic's own API - a model with live instances => 'live' (a
+    // missed process lookup stays a gap, never zeros); server reachable, nothing loaded => 'idle'
+    // (procstats writes zeros, the tile sub reads "No Model Loaded").
+    // AI_SCOPE-080: v0 also says 'loading' (the v1 list only grows loaded_instances when done, so there
+    // the loading phase stays a short idle / gap - noted, v1 exposes no status to attest). The worded
+    // zeros beat today's "No Model Loaded" lie while Bionic's llama-server child is being brought up.
+    procstats.attest('bionic', models.some(function (m) { return m.instances.length; }) ? 'live'
+      : models.some(function (m) { return m.loading; }) ? 'loading' : 'idle');
     if (Date.now() - reposAt > 60000) scanRepos();
     models.forEach(function (m) { const s = sourceFor(m); m.modelUrl = s.modelUrl; m.publisherUrl = s.publisherUrl; m.source = s.source; m.modified = s.modified; });
     const keys = models.filter(function (m) { return m.instances.length; }).map(function (m) { return m.key; }).join(',');
@@ -214,6 +224,6 @@ function start(settings) {
   poll(); timer = setInterval(poll, 10000); // each poll adds 2 lines to Bionic's server log
 }
 function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
-function stop() { stopTimer(); procstats.unwatch('bionic'); online = false; base = null; models = []; raw = null; lastError = null; lastLoadedKeys = ''; }
+function stop() { stopTimer(); procstats.unwatch('bionic'); procstats.unattest('bionic'); online = false; base = null; models = []; raw = null; lastError = null; lastLoadedKeys = ''; }   // 077 review: unattest on stop
 
 module.exports = { start: start, stop: stop, getState: getState, getRaw: getRaw, loadedCount: loadedCount };

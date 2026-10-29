@@ -92,14 +92,16 @@ function openWindow(url) {
 
 // opts: { port, flags, logFile }
 function app(opts) {
-  const url = 'http://localhost:' + opts.port + '/#home';
-  ping(opts.port, function (state) {
+  // AI_SCOPE-010: an already-running AI_SCOPE answers with the Default Scope the settings chose (settings win over
+  // the launch); a fresh start can't know it yet, so the launchers open Home and the page lands the same way.
+  const homeUrl = function (info) { return 'http://localhost:' + opts.port + '/#' + ((info && info.landing) || 'home'); };
+  ping(opts.port, function (state, info) {
     if (state === 'other') {
       console.log('ai_scope: port ' + opts.port + ' is used by another program. Use --port to pick another one.');
       process.exit(1);
     }
     if (state === 'ai_scope') {
-      console.log('AI_SCOPE is already running - opening it in ' + openWindow(url) + '.');
+      console.log('AI_SCOPE is already running - opening it in ' + openWindow(homeUrl(info)) + '.');
       return setTimeout(function () { process.exit(0); }, 300);
     }
     startBackground(opts.flags, opts.logFile);
@@ -109,7 +111,7 @@ function app(opts) {
         console.log('ai_scope: AI_SCOPE did not start' + (s === 'other' ? ' (port ' + opts.port + ' is used by another program)' : '') + '. See ' + opts.logFile);
         process.exit(1);
       }
-      console.log('Opening it in ' + openWindow(url) + '. Stop it with: ai_scope --stop');
+      console.log('Opening it in ' + openWindow(homeUrl(null)) + '. Stop it with: ai_scope --stop');
       setTimeout(function () { process.exit(0); }, 300);
     });
   });

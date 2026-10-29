@@ -18,7 +18,7 @@ const PROC_METRICS = {
     value: (p, c) => p.gpus[c] ? p.gpus[c].vram : 0,
     colTip: 'Memory shared between apps (e.g. window surfaces) counts under each app that uses it, so the rows can add up to more than the card\'s total on the Hardware page.',
     tip: (p, c) => p.gpus[c] && p.gpus[c].shared >= 1048576 ? '+ ' + fmtBytes(p.gpus[c].shared) + ' in shared (system) memory' : '' },
-  shared: { floor: 0.5 * 1073741824, name: 'Top shared GPU memory', col: 'Shared', card: true, min: 0.005 * 1073741824, fmt: gb2,
+  shared: { floor: 0.5 * 1073741824, name: 'Top Shared VRAM', col: 'Shared', card: true, min: 0.005 * 1073741824, fmt: gb2,
     description: 'The 5 processes using the most shared GPU memory (system RAM the graphics card uses when its VRAM is full) on one graphics card. Spill here slows a model down.',
     colTip: 'System RAM used as GPU memory. Windows can report the same shared memory on every card a process uses.',
     value: (p, c) => p.gpus[c] ? p.gpus[c].shared : 0 },

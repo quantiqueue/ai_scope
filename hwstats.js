@@ -9,6 +9,7 @@
 //    counter reading is used as a fallback.
 'use strict';
 const os = require('os');
+const fs = require('fs');                 // /proc/meminfo on Linux (AI_SCOPE-073)
 const execFile = require('child_process').execFile;
 const spawn = require('child_process').spawn;
 const diskstats = require('./diskstats');   // read / write per physical disk (AI_SCOPE-030)
@@ -62,12 +63,16 @@ function allCards() { return nvCards.concat(winCards); }
 // full query fails once we fall back to the basic one for good (temperature then shows n/a).
 const NV_BASIC = 'index,name,utilization.gpu,memory.used,memory.total';
 const NV_FULL = NV_BASIC + ',temperature.gpu,power.draw,power.limit';
-let nvQuery = NV_FULL;
+// PCIe link (AI_SCOPE-065): current vs max negotiated link; extra fields, so the fallback steps down
+// full-pcie -> full -> basic (old drivers may not know the pcie fields).
+const NV_PCIE = NV_FULL + ',pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max';
+let nvQuery = NV_PCIE;
 function readNvidia(cb) {
   const query = nvQuery;
   run('nvidia-smi', ['--query-gpu=' + query, '--format=csv,noheader,nounits'], 5000,
     function (err, out) {
       if (err || !out.trim()) {
+        if (query === NV_PCIE) { nvQuery = NV_FULL; return readNvidia(cb); }
         if (query === NV_FULL) { nvQuery = NV_BASIC; return readNvidia(cb); }
         return cb(null);
       }
@@ -76,7 +81,8 @@ function readNvidia(cb) {
         const used = numOrNull(p[3]), total = numOrNull(p[4]);
         return { id: 'nv' + p[0], name: p[1], vendor: 'NVIDIA', source: 'nvidia', util: numOrNull(p[2]),
                  vramUsed: used == null ? null : used * 1048576, vramTotal: total == null ? null : total * 1048576,
-                 temp: numOrNull(p[5]), power: numOrNull(p[6]), powerLimit: numOrNull(p[7]) };
+                 temp: numOrNull(p[5]), power: numOrNull(p[6]), powerLimit: numOrNull(p[7]),
+                 link: query === NV_PCIE ? { gen: numOrNull(p[8]), genMax: numOrNull(p[9]), width: numOrNull(p[10]), widthMax: numOrNull(p[11]) } : null };
       }).filter(function (c) { return c.name; });
       cb(cards.length ? cards : null);
     });
@@ -245,6 +251,58 @@ const PS_VRAM_TOTAL =
   " Where-Object { $_.'HardwareInformation.qwMemorySize' } |" +
   " ForEach-Object { $_.DriverDesc + '|' + $_.'HardwareInformation.qwMemorySize' }";
 
+// ---- PCIe bus traffic (AI_SCOPE-065): one persistent 'nvidia-smi dmon -s t' stream ----
+// RX / TX MB/s per NVIDIA card; a long-running process like the Windows counter loop (spawning
+// per poll would cost). Latest block kept; values merge into the next 2 s sample.
+// AI_SCOPE-071: give up after PCIE_MAX_BAD starts in a row that deliver no data - older drivers / WSL
+// nvidia-smi print usage and exit 0, which used to restart the stream every 5 s forever; the exit hook
+// is registered once and kills whatever stream is current (per-restart hooks piled listeners up until
+// Node warned); and pcieLatest is cleared when a stream stops, so a dead stream never keeps painting
+// its last reading. A stream that delivers data again resets the failure count.
+let pcieLatest = {};   // device index ('0', '1') -> { rx, tx } MB/s
+let pcieProc = null;   // the current stream process (null = none running)
+let pcieBad = 0;       // consecutive starts that exited without delivering a data line
+let pcieGaveUp = false;
+let pcieExitHooked = false;
+const PCIE_MAX_BAD = 4;
+function pcieFail() {
+  if (pcieGaveUp) return;
+  pcieBad++;
+  if (pcieBad >= PCIE_MAX_BAD) {
+    pcieGaveUp = true; pcieLatest = {};
+    console.log('[hwstats] PCIe stream died ' + pcieBad + ' times in a row - giving up (this driver\'s nvidia-smi may not support dmon); traffic stays n/a');
+    return;
+  }
+  setTimeout(startPcie, 5000);
+}
+function startPcie() {
+  if (pcieGaveUp) return;
+  let buf = '';
+  let ps;
+  try { ps = spawn('nvidia-smi', ['dmon', '-s', 't'], { windowsHide: true }); } catch (e) { pcieFail(); return; }   // 1 s default delay; Windows calls it -d/--delay, Linux --sleep - pass neither
+  ps.on('error', function () {});
+  ps.on('exit', function () {
+    if (pcieProc === ps) { pcieProc = null; pcieLatest = {}; }   // 071: stream stopped - drop its last reading (tile shows detecting / n/a, not frozen numbers)
+    pcieFail();
+  });
+  ps.stdout.on('data', function (d) {
+    buf += d;
+    const lines = buf.split(/\r?\n/);
+    buf = lines.pop();
+    lines.forEach(function (l) {
+      const p = l.trim().split(/\s+/);
+      if (p.length !== 3) return;   // data lines are '<idx> <rx> <tx>'; header lines have 4+ tokens
+      const rx = numOrNull(p[1]), tx = numOrNull(p[2]);
+      if (p[0].match(/^\d+$/) && rx != null && tx != null) { pcieLatest[p[0]] = { rx: rx, tx: tx }; pcieBad = 0; }   // data flowing - the stream works, forget earlier failures
+    });
+  });
+  if (!pcieExitHooked) {   // 071: one exit hook for all time - it kills the CURRENT stream, not a captured one
+    pcieExitHooked = true;
+    process.on('exit', function () { if (pcieProc) { try { pcieProc.kill(); } catch (e) {} } });
+  }
+  pcieProc = ps;
+}
+
 function setMode() {
   gpuMode = nvCards.length && winCards.length ? 'mixed' : nvCards.length ? 'nvidia' : winCards.length ? 'windows' : 'none';
 }
@@ -262,6 +320,7 @@ function detectGpu(cb) {
   const forceWin = String(process.env.AI_SCOPE_GPU_SOURCE || '').toLowerCase() === 'windows';
   const afterNvidia = function (nv) {
     nvCards = nv || [];
+    if (nvCards.length) startPcie();   // PCIe traffic stream (AI_SCOPE-065)
     if (process.platform !== 'win32') { setMode(); return cb(); }
     readDxgi(function (adapters) {
       if (adapters) {
@@ -305,7 +364,7 @@ function pollGpu() {
     // Keep the card list stable; update readings by id.
     cards.forEach(function (c) {
       const old = nvCards.filter(function (o) { return o.id === c.id; })[0];
-      if (old) { old.util = c.util; old.vramUsed = c.vramUsed; old.vramTotal = c.vramTotal; old.temp = c.temp; old.power = c.power; old.powerLimit = c.powerLimit; }
+      if (old) { old.util = c.util; old.vramUsed = c.vramUsed; old.vramTotal = c.vramTotal; old.temp = c.temp; old.power = c.power; old.powerLimit = c.powerLimit; if (c.link) old.link = c.link; }
     });
   });
 }
@@ -320,15 +379,19 @@ function sample() {
     cpu: cpuPercent(),
     ramUsed: total - free,
     ramTotal: total,
+    commitLimit: commitLimit,   // AI_SCOPE-073/074: RAM + pagefile ceiling for committed memory (null where it has no meaning)
+    commitUsed: commitUsed,     // AI_SCOPE-074: committed in use (same one call, above)
     // Whole-PC GPU numbers (busiest card, VRAM summed over all cards)...
     gpu: has('util') ? Math.max.apply(null, cards.map(function (c) { return c.util || 0; })) : null,
     vramUsed: has('vramUsed') ? sum('vramUsed') : null,
     vramTotal: has('vramTotal') ? sum('vramTotal') : null,
     // ...and per card, in the same order as info.gpus.
     // temp °C, power / powerLimit W: NVIDIA only (null for AMD/Intel - Windows' counters don't report them).
-    gpus: cards.map(function (c) { return { util: c.util, vramUsed: c.vramUsed, vramTotal: c.vramTotal,
+    // pcieRx / pcieTx MB/s: NVIDIA only, from the dmon stream (null until the first block arrives).
+    gpus: cards.map(function (c) { const px = c.source === 'nvidia' ? pcieLatest[c.id.replace(/^nv/, '')] : null; return { util: c.util, vramUsed: c.vramUsed, vramTotal: c.vramTotal,
                                             temp: c.temp == null ? null : c.temp, power: c.power == null ? null : c.power,
-                                            powerLimit: c.powerLimit == null ? null : c.powerLimit }; }),
+                                            powerLimit: c.powerLimit == null ? null : c.powerLimit,
+                                            pcieRx: px ? px.rx : null, pcieTx: px ? px.tx : null }; }),
   };
   // Disks (AI_SCOPE-030): read / write bytes per second and active time % per physical disk; names in info.disks
   const disks = diskstats.get();
@@ -345,10 +408,54 @@ function sample() {
 
 let diskNames = {}, diskOrder = [];
 let started = false;
+
+// ---- Committed memory: what is reserved and the ceiling it must fit in (AI_SCOPE-073 / 074) ----
+// The "Committed" RAM tile needs both numbers, and they come from ONE call.
+// Windows (CIM, locale-free where the \Memory\... counter paths are not): TotalVirtualMemorySize is the commit
+// limit and TotalVirtualMemorySize - FreeVirtualMemory is committed in use - verified on snow against the PDH
+// counters (limit 153,927,544 KB = 157,621,805,056 B = 146.8 GB, i.e. 127.8 GB RAM + a 19 GB pagefile; committed
+// 133.6 GB by both routes). One call costs ~1.8 s of PowerShell startup, so it is read at start and every
+// MEM_LIMIT_EVERY - never per 2 s sample - and a failed read keeps the last good values.
+// Linux: /proc/meminfo (cheap fs read) - CommitLimit is the ceiling, Committed_AS the reservation (an accounting
+// estimate: with default overcommit it can exceed the limit, which the tile shows as a full meter).
+// macOS has no commit-limit concept, so both stay null and the tile says so; 074 also leaves it out of the macOS
+// default layout.
+let commitLimit = null, commitUsed = null;
+const MEM_LIMIT_EVERY = 60000;
+const PS_COMMIT =
+  "$ErrorActionPreference='SilentlyContinue';" +
+  "$o=Get-CimInstance Win32_OperatingSystem;" +
+  "if ($o) { [int64]$o.TotalVirtualMemorySize * 1KB; [int64]$o.FreeVirtualMemory * 1KB }";
+function readCommit() {
+  if (process.platform === 'win32') {
+    try {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_COMMIT],
+        { windowsHide: true, timeout: 10000 }, function (e, out) {
+          if (e) return;                          // keep the last good values
+          const v = String(out).trim().split(/\r?\n/).map(function (s) { return parseInt(s.trim(), 10); });
+          if (v[0] > 0) { commitLimit = v[0]; commitUsed = (v[1] > 0 && v[1] <= v[0]) ? v[0] - v[1] : null; }
+        });
+    } catch (e) { /* the tile then falls back to Usage */ }
+    return;
+  }
+  if (process.platform === 'linux') {
+    let text = '';
+    try { text = fs.readFileSync('/proc/meminfo', 'utf8'); } catch (e) { return; }
+    const kb = function (name) { const m = new RegExp('^' + name + ':\\s+(\\d+)', 'm').exec(text); return m ? +m[1] * 1024 : null; };
+    const total = kb('MemTotal'), cl = kb('CommitLimit');
+    if (total) commitLimit = cl != null ? cl : total + (kb('SwapTotal') || 0);
+    commitUsed = kb('Committed_AS');
+    return;
+  }
+  commitLimit = null; commitUsed = null;    // macOS
+}
+
 function start() {
   if (started) return;
   started = true;
   diskstats.start();
+  readCommit();
+  setInterval(readCommit, MEM_LIMIT_EVERY);
   cpuPercent();
   detectGpu(function () {
     const cards = allCards();
@@ -366,7 +473,7 @@ function getStats() {
       cores: cpus.length,
       gpuName: cards.length ? cards.map(function (c) { return c.name; }).join(' + ') : null,
       gpuSource: gpuMode,
-      gpus: cards.map(function (c) { return { id: c.id, name: c.name, vendor: c.vendor, source: c.source, vramTotal: c.vramTotal }; }),
+      gpus: cards.map(function (c) { return { id: c.id, name: c.name, vendor: c.vendor, source: c.source, vramTotal: c.vramTotal, link: c.link || null }; }),
       disks: diskOrder.map(function (id) { return { id: id, name: diskNames[id] }; }),   // physical disks (AI_SCOPE-030)
       disksSupported: diskstats.supported(),
     },

@@ -5,6 +5,13 @@
 defineSource('bionic', '/api/bionic?limit=100');
 defineSource('bionic.models', '/api/bionic/models', 'bionic');
 
+// ---------- Hardware Mirror Lenses for Bionic (AI_SCOPE-077) ----------
+// The family's first scope outside Strata: bionic.gpu / bionic.ram / bionic.cpu / bionic.io from the shared
+// defineMirror() (web/js/mirror.js) — the rules and states are the family's (072 / 073 / 075 / 076), and the
+// process rule is 049's: Bionic's model runs in a child llama-server.exe under its server port. Tile ids use
+// 'b' prefixes (bgp*/ bram_* / bcpu / bio), so each tile hovers over Bionic's own history.
+const BIONIC_MIRROR = defineMirror({ key: 'bionic', name: 'Bionic', letter: 'b' });
+
 // ---------- Current request ----------
 defineLens({
   id: 'bionic.current', scope: 'bionic', size: 'wide',
@@ -161,4 +168,7 @@ subscribeSource('bionic', (data, err) => {
     (lmApi ? (lmApi.online ? 'connected to ' + lmApi.url + ' (API ' + lmApi.apiVersion + ')' : 'Bionic\'s local server offline') + ' · ' : '') +
     data.rows.length + ' latest requests · updated ' + new Date().toLocaleTimeString() + ' · updates every 2 s';
 });
-defineScopeLayout('bionic', () => layoutOf([{ lens: 'bionic.current', settings: { width: 'full' } }, 'bionic.loaded', 'bionic.requests', 'bionic.installed']));
+// AI_SCOPE-077: the mirror rows (per-card GPU + VRAM pairs, not on macOS; then the bottom row
+// Bionic CPU · Bionic RAM (Working) · Bionic RAM (Committed) · Bionic I/O on every OS) follow the loaded
+// models, exactly like Strata's default (072 / 073 / 075 / 076 rules via mirror.js).
+defineScopeLayout('bionic', () => layoutOf([{ lens: 'bionic.current', settings: { width: 'full' } }, 'bionic.loaded', 'bionic.requests', 'bionic.installed']).concat(BIONIC_MIRROR.layout()));

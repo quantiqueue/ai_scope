@@ -1,20 +1,5 @@
-// AI_SCOPE dashboard - the shell: tabs, theme, Home page, Scopes gallery (install/remove), Stop button, dev reload.
-// Loaded last.
-
-// ---- Stop AI_SCOPE (Scopes page). Only shown when the page is opened on this computer. ----
-fetch('/api/ping', { cache:'no-store' }).then(r => r.json()).then(p => { document.getElementById('stopBtn').hidden = !p.local; }).catch(() => {});
-document.getElementById('stopBtn').addEventListener('click', async () => {
-  if (!confirm('Stop AI_SCOPE?\n\nThe dashboard closes, and the Ollama relay and ComfyUI run history stop recording until you start it again.')) return;
-  try {
-    const r = await fetch('/api/stop', { method:'POST', headers:{ 'X-AI-Scope':'stop' } });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-  } catch (e) { alert('Could not stop AI_SCOPE: ' + e.message); return; }
-  window.aiScopeStopped = true;
-  const d = document.createElement('div');
-  d.className = 'stopped';
-  d.innerHTML = '<div><h2>AI_SCOPE has stopped</h2><p>You can close this window.<br>Start it again from the Start Menu, or with <code>ai_scope --app</code>.</p></div>';
-  document.body.appendChild(d);
-});
+// AI_SCOPE dashboard - the shell: tabs, theme, Home page, Scopes gallery (install/remove), dev reload.
+// Loaded last. Stopping AI_SCOPE lives in the Settings dialog only - the Scopes page has no stop button (user, 2026-10-27).
 
 // ---------- Scopes & tabs ----------
 // The list of scopes comes from scopes.json (see SCOPES at the top). Each installed scope = one tab +
@@ -32,6 +17,13 @@ SCOPES.forEach(ensurePanel);
 
 const DEFAULT_SCOPE = 'bionic';
 const installedIds = () => SCOPES.filter(x => x.installed).map(x => x.id).concat(CUSTOM.map(c => c.id));   // + custom scopes
+// AI_SCOPE-010 (General -> Default Scope): which page a bare address opens ('home' unless a scope is chosen).
+// The value is inlined into the page by the server and refreshed when the setting changes; a removed scope
+// falls back to Home. This is not DEFAULT_SCOPE below, which is the tab shown when a hash names a closed scope.
+function landingScope() {
+  const v = (window.AI_SCOPE_SETTINGS || {}).landing || 'home';
+  return v === 'home' || canOpen(v) ? v : 'home';
+}
 // AI_SCOPE-022: the SYSTEM scope is now "hardware" - rename it in this browser's saved tabs, and follow old #system links.
 ['aiscope.openTabs', 'aiscope.seenScopes'].forEach(k => { const v = store.get(k, null); if (Array.isArray(v) && v.includes('system')) store.set(k, v.map(x => x === 'system' ? 'hardware' : x)); });
 if (location.hash === '#system') history.replaceState(null, '', '#hardware');
@@ -151,7 +143,8 @@ const homeAnim = (function () {
   return { start, stop, setPalette };
 })();
 
-// Theme picker (top-right). Saved per browser; 'default' follows the OS light/dark setting.
+// Theme (AI_SCOPE-010): an app-wide setting shown in the settings dialog - no top-bar menu any more, so the
+// value comes from the server ('default' follows the OS light / dark setting).
 const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo', eva: 'EVA' };
 // Some apps ship a logo for light and one for dark backgrounds (Strata): ask for the one matching the theme.
 let logosReady = false;   // set once the logo checks below have started (renderTabs needs LOGO_OK)
@@ -164,31 +157,24 @@ function logoUrl(id) { return '/api/logo/' + id + (darkTheme() ? '?theme=dark' :
 function applyTheme(t) {
   if (!THEMES[t]) t = 'default';
   if (t === 'default') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
-  store.set('aiscope.theme', t);
-  const tb = document.getElementById('themeBtn');   // icon only; the current theme is in the tooltip and the menu
-  tb.title = 'Theme: ' + THEMES[t]; tb.setAttribute('aria-label', 'Theme: ' + THEMES[t]);
-  document.querySelectorAll('[data-theme-opt]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.themeOpt === t)));
   homeAnim.setPalette(t === 'magenta' || t === 'neo' || t === 'eva' ? t : 'blue');
-  if (logosReady) renderTabs();   // logos that differ for light/dark backgrounds
+  if (logosReady) renderTabs();   // logos that differ for light / dark backgrounds
 }
-if (window.matchMedia) {   // Default theme follows the OS: redraw the logos when it switches light/dark
+if (window.matchMedia) {   // Default theme follows the OS: redraw the logos when it switches light / dark
   const mq = matchMedia('(prefers-color-scheme: dark)');
   const redraw = () => { if (logosReady) renderTabs(); };
   if (mq.addEventListener) mq.addEventListener('change', redraw); else if (mq.addListener) mq.addListener(redraw);
 }
 (function () {
-  const btn = document.getElementById('themeBtn'), menu = document.getElementById('themeMenu');
-  function setOpen(open) { menu.hidden = !open; btn.setAttribute('aria-expanded', String(open)); }
-  btn.addEventListener('click', e => { e.stopPropagation(); setOpen(menu.hidden); });
-  menu.addEventListener('click', e => {
-    const b = e.target.closest('[data-theme-opt]'); if (!b) return;
-    applyTheme(b.dataset.themeOpt); renderTabs(); setOpen(false); btn.focus();
-  });
-  document.addEventListener('click', e => { if (!menu.hidden && !e.target.closest('.themewrap')) setOpen(false); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { setOpen(false); btn.focus(); } });
-  // Default theme follows the OS; re-tint the Hardware tab icon when the OS switches.
+  const fromServer = (window.AI_SCOPE_SETTINGS || {}).theme;
+  // Browsers that used the old top-bar menu move their choice into the setting once (it was per browser before).
+  const old = store.get('aiscope.theme', null);
+  if (old && THEMES[old] && !fromServer) {
+    try { localStorage.removeItem('aiscope.theme'); } catch (e) {}
+    postJson('/api/settings/change', { section: 'appearance', key: 'theme', value: old });
+  }
+  applyTheme(fromServer && THEMES[fromServer] ? fromServer : (old && THEMES[old] ? old : 'default'));
   if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => renderTabs());
-  applyTheme(store.get('aiscope.theme', 'default'));
 })();
 
 function renderTabs() {
@@ -207,9 +193,9 @@ function renderTabs() {
 
 function showTab() {
   let want = location.hash.slice(1);
-  if (!want) {   // plain http://localhost:<port>/ (no hash) lands on Home, like the launchers
-    want = 'home';
-    history.replaceState(null, '', '#home');
+  if (!want) {   // plain http://localhost:<port>/ lands on the Default Scope (AI_SCOPE-010: General -> Default Scope)
+    want = landingScope();
+    history.replaceState(null, '', '#' + want);
   }
   const gallery = want === 'scopes';
   const home = want === 'home';

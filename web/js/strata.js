@@ -161,6 +161,12 @@ defineLens({
   },
 });
 
+// ---------- Hardware Mirror Lenses for Strata (AI_SCOPE-072 / 073 / 075 / 076) ----------
+// The four process tiles (strata.gpu / strata.ram / strata.cpu / strata.io) are the family's first members;
+// since AI_SCOPE-077 they come from defineMirror() in web/js/mirror.js, which every app scope shares. The
+// lens ids and tile ids are unchanged ('s' prefixes), so saved layouts and the hover keep working.
+const STRATA_MIRROR = defineMirror({ key: 'strata', name: 'Strata', letter: 's' });
+
 // ---------- The Strata scope page: header line + its lenses ----------
 subscribeSource('strata', (d, err) => {
   const meta = document.getElementById('sMeta');
@@ -168,4 +174,12 @@ subscribeSource('strata', (d, err) => {
   meta.textContent = (d.online ? 'connected to ' + d.url + (d.version ? ' · Strata ' + d.version : '') + (d.engineVersion ? ' · engine ' + d.engineVersion : '')
     : 'Strata offline') + ' · ' + d.totalRequests + ' requests saved · updates every 2 s';
 });
-defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.loaded', 'strata.requests', 'strata.installed']));
+// AI_SCOPE-072: default gets one row of Strata GPU + VRAM tiles per card after Installed Models; on macOS the
+// tiles stay out of the default (no per-process GPU stats there) but remain addable - they answer
+// "Not available on this system" until 062 changes that.
+// AI_SCOPE-073: a new row at the very bottom, "Strata RAM (Working)" + "Strata RAM (Committed)" - on every OS,
+// since per-process RAM exists on Linux / macOS too. AI_SCOPE-075: "Strata CPU" leads that same row, also on
+// every OS (procstats reports CPU % on Windows, Linux and macOS). AI_SCOPE-076: "Strata I/O" closes that row
+// (the tile answers "Windows only for now" where the counters do not exist).
+// AI_SCOPE-077: the mirror rows come from the shared family helper - same items, same order, same ids.
+defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.loaded', 'strata.requests', 'strata.installed']).concat(STRATA_MIRROR.layout()));

@@ -15,7 +15,12 @@ const hwstats = require('./hwstats');
 const procstats = require('./procstats');   // Strata's model process: VRAM per card, GPU %, CPU, RAM (Windows; AI_SCOPE-051)
 // The engine (python, serve/server.py) listens on the instance's private port (e.g. 18500) and runs the model in a child
 // strata.exe. AI_SCOPE only uses that port to find the process (netstat); it never talks to the key-protected engine.
-const MODEL_PROCS = ['strata.exe'];
+// AI_SCOPE-080: strata-vision.exe joins as a second name, and the watch turns into TREE mode - the 078 capture
+// showed a load starting a launcher python + an engine-manager python (parent of strata.exe AND strata-vision.exe)
+// ~80 s before the runner appears; tree mode counts those workers' real CPU / RAM / I/O through the anchors'
+// ancestry, so the mirror tiles show the load happening instead of sitting at zeros (078: the manager alone ran
+// ~6 % CPU and read hundreds of MB/s before strata.exe existed).
+const MODEL_PROCS = ['strata.exe', 'strata-vision.exe'];
 const paths = require('./paths');                       // data folder: ~/.ai_scope
 
 const DEFAULT_URL = 'http://127.0.0.1:47831';
@@ -119,12 +124,40 @@ function poll() {
     busy = false;
     if (err || !d || !Array.isArray(d.instances)) {
       online = false; native = null;
+      procstats.attest('strata', 'off');   // AI_SCOPE-077 review: offline attestation lets procstats write honest zero history
       lastError = err ? (err.code === 'ECONNREFUSED' ? 'Strata app not running at ' + base : err.message) : 'unexpected answer - is this the Strata app?';
       return;
     }
     online = true; lastError = null; native = d; fetchedAt = Date.now();
     const enginePorts = d.instances.map(function (i) { return +i.port; }).filter(function (p) { return p > 0 && p < 65536; });
-    if (enginePorts.length) procstats.watch('strata', enginePorts, MODEL_PROCS); else procstats.unwatch('strata');
+    // 077 review batch 2: attestation from the app's own API - engine instances loaded => 'live' (a
+    // missed process lookup stays a gap, never zeros); no instances => 'idle' (nothing is loaded, it
+    // genuinely uses nothing - procstats writes zeros, the tile sub reads "No Model Loaded").
+    // AI_SCOPE-080: Strata's instance status words the load window too - 'loading' / 'unloading' / an
+    // error earn their own attestation (and its zero points get marked with them), so the tiles say
+    // "Loading…" / "Unloading…" / "Load failed" instead of a stale "No Model Loaded" or a bare gap.
+    // With the tree watch below, 'loading' zeros only stand until the load's own workers (engine
+    // manager / launcher, anchored by strata-vision.exe) are measurable - usually ~5 s in.
+    let state = 'idle';
+    if (d.instances.length) {
+      state = 'live';
+      for (let i = 0; i < d.instances.length; i++) {
+        const ins = d.instances[i];
+        if (ins.error || ins.status === 'error' || ins.status === 'failed') { state = 'failed'; break; }
+        if (ins.status === 'loading') state = 'loading';
+        else if (ins.status === 'unloading' && state !== 'loading') state = 'unloading';
+      }
+    }
+    procstats.attest('strata', state);
+    // 077 review batch 3: always watch, even with no engine port - during a model LOAD (or unload) the
+    // engine strata.exe is already running hot while the API reports no instance yet and the port is not
+    // LISTENING either. procstats then finds strata.exe by its (app-specific) exe name, so the mirror
+    // tiles show the real load-time I/O / CPU / RAM instead of idle zeros.
+    // AI_SCOPE-080: tree mode extends that to the whole Strata process tree (anchors + descendants +
+    // ancestry) - the 078 capture showed the runner process does not even exist for the first ~80 s of
+    // a load; its parent chain is what works in that window, and it is safe to count because a
+    // strata-named child proves the tree belongs to Strata.
+    procstats.watch('strata', enginePorts, MODEL_PROCS, { tree: true });
     collectRequests(d.instances);
     if ((!logo.light || !logo.dark) && Date.now() - logo.tried > 60000) fetchLogos();
   });
@@ -175,9 +208,16 @@ function getState(limit) {
                 version: null, engineVersion: null, updateNotice: null,
                 current: null, loaded: null, totals: null, average: null, installed: [],
                 totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse() };
-  if (!d) return out;
-  // Strata's model process(es) (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded
+  // Strata's model process(es): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded.
+  // AI_SCOPE-072: processCards (Hardware card names / totals for the tile labels) and processHistory (5 min,
+  // newest last) join the answer, and all of it stays in the payload when Strata itself is offline - the GPU /
+  // VRAM tiles draw their histories right through an "Inactive" stretch. AI_SCOPE-073: the history points also
+  // carry the process's ram / ramPrivate for the Strata RAM lens (per-process RAM exists on macOS / Linux too,
+  // so that lens is not gated on per-process GPU support).
   out.process = procstats.get('strata'); out.processSupported = procstats.supported();
+  out.processHistory = procstats.history('strata');
+  out.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
+  if (!d) return out;
   out.version = d.version || null;
   out.engineVersion = (d.engineInfo && d.engineInfo.version) || (d.engine && d.engine.version) || null;
   out.updateNotice = (d.engine && d.engine.updateNotice) || null;
@@ -242,6 +282,7 @@ function start(settings) {
 function stop() {
   if (timer) { clearInterval(timer); timer = null; }
   procstats.unwatch('strata');
+  procstats.unattest('strata');   // 077 review: an uninstalled scope stops claiming history
   online = false; native = null; lastError = null;
 }
 
