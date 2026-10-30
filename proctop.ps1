@@ -248,7 +248,12 @@ while ($true) {
     # the slice is what is LEFT, capped at 250 ms - a fixed 250 ms slice overshoots by the Windows timer
     # granularity (~15 ms each), and eight of them added ~120-200 ms to the "2 s" period (measured 2026-10-29:
     # median 2196 ms with fixed slices).
-    Start-Sleep -Milliseconds [Math]::Min(250, $rem)
+    # the argument MUST be parenthesised: at argument position PowerShell reads a bare
+    # [Math]::Min(250, ...) as the literal string "[Math]::Min", the binding fails, and with
+    # $ErrorActionPreference = 'SilentlyContinue' (line 23) the failed statement is invisible -
+    # the loop then spins with no wait at all (measured 2026-10-30: 4195 passes / 1812 ms of CPU
+    # for one 1.8 s window, a whole core).
+    Start-Sleep -Milliseconds ([Math]::Min(250, [Math]::Max(1, $rem)))
     $e = Pace
     if ($e -ne $every) {
       $every = $e
