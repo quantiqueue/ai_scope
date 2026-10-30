@@ -29,9 +29,6 @@ function tileValues(s) {
   cards.forEach((g, i) => { v['gpu' + i] = g.util; v['vram' + i] = pct(g.vramUsed, g.vramTotal); v['pow' + i] = pct(g.power, g.powerLimit); });
   return v;
 }
-// AI_SCOPE-092: the series arrives as TIME-MAPPED segments (lens.js sparkSegs), the same painter the mirror
-// family uses - one axis rule for every sparkline in the app.
-function setTile(el, value, big, sub, segs) { sparkTile(el, value, big, sub, segs); }
 
 // GPU temperature on the GPU tile's header (right). Amber from 80 °C, red from 90 °C. Hidden when unknown.
 function setTemp(el, temp) {
@@ -75,7 +72,7 @@ defineLens({
   render(L, d) {
     const s = hwLatest(d); if (!s) return;
     const v = tileValues(s), info = d.info;
-    setTile(L.el.querySelector('.tile'), v.cpu, v.cpu.toFixed(0) + '<small>%</small>', info.cpuModel + ' · ' + info.cores + ' threads', hwSeries(d, 'cpu'));
+    sparkTile(L.el.querySelector('.tile'), v.cpu, v.cpu.toFixed(0) + '<small>%</small>', info.cpuModel + ' · ' + info.cores + ' threads', hwSeries(d, 'cpu'));
   },
 });
 defineLens({
@@ -92,16 +89,16 @@ defineLens({
     if (L.settings.show === 'committed') {
       // Committed (reserved against RAM + pagefile) - the numbers 073 / 074 read in one CIM / meminfo call.
       const lim = s.commitLimit;
-      if (lim == null) { setTile(box, null, NA_HTML, 'Committed memory: not available on this system', []); return; }
+      if (lim == null) { sparkTile(box, null, NA_HTML, 'Committed memory: not available on this system', []); return; }
       const pctC = b => (b != null && lim) ? Math.min(100, 100 * b / lim) : null;
       const val = pctC(s.commitUsed);
-      setTile(box, val, (s.commitUsed != null ? GB(s.commitUsed) + '<small> / ' + GB(lim) + ' GB</small>' : NA_HTML),
+      sparkTile(box, val, (s.commitUsed != null ? GB(s.commitUsed) + '<small> / ' + GB(lim) + ' GB</small>' : NA_HTML),
         (val == null ? 'detecting…' : val.toFixed(0) + '% of commit limit'),
         sparkSegs(hwWin(d), h => h.commitLimit ? pctC(h.commitUsed) : null));   // samples before the field landed stay gaps
       return;
     }
     const v = tileValues(s);
-    setTile(box, v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', hwSeries(d, 'ram'));
+    sparkTile(box, v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', hwSeries(d, 'ram'));
   },
 });
 // One graphics card: GPU usage (with temperature and power), VRAM, or both side by side.
@@ -134,7 +131,7 @@ defineLens({
     // Sub line: card name, then power draw / limit when the card reports it (NVIDIA). Temperature is the badge.
     const extra = [g.power != null ? Math.round(g.power) + (g.powerLimit ? ' / ' + Math.round(g.powerLimit) : '') + ' W' : null].filter(Boolean);
     if (gEl) {
-      setTile(gEl, util, util != null ? util.toFixed(0) + '<small>%</small>' : NA_HTML, [name].concat(extra).join(' · '), hwSeries(d, 'gpu' + i));
+      sparkTile(gEl, util, util != null ? util.toFixed(0) + '<small>%</small>' : NA_HTML, [name].concat(extra).join(' · '), hwSeries(d, 'gpu' + i));
       setTemp(gEl, g.temp);
     }
     if (vEl) {
@@ -143,7 +140,7 @@ defineLens({
         vramBig = GB(g.vramUsed) + (g.vramTotal ? '<small> / ' + GB(g.vramTotal) + ' GB</small>' : '<small> GB</small>');
         vramSub = (vram != null ? vram.toFixed(0) + '% used' : 'total unknown') + (gpus.length > 1 ? ' · ' + name : '');
       }
-      setTile(vEl, vram, vramBig, vramSub, hwSeries(d, 'vram' + i));
+      sparkTile(vEl, vram, vramBig, vramSub, hwSeries(d, 'vram' + i));
     }
   },
 });
@@ -170,7 +167,7 @@ defineLens({
       ? Math.round(g.power) + (g.powerLimit != null ? '<small> / ' + Math.round(g.powerLimit) + ' W</small>' : '<small> W</small>')
       : NA_HTML;
     const sub = g.power != null ? name : name + ' · power not available for this card';
-    setTile(box, tileValues(s)['pow' + i], big, sub, hwSeries(d, 'pow' + i));
+    sparkTile(box, tileValues(s)['pow' + i], big, sub, hwSeries(d, 'pow' + i));
     box.querySelector('.spark').title = g.powerLimit != null ? 'Top of the chart = ' + Math.round(g.powerLimit) + ' W (the card\'s power limit)' : '';
   },
 });

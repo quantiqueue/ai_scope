@@ -29,20 +29,14 @@
 // axis spans the samples actually held: the board is full at any pace, and the line no longer slides leftward
 // between polls. The ring is pruned the same way (lens.js sparkPrune), keeping one sample older than the window so
 // the leftmost segment enters from the edge instead of starting partway in.
-const MWIN = SPARK_WIN;              // five minutes, like the Hardware tiles (072); the one number now lives in lens.js
-function winPts(hist, now) {         // history points inside the window, oldest first (the `now` argument is unused since 092)
-  const t0 = (hist.length ? hist[hist.length - 1].t : (now || Date.now())) - MWIN, out = [];
-  for (let i = hist.length - 1; i >= 0 && out.length < 240; i--) { if (hist[i].t >= t0) out.push(hist[i]); else break; }
-  return out.reverse();
-}
-const xAt = (t, r) => sparkX(t, r);  // 092: span-based - r is sparkRange(pts), the oldest/newest times actually drawn
-// Path segments: one polyline per run of points. 092 replaced the old flat "gap over 6 s" test with a pace-relative one:
-// a line breaks when the wait exceeded 3 x the interval stamped on the sample it was taken at (floor 1.5 s, ceiling 120 s),
-// so a deliberate slowdown (091) is not drawn as a dropout, while a real one still is.
-function segsOf(pts, now, yOf) { return sparkSegs(pts, yOf); }   // 092: one axis rule and one break rule for every lens (the `now` argument is unused)
-const segPath = sparkPath, areaOf = sparkArea;   // 092: the path builders live in lens.js now, shared with the Hardware tiles
-// 092: one tile painter for the whole app (lens.js sparkTile) - the Hardware tiles' setTile() is now the same thing.
-function setTileTime(el, value, big, sub, segs) { sparkTile(el, value, big, sub, segs); }
+// AI_SCOPE-092: the axis, the window, the pace-relative break test, the path builders, the tile painter and the
+// hover all live once in web/js/lens.js - SPARK_WIN, sparkWindow, sparkSegs, sparkPath, sparkTile, sparkHover. The
+// window is sized in TIME but measured from the NEWEST sample rather than from the clock, so the board is full at
+// any pace and the line no longer slides leftward between polls; the rings are pruned by lens.js sparkPrune, keeping
+// one sample older than the window so the leftmost segment enters from the edge instead of partway in. (The first
+// 092 build kept the family's old names - winPts, segsOf, segPath, areaOf, xAt, setTileTime, hoverTime, MWIN - as
+// thin wrappers with "(unused)" apologies; they are gone, and every call site reads the shared names exactly as
+// hardware.js already did. The 240-point safety cap that winPts carried now lives only on the ring, at the append.)
 // The value rule (review batches): the live process sample wins; otherwise the newest point in the window
 // ONLY if it is an attested zero (`attest: 'off' | 'idle'` — the app is gone, or reachable with nothing
 // loaded, and really uses nothing) — those paint as 0 with the state worded in the sub line; a stale real
@@ -53,9 +47,6 @@ function liveOrOff(d, pts) {
   if (last && last.attest) return { p: last, inactive: true, state: last.attest };
   return { p: null, inactive: true, state: null };
 }
-// Time-based hover: the guide and tip sit at the CURSOR time across the span that was drawn, and the nearest sample
-// answers - within about two of its own intervals (never closer than 4 s), else n/a. Axis and readout mean one time.
-function hoverTime(spark, f, guide, tip, pts, now, textOf) { sparkHover(spark, f, guide, tip, pts, textOf); }   // 092: the cursor time comes from the drawn span, the tolerance from the sample's own interval
 
 // One entry per app scope:
 //   key   — the scope id; lens ids become <key>.gpu / .ram / .cpu / .io, so saved layouts address them directly
@@ -120,27 +111,26 @@ function defineMirror(spec) {
       if (box.querySelector('.ltitle').textContent !== label) box.querySelector('.ltitle').textContent = label;
       const card = cards[i] || {}, cardName = card.name || (cards.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
       if (!d.processSupported) {   // macOS has no per-process GPU source (and none is coming without 062); Linux AMD / Intel cards lack it too
-        setTileTime(box, null, NA_HTML, 'Not available on this system', []);
+        sparkTile(box, null, NA_HTML, 'Not available on this system', []);
         return;
       }
-      const now = Date.now(), pts = winPts(hist, now);
+      const pts = sparkWindow(hist);
       const total = card.vramTotal || 0;
       const pct = g => !g ? null : show === 'gpu' ? (g.util == null ? null : g.util) : (total ? 100 * g.vram / total : null);
-      const segs = segsOf(pts, now, h => pct(h.gpus && h.gpus[i]));
+      const segs = sparkSegs(pts, h => pct(h.gpus && h.gpus[i]));
       const c = liveOrOff(d, pts);
       const cur = c.p && c.p.gpus ? c.p.gpus[i] : null;
       const v = pct(cur);
       let big;
       if (show === 'gpu') big = cur && cur.util != null ? Math.round(cur.util) + '<small>%</small>' : NA_HTML;
       else big = cur && cur.vram != null ? GB(cur.vram) + (total ? '<small> / ' + GB(total) + ' GB</small>' : '<small> GB</small>') : NA_HTML;
-      setTileTime(box, v, big, (c.inactive ? stateText(c.state) + ' · ' : '') + cardName, segs);
+      sparkTile(box, v, big, (c.inactive ? stateText(c.state) + ' · ' : '') + cardName, segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'gp', fn: (spark, f, guide, tip) => {   // GPU % or GB of the card total at that time
     const id = spark.closest('[data-tile]').dataset.tile;   // "<p>gp<card>_<show>"
     const rest = id.slice((p + 'gp').length), iCard = parseInt(rest, 10), show = rest.slice(-3);
-    const now = Date.now();
-    hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => {
+    sparkHover(spark, f, guide, tip, sparkWindow(hist), hs => {
       const g = hs.gpus && hs.gpus[iCard], tot = cards[iCard];
       return show === 'gpu'
         ? (g && g.util != null ? g.util.toFixed(0) + '%' : 'n/a')
@@ -179,8 +169,8 @@ function defineMirror(spec) {
       const hs = (hw.history && hw.history[hw.history.length - 1]) || {};
       const limit = committed ? (hs.commitLimit || hs.ramTotal || 0) : (hs.ramTotal || 0);
       const pct2 = b => (b != null && limit) ? Math.min(100, 100 * b / limit) : null;
-      const now = Date.now(), pts = winPts(hist, now);
-      const segs = segsOf(pts, now, h => pct2(h[k2]));
+      const pts = sparkWindow(hist);
+      const segs = sparkSegs(pts, h => pct2(h[k2]));
       const c = liveOrOff(d, pts);
       const cur = c.p ? c.p[k2] : null;
       const v = pct2(cur);
@@ -190,13 +180,12 @@ function defineMirror(spec) {
       const of = committed
         ? (hs.commitLimit ? 'of commit limit' + (SERVER_OS === 'linux' ? ' (RAM + swap)' : '') : 'of RAM (no commit limit here)')
         : 'of system RAM';
-      setTileTime(box, v, big, c.inactive ? stateText(c.state) : (v == null ? 'detecting\u2026' : v.toFixed(0) + '% ' + of), segs);
+      sparkTile(box, v, big, c.inactive ? stateText(c.state) : (v == null ? 'detecting\u2026' : v.toFixed(0) + '% ' + of), segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'ram_', fn: (spark, f, guide, tip) => {   // working / committed GB at that time, against the right ceiling
     const id = spark.closest('[data-tile]').dataset.tile, committed = id === p + 'ram_committed';
-    const now = Date.now();
-    hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => {
+    sparkHover(spark, f, guide, tip, sparkWindow(hist), hs => {
       const b = hs[committed ? 'ramPrivate' : 'ram'];
       const h = hwSampleAt(hs.t);   // 092: the ceiling comes from the Hardware sample nearest the hovered time, not from an index on another axis
       const lim = committed ? (h.commitLimit || h.ramTotal) : h.ramTotal;
@@ -220,17 +209,16 @@ function defineMirror(spec) {
       // Machine line exactly like hardware.cpu (the tile label already says which app this is).
       const hw = (SOURCES.hardware && SOURCES.hardware.data) || {};
       const info = hw.info || {};
-      const now = Date.now(), pts = winPts(hist, now);
-      const segs = segsOf(pts, now, h => h.cpu == null ? null : Math.min(100, h.cpu));
+      const pts = sparkWindow(hist);
+      const segs = sparkSegs(pts, h => h.cpu == null ? null : Math.min(100, h.cpu));
       const c = liveOrOff(d, pts);
       const v = c.p && c.p.cpu != null ? Math.min(100, c.p.cpu) : null;
-      setTileTime(box, v, v == null ? NA_HTML : v.toFixed(0) + '<small>%</small>',
+      sparkTile(box, v, v == null ? NA_HTML : v.toFixed(0) + '<small>%</small>',
         c.inactive ? stateText(c.state) : (info.cpuModel || 'CPU') + ' · ' + (info.cores || '?') + ' threads', segs);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'cpu', fn: (spark, f, guide, tip) => {   // % of all cores at that time
-    const now = Date.now();
-    hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => (hs.cpu != null ? Math.min(100, hs.cpu).toFixed(0) + '%' : 'n/a'));
+    sparkHover(spark, f, guide, tip, sparkWindow(hist), hs => (hs.cpu != null ? Math.min(100, hs.cpu).toFixed(0) + '%' : 'n/a'));
   } });
 
   // ---------- File I/O of the model process (AI_SCOPE-076) ----------
@@ -240,7 +228,7 @@ function defineMirror(spec) {
   // line and the two chart lines always show the split — a read-then-write flow (unpacking a model, a copy)
   // legitimately counts its bytes twice, which the split makes readable. Windows counters only for now.
   const IO_TIP = 'Bytes per second ' + name + "'s model process reads and writes. One count per operation: a flow that reads then writes (unpacking a model, copying) counts those bytes twice. Sockets and pagefile traffic are not included, and this is why a download that is written to disk shows as a write only. Windows counters only.";
-  const ioSegs = (pts, now, field, max) => segsOf(pts, now, h => (h.ioRead == null && h.ioWrite == null) ? null : Math.min(100, 100 * (h[field] || 0) / max));
+  const ioSegs = (pts, field, max) => sparkSegs(pts, h => (h.ioRead == null && h.ioWrite == null) ? null : Math.min(100, 100 * (h[field] || 0) / max));
   defineLens({
     id: key + '.io', scope: key, size: 'tile',
     name: name + ' I/O',
@@ -265,7 +253,7 @@ function defineMirror(spec) {
         el.querySelector('.sub').textContent = 'I/O stats: Windows only for now';
         return;
       }
-      const now = Date.now(), pts = winPts(hist, now);
+      const pts = sparkWindow(hist);
       const c = liveOrOff(d, pts);
       const r = c.p ? c.p.ioRead : null, w = c.p ? c.p.ioWrite : null;
       const tot = r == null && w == null ? null : (r || 0) + (w || 0);
@@ -275,14 +263,13 @@ function defineMirror(spec) {
       el.querySelector('.sub').textContent = c.inactive ? stateText(c.state) + ' · ' + sub : sub;
       el.querySelector('.sub').title = c.inactive ? stateTitle(c.state) : IO_TIP;
       el.querySelector('.meter > div').style.width = (tot == null ? 0 : Math.max(0, Math.min(100, 100 * tot / max))) + '%';
-      el.querySelector('.line:not(.wline)').setAttribute('d', segPath(ioSegs(pts, now, 'ioRead', max)));
-      el.querySelector('.wline').setAttribute('d', segPath(ioSegs(pts, now, 'ioWrite', max)));
+      el.querySelector('.line:not(.wline)').setAttribute('d', sparkPath(ioSegs(pts, 'ioRead', max)));
+      el.querySelector('.wline').setAttribute('d', sparkPath(ioSegs(pts, 'ioWrite', max)));
       el.querySelector('.spark').title = 'Top of the chart = ' + fmtRate(max);
     },
   });
   MIRROR_HOVER.push({ prefix: p + 'io', fn: (spark, f, guide, tip) => {   // read / write at that time, like the Disk tile
-    const now = Date.now();
-    hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => hs.ioRead == null && hs.ioWrite == null ? 'n/a'
+    sparkHover(spark, f, guide, tip, sparkWindow(hist), hs => hs.ioRead == null && hs.ioWrite == null ? 'n/a'
       : 'R ' + fmtRate(hs.ioRead || 0) + ' · W ' + fmtRate(hs.ioWrite || 0));
   } });
 

@@ -65,7 +65,7 @@ function pushHist(key) {
   // 080 review: util defaults to 0 (a family sample with no engine activity on a card uses 0 % of it) - the
   // sample says which cards a process is on; also covers cards the family never touched and the Linux AMD /
   // Intel case, matching get()'s documented rule.
-  h.push({ t: r.at, every: proctop.everyMs(),   // 092: the pace this point was actually sampled at (one shared sampler)
+  h.push({ t: r.at, every: r.every,   // 092: the stamp travels with the sample it was taken from (aggregate() copies it), not from the ambient sampler
     gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util == null ? 0 : g.util } : { vram: 0, util: 0 }; }),
     ram: r.ram, ramPrivate: r.ramPrivate,
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
@@ -319,7 +319,7 @@ function aggregate(sample) {
   armedKeys().forEach(function (k) {
     const fam = fams[k];
     if (!fam || !fam.pids.length) { delete results[k]; return; }
-    const r = { at: sample.at, pids: [], luids: {}, cpu: null, ram: 0, ramPrivate: 0, ioRead: 0, ioWrite: 0, ioSeen: false, privSeen: false };
+    const r = { at: sample.at, every: sample.every || proctop.everyMs(), pids: [], luids: {}, cpu: null, ram: 0, ramPrivate: 0, ioRead: 0, ioWrite: 0, ioSeen: false, privSeen: false };   // 092: the pace rides with the sample it came from (proctop.js stamps it); everyMs() is only the fallback
     fam.pids.forEach(function (x) {
       const row = rows[x.pid];
       if (!row) return;   // gone between re-resolves: no invented numbers, and the tile keeps the family it did find
