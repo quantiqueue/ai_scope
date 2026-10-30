@@ -2,7 +2,16 @@
 // Data: /api/ollama (ollamastats.js; requests are recorded by AI_SCOPE's relay in front of Ollama).
 // Every card/table is a lens (lens.js), so it can also be shown on custom scopes, more than once.
 
-defineSource('ollama', '/api/ollama?limit=100');
+defineSource('ollama', '/api/ollama?limit=100', null, null, null, 'processHistory');   // AI_SCOPE-081 / 084: the mirror history ring goes out as a delta (?since=)
+
+// AI_SCOPE-081: the Hardware Mirror Lens family for Ollama (GPU / RAM Working / RAM Committed / CPU / I/O over
+// Ollama's own processes) comes from the shared defineMirror factory - web/js/mirror.js (077). The watch shape is
+// Bionic's (model runners under the port owner, decision 1A: serve / tray overhead never counted), and the
+// attestation is live / idle / off from /api/ps plus 'loading' only while the relay carries a request for a
+// not-yet-loaded model (decision 2C2) - Ollama's API has no 'unloading' / 'failed' signal, recorded not invented.
+// Tile-id letter 'o' (<letter>gp / <letter>ram_ / <letter>cpu / <letter>io), kept free of 's' (Strata) / 'b'
+// (Bionic) so saved layouts resolve.
+const OLLAMA_MIRROR = defineMirror({ key: 'ollama', name: 'Ollama', letter: 'o' });
 const ollamaProxyUrl = d => 'http://127.0.0.1:' + d.proxy.port;
 // Ollama answered requests that didn't go through the relay (seen by the server: a model loaded or its unload time
 // renewed while the relay was idle). Shown for 15 minutes, or until a request comes through the relay again.
@@ -227,4 +236,4 @@ document.getElementById('oHeadHelpBtn').addEventListener('click', e => {
   box.hidden = !box.hidden;
   e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
 });
-defineScopeLayout('ollama', () => layoutOf([{ lens: 'ollama.current', settings: { width: 'full' } }, 'ollama.loaded', 'ollama.requests', 'ollama.installed']));
+defineScopeLayout('ollama', () => layoutOf([{ lens: 'ollama.current', settings: { width: 'full' } }, 'ollama.loaded', 'ollama.requests', 'ollama.installed']).concat(OLLAMA_MIRROR.layout()));   // AI_SCOPE-081: mirror family tail

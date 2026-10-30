@@ -92,6 +92,7 @@ function poll() {
   getJson('/api/ps', function (err, d) {
     if (err) {
       online = false; loaded = []; prevLoaded = null; lastError = 'Ollama not reachable at ' + OLLAMA_URL + ' (' + err.message + ')';
+      procstats.attest('ollama', 'off');   // AI_SCOPE-081: unreachable attests off, procstats writes the zero heartbeat
       return;
     }
     const wasOffline = !online;
@@ -108,6 +109,14 @@ function poll() {
     });
     if (wasOffline || Date.now() - tagsAt > 30000) refreshTags();
     detectDirectUse();
+    // AI_SCOPE-081: attestation for the Hardware Mirror Lens family (web/js/mirror.js). live / idle / off come
+    // straight from Ollama's own /api/ps answer. 'loading' is the narrow observation (the user's 2C2): an inflight
+    // RELAY request naming a model /api/ps does not list yet - the same check currentRequest() uses for its
+    // "loading model" phase - so it words the load window without inventing an API signal Ollama does not have.
+    // A direct (non-relay) load stays unattested-'live'-until-loaded: 'idle' zeros cover it until /api/ps lists the
+    // model, and Ollama's API offers no 'unloading' / 'failed' to attest (recorded decision, ticket line 11).
+    const cur = currentRequest();
+    procstats.attest('ollama', loaded.length ? 'live' : (cur && cur.phase === 'loading') ? 'loading' : 'idle');
   });
 }
 function detectDirectUse() {
@@ -344,7 +353,10 @@ function average() {
   return { model: model, requests: rs.length, genTps: ms ? tok / (ms / 1000) : null };
 }
 // vram: hwstats.vramInfo() (card sizes); Ollama can split a model across cards.
-function getState(limit, vram) {
+// AI_SCOPE-081: since (AI_SCOPE-084 item 7) sends only processHistory points newer than it - the mirror
+// lenses' client ring asks with &since=, so the 5-min ring never rides the whole payload; stratastats.js
+// (072) is the pattern for the fields.
+function getState(limit, vram, since) {
   return {
     online: online, url: OLLAMA_URL, version: version, error: lastError, proxy: proxy, vramTotal: vram ? vram.largest : null, vramCards: vram ? vram.cards.length : 0,
     loaded: loaded.map(function (l) {
@@ -358,6 +370,10 @@ function getState(limit, vram) {
     current: currentRequest(), average: average(), directUse: directUse,
     // Ollama's model process(es) (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded
     process: online ? procstats.get('ollama') : null, processSupported: procstats.supported(),
+    // AI_SCOPE-081: the Hardware Mirror Lens family (web/js/mirror.js) also needs the 5-minute process history
+    // and the Hardware card names / totals, like stratastats / the /api/bionic route send for Strata / Bionic.
+    processHistory: procstats.history('ollama', since || 0),
+    processCards: hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; }),
     totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),
   };
 }
@@ -382,6 +398,7 @@ function start(settings) {
 function stop() {
   if (timer) { clearInterval(timer); timer = null; }
   procstats.unwatch('ollama');
+  procstats.unattest('ollama');   // AI_SCOPE-081: an uninstalled scope stops claiming history (like strata / bionic)
   if (proxySrv) { try { proxySrv.close(); if (proxySrv.closeAllConnections) proxySrv.closeAllConnections(); } catch (e) {} proxySrv = null; }
   proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null };
   online = false; loaded = []; lastError = null;
