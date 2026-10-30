@@ -87,18 +87,24 @@ function procIconHtml(r) {
 // Kept in this browser from the samples it polls (the server samples only while a Processes lens is on screen anyway):
 // the last 5 minutes of /api/processes samples, oldest first. Filled from the server's own history
 // (/api/processes/history, AI_SCOPE-059) when the page opens or comes back after a gap (tab hidden), then from the polls.
-const PROC_HIST_MS = 5 * 60 * 1000;
-let procHist = [], procHistLoading = false;   // [{ at, procs }]
+const PROC_HIST_MS = SPARK_WIN;                 // 092: one window constant for every sparkline in the app (lens.js)
+const PROC_HIST_MAX = Math.ceil(PROC_HIST_MS / 2000) + 20;   // safety cap only - time decides what is kept
+let procHist = [], procHistLoading = false;     // [{ at, every, procs }] - each sample keeps the pace it was taken at (092)
 function addProcSamples(samples) {
   const seen = new Set(procHist.map(h => h.at));
-  samples.forEach(s => { if (s && s.at && !seen.has(s.at)) { procHist.push({ at: s.at, procs: s.procs }); seen.add(s.at); } });
+  samples.forEach(s => { if (s && s.at && !seen.has(s.at)) { procHist.push({ at: s.at, every: s.every, procs: s.procs }); seen.add(s.at); } });
   procHist.sort((a, b) => a.at - b.at);
-  const last = procHist.length ? procHist[procHist.length - 1].at : 0;
-  while (procHist.length && procHist[0].at < last - PROC_HIST_MS) procHist.shift();
+  sparkPrune(procHist, PROC_HIST_MS);           // 092: prune by TIME (newest minus the window), keeping the one older sample at the left edge
+  if (procHist.length > PROC_HIST_MAX) procHist.splice(0, procHist.length - PROC_HIST_MAX);
 }
 function recordProcSample(d) {
   if (!d || !d.at || d.partial || (procHist.length && procHist[procHist.length - 1].at >= d.at)) return;
-  const gap = !procHist.length || d.at - procHist[procHist.length - 1].at > 2 * (d.every || 5000) + 1000;
+  const prev = procHist.length ? procHist[procHist.length - 1] : null;
+  // 092: the same pace-relative test the chart draws with, but judged by the stamps of the two samples (the old
+  // version read d.every, i.e. the pace right now). A gap that big means samples went missing: refetch what the
+  // server kept (the lines catch up on the next poll).
+  const base = prev ? Math.max(prev.every || 0, d.every || 0) || 5000 : 0;
+  const gap = !prev || d.at - prev.at > Math.min(120000, Math.max(1500, 3 * base));
   addProcSamples([d]);
   if (gap && !procHistLoading) {   // missing samples: fetch what the server kept (the lines catch up on the next poll)
     procHistLoading = true;
@@ -107,9 +113,11 @@ function recordProcSample(d) {
   }
 }
 // A row's value in every kept sample: the same process (per process) or all processes of that exe (per app); null = not running then.
-function rowSeries(r, m, st) {
+// 092: the samples are passed in (a snapshot of the ring at render time) so the drawn values, the axis and the hover
+// all read the same list - including each sample's `every` stamp, which is what decides whether a gap breaks a line.
+function rowSeries(r, m, st, samples) {
   const card = m.card ? st.card : 0, lname = r.name.toLowerCase(), pid = r.pids[0];
-  return procHist.map(h => {
+  return (samples || procHist).map(h => {
     const ps = st.group === 'pid' ? h.procs.filter(p => p.pid === pid && p.name === r.name) : h.procs.filter(p => p.name.toLowerCase() === lname);
     if (!ps.length) return null;
     const v = ps.reduce((a, p) => a + m.value(p, card), 0);
@@ -117,30 +125,32 @@ function rowSeries(r, m, st) {
   });
 }
 // Line scaled to the row's own highest value (+25 % headroom), but at least m.floor (so a process idling at 0.1 % isn't drawn as big swings).
-// x by time, not by sample number: samples are FAST apart while someone looks and SLOW apart otherwise (AI_SCOPE-059).
-function sparkX(times, i) { const t0 = times[0], t1 = times[times.length - 1]; return t1 > t0 ? 100 * (times[i] - t0) / (t1 - t0) : 100; }
-function sparkHtml(series, m, times) {
+// 092: x by time across the samples actually held, drawn with the same helpers every other lens uses - and a line now
+// BREAKS where the wait between two samples exceeded the pace those samples owed, where before it was drawn straight
+// across the hole. (Its own sparkX() is gone: classic scripts share one global lexical scope, and lens.js now owns that name.)
+function sparkHtml(series, m, samples) {
   if (series.filter(v => v != null).length < 2) return '<td class="pspark"></td>';
   const top = Math.max(m.floor, 1.25 * Math.max(...series.filter(v => v != null)));   // headroom: a steady value sits at 80 %, not on the edge
-  const pts = [];
-  series.forEach((v, i) => { if (v != null) pts.push([sparkX(times, i), 100 - 100 * v / top]); });
-  const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
-  return '<td class="pspark"><div class="pspk"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><path class="area" d="' + d +
-    ' L' + pts[pts.length - 1][0].toFixed(1) + ' 100 L' + pts[0][0].toFixed(1) + ' 100 Z"></path><path class="line" d="' + d + '"></path>' +
+  const pts = samples.map((s, i) => ({ t: s.at, every: s.every, v: series[i] }));
+  const segs = sparkSegs(pts, p => (p.v == null ? null : 100 * p.v / top));
+  return '<td class="pspark"><div class="pspk"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><path class="area" d="' + sparkArea(segs) + '"></path><path class="line" d="' + sparkPath(segs) + '"></path>' +
     '<line class="guide" y1="0" y2="100" style="display:none"></line></svg><div class="ptip" hidden></div></div></td>';
 }
-// Hover on a row's line: the value at that time (like the Hardware tiles).
+// Hover on a row's line: the value at that time (like the Hardware tiles). 092: the cursor picks a TIME on the
+// span the row was drawn across, and the nearest sample answers - the same rule as the tiles and the mirrors.
 document.addEventListener('mousemove', e => {
   const box = e.target.closest && e.target.closest('.pspk'); if (!box || !box._series) return;
-  const s = box._series, r = box.getBoundingClientRect(), times = box._times;
-  const fx = 100 * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-  let i = 0;   // the sample nearest the mouse (by time)
-  for (let k = 1; k < s.length; k++) if (Math.abs(sparkX(times, k) - fx) < Math.abs(sparkX(times, i) - fx)) i = k;
-  const x = s.length < 2 ? 100 : sparkX(times, i);
+  const s = box._series, samples = box._samples, r = box.getBoundingClientRect();
+  const rng = sparkRange(samples); if (!rng) return;
+  const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  const tc = rng.t0 + f * (rng.t1 - rng.t0);
+  let i = 0;   // the sample nearest the cursor time
+  for (let k = 1; k < samples.length; k++) if (Math.abs(samples[k].at - tc) < Math.abs(samples[i].at - tc)) i = k;
+  const x = sparkX(samples[i].at, rng);
   const g = box.querySelector('.guide'), tip = box.querySelector('.ptip');
   g.setAttribute('x1', x); g.setAttribute('x2', x); g.style.display = '';
   tip.hidden = false; tip.style.left = x + '%';
-  tip.textContent = (s[i] == null ? 'not running' : box._fmt(s[i])) + ' · ' + new Date(box._times[i]).toLocaleTimeString();
+  tip.textContent = (s[i] == null ? 'not running' : box._fmt(s[i])) + ' · ' + new Date(samples[i].at).toLocaleTimeString();
 });
 document.addEventListener('mouseout', e => {
   const box = e.target.closest && e.target.closest('.pspk');
@@ -169,7 +179,7 @@ Object.keys(PROC_METRICS).forEach(key => {
     id: 'processes.' + key, scope: 'processes', size: 'tile',
     available: () => !procNeeds(key, m) || procHas(procNeeds(key, m)),
     name: m.name, description: m.description, settings,
-    markup: tableLensMarkup({ title: m.name, hint: '', cols: ['Process', '<span title="The last 5 minutes (while this page was open); hover for values">5 min</span>']
+    markup: tableLensMarkup({ title: m.name, hint: '', cols: ['Process', '<span title="The samples held for this row while the page has been open (up to 5 minutes of them, whatever the pace); hover for values">History</span>']
       .concat((m.split ? m.split.map(x => x.col) : [m.col]).map(c => m.colTip ? '<span title="' + escH(m.colTip) + '">' + c + '</span>' : c)), foot: '' }),
     init(L) { L.el.classList.add('ptop'); if (m.split) L.el.classList.add('psplit'); },
     render(L, d) {
@@ -192,17 +202,18 @@ Object.keys(PROC_METRICS).forEach(key => {
         if (!rows.length) msg = m.card ? 'No process is using ' + (gpus.length > 1 ? 'GPU ' + (st.card + 1) : 'the GPU') + ' right now.' : 'Nothing to show yet.';
       }
       // Always TOP_N rows tall (message and blank filler rows count), so lenses side by side keep the same height.
-      const series = rows.map(r => rowSeries(r, m, st)), histTimes = procHist.map(h => h.at);
+      const samples = procHist.slice();   // 092: one snapshot of the ring, shared by the values, the axis and the hover
+      const series = rows.map(r => rowSeries(r, m, st, samples));
       const ncol = m.split ? 2 + m.split.length : 3;
       const valueCells = r => r.parts ? r.parts.map(v => '<td>' + m.fmt(v) + '</td>').join('') : '<td' + (r.tip ? ' title="' + escH(r.tip) + '"' : '') + '>' + m.fmt(r.value) + '</td>';
       const trs = msg ? ['<tr class="pmsg"><td colspan="' + ncol + '">' + msg + '</td></tr>']
-        : rows.map((r, i) => '<tr><td>' + procNameHtml(r, st) + '</td>' + sparkHtml(series[i], m, histTimes) + valueCells(r) + '</tr>');
+        : rows.map((r, i) => '<tr><td>' + procNameHtml(r, st) + '</td>' + sparkHtml(series[i], m, samples) + valueCells(r) + '</tr>');
       while (trs.length < TOP_N) trs.push('<tr class="pfill" aria-hidden="true"><td colspan="' + ncol + '">&nbsp;</td></tr>');
       const html = trs.join('');
       const body = L.$('rows');
       if (body._html !== html) {
         body._html = html; body.innerHTML = html;
-        [...body.rows].forEach((tr, i) => { const box = tr.querySelector('.pspk'); if (box) { box._series = series[i]; box._times = histTimes; box._fmt = m.fmt; } });   // row i = rows[i] (a row without a line has no box)
+        [...body.rows].forEach((tr, i) => { const box = tr.querySelector('.pspk'); if (box) { box._series = series[i]; box._samples = samples; box._fmt = m.fmt; } });   // row i = rows[i] (a row without a line has no box)
       }
     },
   });

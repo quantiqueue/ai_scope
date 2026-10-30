@@ -5,10 +5,12 @@
 // style, 5-minute server-side history from procstats, hover from that history, Width on all, GPU with a card
 // picker, RAM with Show (Working / Committed, each with its own ceiling), CPU with no settings, I/O without a
 // disk picker (one number per process, not per drive) — and no Power / PCIe mirrors, which have no per-process
-// equivalent (see the Terminology section of the v0.4 tasks doc).
-// State rules, revised by 077's REVIEW BATCH (user decisions, 2026-10-28):
-//   - **Time-mapped chart and hover**: points sit at their real times inside the 5-minute window and age out
-//     of the left edge; the "5 min ago → now" axis is honest even when the app stopped producing samples.
+// equivalent. The spec for this family is ~/ai-scope-terminology.md ("Hardware Mirror Lenses"); it moved out of
+// the release docs on 2026-10-29, so the old pointer to "the v0.4 tasks doc" was stale - fixed under 092.
+// State rules, set by 077 REVIEW BATCH (user decisions, 2026-10-28), extended by 080, and re-axied by 092:
+//   - **Time-mapped chart and hover**: x spans the samples actually held - oldest kept to newest - so points age out of
+//     the left edge, the board is full at any pace, and the axis stays honest even when the app stopped producing samples.
+//     Rings are sized in TIME (lens.js SPARK_WIN) plus one older sample at the left edge (092).
 //   - **Stale sample => big value n/a** — no frozen last value ("that represents reality most closely").
 //   - **App attested OFFLINE ('off') or IDLE — its own API says nothing is loaded ('idle') => procstats
 //     writes explicit zero points** ("it really should be 0 when offline because it's offline"; an unloaded
@@ -23,38 +25,24 @@
 // branches read window.STRATA_PROC_HIST by name). The MIRROR_HOVER array itself lives in hardware.js (the
 // hover handler is there, and classic scripts share one global lexical scope); mirror.js only fills it.
 
-const MWIN = 300000;                 // the sparkline window: 5 minutes, like the Hardware tiles (072)
-function winPts(hist, now) {         // history points whose TIME is inside the window, oldest first
-  const t0 = now - MWIN, out = [];
+// AI_SCOPE-092: the window is sized in TIME but measured from the NEWEST sample rather than from the clock, so the
+// axis spans the samples actually held: the board is full at any pace, and the line no longer slides leftward
+// between polls. The ring is pruned the same way (lens.js sparkPrune), keeping one sample older than the window so
+// the leftmost segment enters from the edge instead of starting partway in.
+const MWIN = SPARK_WIN;              // five minutes, like the Hardware tiles (072); the one number now lives in lens.js
+function winPts(hist, now) {         // history points inside the window, oldest first (the `now` argument is unused since 092)
+  const t0 = (hist.length ? hist[hist.length - 1].t : (now || Date.now())) - MWIN, out = [];
   for (let i = hist.length - 1; i >= 0 && out.length < 240; i--) { if (hist[i].t >= t0) out.push(hist[i]); else break; }
   return out.reverse();
 }
-const xAt = (t, now) => 100 * (t - (now - MWIN)) / MWIN;
-// Path segments: one polyline per run of points (gaps over 6 s — the sampler stopped, or a null value —
-// break the line instead of drawing a straight lie across them).
-function segsOf(pts, now, yOf) {
-  const segs = []; let cur = [];
-  for (let i = 0; i < pts.length; i++) {
-    const y = yOf(pts[i]);
-    if (y == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
-    if (cur.length && pts[i].t - pts[i - 1].t > 6000) { segs.push(cur); cur = []; }
-    cur.push([xAt(pts[i].t, now), 100 - Math.max(0, Math.min(100, y))]);   // y is a percent (0-100); the SVG is flipped (0 = top)
-  }
-  if (cur.length) segs.push(cur);
-  return segs;
-}
-const segPath = segs => segs.map(s => s.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join('')).join(' ');
-const areaOf = segs => segs.map(s => segPath([s]) + ' L' + s[s.length - 1][0].toFixed(2) + ' 100 L' + s[0][0].toFixed(2) + ' 100 Z').join(' ');
-// Like hardware.js setTile(), but the series arrives as TIME-MAPPED segments, not index-mapped values.
-function setTileTime(el, value, big, sub, segs) {
-  if (!el) return;
-  el.querySelector('.v').innerHTML = big;
-  el.querySelector('.sub').textContent = sub;
-  el.querySelector('.sub').title = sub;
-  el.querySelector('.meter > div').style.width = (value == null ? 0 : Math.max(0, Math.min(100, value))) + '%';
-  el.querySelector('.line').setAttribute('d', segPath(segs));
-  el.querySelector('.area').setAttribute('d', areaOf(segs));
-}
+const xAt = (t, r) => sparkX(t, r);  // 092: span-based - r is sparkRange(pts), the oldest/newest times actually drawn
+// Path segments: one polyline per run of points. 092 replaced the old flat "gap over 6 s" test with a pace-relative one:
+// a line breaks when the wait exceeded 3 x the interval stamped on the sample it was taken at (floor 1.5 s, ceiling 120 s),
+// so a deliberate slowdown (091) is not drawn as a dropout, while a real one still is.
+function segsOf(pts, now, yOf) { return sparkSegs(pts, yOf); }   // 092: one axis rule and one break rule for every lens (the `now` argument is unused)
+const segPath = sparkPath, areaOf = sparkArea;   // 092: the path builders live in lens.js now, shared with the Hardware tiles
+// 092: one tile painter for the whole app (lens.js sparkTile) - the Hardware tiles' setTile() is now the same thing.
+function setTileTime(el, value, big, sub, segs) { sparkTile(el, value, big, sub, segs); }
 // The value rule (review batches): the live process sample wins; otherwise the newest point in the window
 // ONLY if it is an attested zero (`attest: 'off' | 'idle'` — the app is gone, or reachable with nothing
 // loaded, and really uses nothing) — those paint as 0 with the state worded in the sub line; a stale real
@@ -65,17 +53,9 @@ function liveOrOff(d, pts) {
   if (last && last.attest) return { p: last, inactive: true, state: last.attest };
   return { p: null, inactive: true, state: null };
 }
-// Time-based hover: guide and tip sit at the CURSOR time; the value comes from the nearest point in the
-// window within 4 s, else n/a — axis and readout now mean the same time.
-function hoverTime(spark, f, guide, tip, pts, now, textOf) {
-  const tc = (now - MWIN) + f * MWIN;
-  let best = null;
-  for (let i = 0; i < pts.length; i++) if (!best || Math.abs(pts[i].t - tc) < Math.abs(best.t - tc)) best = pts[i];
-  const x = 100 * f;
-  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
-  tip.hidden = false; tip.style.left = x + '%';
-  tip.textContent = (best && Math.abs(best.t - tc) <= 4000 ? textOf(best) : 'n/a') + ' · ' + new Date(tc).toLocaleTimeString();
-}
+// Time-based hover: the guide and tip sit at the CURSOR time across the span that was drawn, and the nearest sample
+// answers - within about two of its own intervals (never closer than 4 s), else n/a. Axis and readout mean one time.
+function hoverTime(spark, f, guide, tip, pts, now, textOf) { sparkHover(spark, f, guide, tip, pts, textOf); }   // 092: the cursor time comes from the drawn span, the tolerance from the sample's own interval
 
 // One entry per app scope:
 //   key   — the scope id; lens ids become <key>.gpu / .ram / .cpu / .io, so saved layouts address them directly
@@ -99,8 +79,8 @@ function defineMirror(spec) {
     if (add.length) {
       const last = hist.length ? hist[hist.length - 1].t : 0;
       for (const p of add) if (p && p.t > last) hist.push(p);
-      const cut = Date.now() - MWIN;
-      while (hist.length && (hist[0].t < cut || hist.length > 240)) hist.shift();
+      sparkPrune(hist);                                          // 092: sized in TIME from the newest point, keeping the one sample older so the line enters from the edge
+      if (hist.length > 240) hist.splice(0, hist.length - 240);  // a runaway-pace safety cap only, never the trimming rule
     }
     cards.length = 0; (d && d.processCards || []).forEach(c => cards.push(c));
   });
@@ -218,7 +198,7 @@ function defineMirror(spec) {
     const now = Date.now();
     hoverTime(spark, f, guide, tip, winPts(hist, now), now, hs => {
       const b = hs[committed ? 'ramPrivate' : 'ram'];
-      const h = (hwHist && hwHist.length) ? hwHist[Math.max(0, Math.min(hwHist.length - 1, Math.round(f * (hwHist.length - 1))))] : {};
+      const h = hwSampleAt(hs.t);   // 092: the ceiling comes from the Hardware sample nearest the hovered time, not from an index on another axis
       const lim = committed ? (h.commitLimit || h.ramTotal) : h.ramTotal;
       return b != null ? GB(b) + ' GB' + (lim ? ' of ' + GB(lim) + ' GB' : '') : 'n/a';
     });
@@ -274,7 +254,7 @@ function defineMirror(spec) {
       <div class="spark"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
         <path class="line"></path><path class="line wline"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
         <div class="tip" hidden></div></div>
-      <div class="spark-axis"><span>5 min ago</span><span class="dlegend"><i class="rd"></i>read <i class="wr"></i>write</span><span>now</span></div>
+      <div class="spark-axis"><span></span><span class="dlegend"><i class="rd"></i>read <i class="wr"></i>write</span><span>now</span></div>
     </div></div>`,
     render(L, d) {
       const box = L.el.querySelector('[data-tile="' + p + 'io"]'); if (!box) return;

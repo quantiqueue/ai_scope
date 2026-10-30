@@ -23,7 +23,8 @@ let fastMs = FAST_MS;            // AI_SCOPE-010: the settings' "Process Refresh
 const SLOW_MS = 30000;           // while nobody looks: keeps the query open (no cold start) and a coarse history
 const IDLE_MS = 30000;           // back to SLOW_MS this long after the last look
 const STALE_MS = 3 * SLOW_MS;    // a sample this old is not shown (the sampler is gone or stuck)
-const HIST_MS = 5 * 60 * 1000;   // samples kept for the lenses' 5-minute lines
+const HIST_MS = 5 * 60 * 1000;   // samples kept for the lenses' 5-minute lines (AI_SCOPE-092: sized in TIME; HIST_MAX below is only a safety cap)
+const HIST_MAX = Math.ceil(HIST_MS / 2000) + 20;   // the most samples that can fit in the window at the fastest legal pace (2 s), plus slack
 // How often to sample, read by proctop.ps1 every 250 ms (a faster pace wakes it at once).
 const CTL_FILE = path.join(os.tmpdir(), 'ai_scope-proctop-ctl-' + process.pid + '.txt');
 const PS_FILE = path.join(__dirname, 'proctop.ps1');
@@ -78,10 +79,11 @@ function handleBlock(lines) {
   Object.keys(pidPath).forEach(function (pid) { if (!byPid[pid]) delete pidPath[pid]; });   // gone
   if (startup && partial && !startup.partialAt) startup.partialAt = Date.now();
   if (startup && !partial && !startup.fullAt) startup.fullAt = Date.now();
-  latest = { at: Date.now(), partial: partial, procs: Object.keys(byPid).map(function (k) { return byPid[k]; }).filter(function (r) { return r.pid > 0; }) };
+  latest = { at: Date.now(), every: every, partial: partial, procs: Object.keys(byPid).map(function (k) { return byPid[k]; }).filter(function (r) { return r.pid > 0; }) };   // 092: every sample carries the pace it was taken at
   if (!partial) {
     history.push(latest);
-    while (history.length && history[0].at < latest.at - HIST_MS) history.shift();
+    while (history.length > 1 && history[1].at < latest.at - HIST_MS) history.shift();   // 092: prune by TIME, keeping the one sample older than the window
+    if (history.length > HIST_MAX) history.splice(0, history.length - HIST_MAX);         // safety cap only
   }
   // AI_SCOPE-084 (item 3): the app scopes' Hardware Mirror numbers (procstats.js) come from THIS sample rather
   // than a second all-process loop of their own. Subscribers aggregate their own families out of it; a handler
@@ -279,7 +281,7 @@ function get() {
 // when it opens or comes back after a gap. Doesn't count as a look.
 function getHistory() {
   if (!supported()) return { supported: false, samples: [] };
-  return { supported: true, every: every, lastLookAgo: lastLook ? Date.now() - lastLook : null, samples: history.map(function (h) { return { at: h.at, procs: shape(h, false) }; }) };
+  return { supported: true, every: every, lastLookAgo: lastLook ? Date.now() - lastLook : null, samples: history.map(function (h) { return { at: h.at, every: h.every || every, procs: shape(h, false) }; }) };   // 092: each kept sample carries its own pace
 }
 // ms after Node spawned PowerShell: psRunning (script began), firstOutput, partialBlock, fullBlock; and the script's own
 // phase times: types (+ how), counters, collect1, cycle1. null while unknown.
@@ -294,6 +296,7 @@ function startupTimes() {
 function icon(id) { return /^[0-9a-f]{12}$/.test(id) && iconById[id] || null; }
 function supported() { return process.platform === 'win32' || NIX; }
 module.exports = { start: start, get: get, history: getHistory, icon: icon, supported: supported, setFastMs: setFastMs,
+  everyMs: function () { return every; },   // AI_SCOPE-092: the pace the mirror rings stamp their points with
   onSample: onSample, demand: demand, release: release,   // AI_SCOPE-084 item 3: shared samples and the shared pace
   snapshot: function () { return NIX ? nixSnap : null; },   // the procnix snapshot behind the last sample (family resolving)
   _test: { handleBlock: handleBlock, latest: function () { return latest; } } };

@@ -57,6 +57,75 @@ function subscribeSource(id, fn, el) {
   };
 }
 
+// ---------- Sparkline time axis (AI_SCOPE-092: one rule for every lens) ----------
+// x is mapped across the span of the samples actually held - oldest kept to newest - so the board is full whatever
+// the pace is and the line never slides leftward between polls. The right edge is the NEWEST SAMPLE; the tile meta
+// lines print that sample's own clock time, so the age is never hidden. A line BREAKS where the wait between two
+// samples was far longer than the pace owed then, instead of drawing a straight lie across the hole or compressing it.
+// The interval comes from each point's own `every` stamp (the server writes it when the sample is taken) - never
+// from today's setting, or old segments would re-break every time someone changes the pace. Points with no stamp
+// fall back to the series' own typical spacing.
+const SPARK_WIN = 300000;                    // the history a sparkline keeps, sized in TIME (5 minutes), not in samples
+const GAP_MIN_MS = 1500;                     // a jittery fast pace (2.0-2.9 s samples) must never break a line...
+const GAP_MAX_MS = 120000;                   // ...and a stalled or dead sampler must always look like a hole
+const spTime = p => (p && (p.t != null ? p.t : p.at)) || 0;      // hardware / procstats points carry .t, process samples .at
+function sparkPrune(a, winMs) {              // keep everything newer than (newest - window), PLUS the one sample older
+  const w = winMs || SPARK_WIN;              // than that, so the leftmost segment enters from the edge of the board
+  if (!Array.isArray(a)) return [];          // a lens whose source has not answered yet must not take the render down
+  while (a.length > 1 && spTime(a[1]) < spTime(a[a.length - 1]) - w) a.shift();
+  return a;
+}
+function sparkWindow(a, winMs) { return sparkPrune(Array.isArray(a) ? a.slice() : [], winMs); }   // the same slice, without touching the caller's ring
+const sparkRange = a => (a && a.length) ? { t0: spTime(a[0]), t1: spTime(a[a.length - 1]) } : null;
+const sparkX = (t, r) => r.t1 > r.t0 ? 100 * (t - r.t0) / (r.t1 - r.t0) : 100;
+function sparkMed(a) {                        // typical spacing of a series - the fallback when its points carry no stamp
+  const d = []; for (let i = 1; i < a.length; i++) d.push(spTime(a[i]) - spTime(a[i - 1]));
+  if (!d.length) return SPARK_WIN / 150;
+  d.sort((x, y) => x - y); return d[d.length >> 1];
+}
+function sparkBreaks(a, b, med) {             // is the gap between two consecutive samples a hole?
+  const ea = a.every || med, eb = b.every || med;
+  const base = ea !== eb ? Math.max(ea, eb) : ea;   // the pace changed across this boundary: a slowdown that was asked
+  return spTime(b) - spTime(a) > Math.min(GAP_MAX_MS, Math.max(GAP_MIN_MS, 3 * base));   // for (091), not a dropout
+}
+function sparkSegs(pts, yOf) {                // -> one polyline per run of points: [ [x, y], ... ] (y in percent, 0-100)
+  if (!pts || pts.length < 1) return [];
+  const med = sparkMed(pts), r = sparkRange(pts), segs = []; let cur = [];
+  for (let i = 0; i < pts.length; i++) {
+    let y = null; try { y = yOf(pts[i]); } catch (e) { y = null; }
+    if (y == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+    if (cur.length && sparkBreaks(pts[i - 1], pts[i], med)) { segs.push(cur); cur = []; }
+    cur.push([sparkX(spTime(pts[i]), r), 100 - Math.max(0, Math.min(100, y))]);   // the SVG is flipped: 0 = top
+  }
+  if (cur.length) segs.push(cur);
+  return segs;
+}
+const sparkPath = segs => segs.map(s => s.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join('')).join('');
+const sparkArea = segs => segs.filter(s => s.length).map(s => sparkPath([s]) + ' L' + s[s.length - 1][0].toFixed(2) + ' 100 L' + s[0][0].toFixed(2) + ' 100 Z').join('');
+// Draw a tile's value, sub line, meter and time-mapped lines (the one tile painter for Hardware and the mirrors).
+function sparkTile(el, value, big, sub, segs) {
+  if (!el) return;
+  el.querySelector('.v').innerHTML = big;
+  el.querySelector('.sub').textContent = sub;
+  el.querySelector('.sub').title = sub;
+  el.querySelector('.meter > div').style.width = (value == null ? 0 : Math.max(0, Math.min(100, value))) + '%';
+  el.querySelector('.line').setAttribute('d', sparkPath(segs));
+  el.querySelector('.area').setAttribute('d', sparkArea(segs));
+}
+// Hover on a time-mapped line: the guide and tip sit at the CURSOR time; the value comes from the nearest sample
+// in that series, within about two of its own intervals (and never closer than 4 s, never further than 60 s).
+function sparkHover(spark, f, guide, tip, pts, textOf) {
+  const r = sparkRange(pts); if (!r) return;
+  const tc = r.t0 + f * (r.t1 - r.t0);
+  let best = null;
+  for (let i = 0; i < pts.length; i++) if (!best || Math.abs(spTime(pts[i]) - tc) < Math.abs(spTime(best) - tc)) best = pts[i];
+  const tol = best ? Math.min(60000, Math.max(4000, 2 * (best.every || sparkMed(pts)))) : 4000;
+  const x = 100 * f;
+  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
+  tip.hidden = false; tip.style.left = x + '%';
+  tip.textContent = (best && Math.abs(spTime(best) - tc) <= tol ? textOf(best) : 'n/a') + ' · ' + new Date(tc).toLocaleTimeString();
+}
+
 // ---------- Lens definitions ----------
 // def: { id ('strata.requests'), scope, source (default: the scope's own), name, description,
 //        size ('tile' | 'wide' | 'full', or a function of the settings),

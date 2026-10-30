@@ -15,7 +15,11 @@ const spawn = require('child_process').spawn;
 const diskstats = require('./diskstats');   // read / write per physical disk (AI_SCOPE-030)
 
 const INTERVAL_MS = 2000;
-const HISTORY = 150; // 150 x 2 s = 5 minutes
+// AI_SCOPE-092: the history is sized in TIME, not in samples - HISTORY is only a safety cap. The ring keeps
+// everything newer than (newest sample - HW_WINDOW) plus the ONE sample older than that, so a sparkline's leftmost
+// segment enters from the edge of the board instead of starting partway in.
+const HW_WINDOW = 300000;                                    // five minutes of Hardware history
+const HISTORY = Math.ceil(HW_WINDOW / INTERVAL_MS) + 20;     // safety cap (150 + slack at the 2 s pace), not the trim rule
 const GIB = 1073741824;
 const NVIDIA = 0x10de, MICROSOFT = 0x1414;
 
@@ -400,8 +404,10 @@ function sample() {
     diskNames = {}; disks.forEach(function (d) { diskNames[d.id] = d.name; }); diskOrder = disks.map(function (d) { return d.id; });
   }
   if (s.cpu != null) {
+    s.every = INTERVAL_MS;   // AI_SCOPE-092: stamp the interval this sample was OWED at, so a chart judges a gap by the pace that applied then, never by today's setting
     history.push(s);
-    if (history.length > HISTORY) history.shift();
+    while (history.length > 1 && history[1].t < s.t - HW_WINDOW) history.shift();   // 092: prune by time, keeping one older sample at the left edge
+    if (history.length > HISTORY) history.splice(0, history.length - HISTORY);      // safety cap only
   }
   pollGpu(); // async; result lands in the next sample
 }

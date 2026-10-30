@@ -39,8 +39,21 @@ const results = {};     // key -> { at, pids, luids: { luid: { vram, shared, uti
 // AI_SCOPE-073: each point also carries the process's ram / ramPrivate (bytes, whole family), for the RAM lens,
 // and AI_SCOPE-075 adds `cpu` (% of the whole CPU, same clamp as get()). AI_SCOPE-076 adds ioRead / ioWrite
 // (file I/O bytes/sec; not filled on macOS, so they are null there).
-const HIST = 150;
-const hist = {};        // key -> [{ t, gpus: [{ vram, util }], ram, ramPrivate, cpu, ioRead, ioWrite }]
+// AI_SCOPE-092: the ring is sized in TIME - PS_WINDOW is the five-minute window every sparkline draws, and HIST is
+// only a safety cap. A 150-point cap is a count, so at a 30 s pace it would quietly hold 75 minutes while every
+// chart window says five (the catch 089 flagged). Each point also carries `every`: the pace that produced it, so a
+// chart judges a gap by the pace of that moment and never by today's setting.
+const PS_WINDOW = 300000;
+const HIST = Math.ceil(PS_WINDOW / 2000) + 20;
+const hist = {};        // key -> [{ t, every, gpus: [{ vram, util }], ram, ramPrivate, cpu, ioRead, ioWrite }]
+// The 092 trim, used by both writers (the sampler's real points and the zero heartbeat): keep everything newer
+// than (newest - PS_WINDOW) plus the ONE sample older, so a chart's leftmost segment enters from the edge.
+function pruneRing(h) {
+  const last = h.length ? h[h.length - 1].t : 0;
+  while (h.length > 1 && h[1].t < last - PS_WINDOW) h.shift();
+  if (h.length > HIST) h.splice(0, h.length - HIST);
+  return h;
+}
 function pushHist(key) {
   const r = results[key];
   if (!r) return;
@@ -52,11 +65,12 @@ function pushHist(key) {
   // 080 review: util defaults to 0 (a family sample with no engine activity on a card uses 0 % of it) - the
   // sample says which cards a process is on; also covers cards the family never touched and the Linux AMD /
   // Intel case, matching get()'s documented rule.
-  h.push({ t: r.at, gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util == null ? 0 : g.util } : { vram: 0, util: 0 }; }),
+  h.push({ t: r.at, every: proctop.everyMs(),   // 092: the pace this point was actually sampled at (one shared sampler)
+    gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util == null ? 0 : g.util } : { vram: 0, util: 0 }; }),
     ram: r.ram, ramPrivate: r.ramPrivate,
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
     ioRead: r.ioSeen ? r.ioRead || 0 : null, ioWrite: r.ioSeen ? r.ioWrite || 0 : null });   // AI_SCOPE-076
-  if (h.length > HIST) h.shift();
+  pruneRing(h);   // 092: sized in time (plus one older sample at the edge), HIST is only the safety cap
 }
 
 // AI_SCOPE-077 (review batch): an offline app really uses nothing, so the mirror tiles should read 0 rather
@@ -100,9 +114,10 @@ function zeroTick() {
     const h = hist[k] || (hist[k] = []);
     const last = h[h.length - 1];
     if (last && last.attest && now - last.t < ZERO_EVERY - 500) return;   // don't stack two zeros in one tick
-    h.push({ t: now, attest: attested[k], gpus: luids.map(function () { return { vram: 0, util: 0 }; }),
+    h.push({ t: now, attest: attested[k], every: ZERO_EVERY,   // 092: the heartbeat's own interval, stamped like a real point's
+      gpus: luids.map(function () { return { vram: 0, util: 0 }; }),
       ram: 0, ramPrivate: 0, cpu: 0, ioRead: win ? 0 : null, ioWrite: win ? 0 : null });
-    if (h.length > HIST) h.shift();
+    pruneRing(h);   // 092: same time-sized ring as the sampler's real points
   });
   if (!waiting && zeroTimer) { clearInterval(zeroTimer); zeroTimer = null; }
 }
