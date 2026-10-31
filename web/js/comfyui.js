@@ -6,7 +6,19 @@ function imgUrl(im, full) {
   return '/api/comfy/view?filename=' + encodeURIComponent(im.filename) + '&subfolder=' + encodeURIComponent(im.subfolder) +
          '&type=' + encodeURIComponent(im.type) + (full ? '&full=1' : '');
 }
-defineSource('comfyui', '/api/comfy?limit=100');
+defineSource('comfyui', '/api/comfy?limit=100', null, null, null, 'processHistory');   // AI_SCOPE-083 / 084: the mirror history ring goes out as a delta (?since=)
+
+// AI_SCOPE-083: the Hardware Mirror Lens family for ComfyUI (GPU / RAM Working / RAM Committed / CPU / I/O over
+// ComfyUI's own processes) comes from the shared defineMirror factory - web/js/mirror.js (077). Decision 1A: the
+// watch is the aggregate the scope already runs - the python.exe owner of the detected port (8188 / 8000) plus its
+// whole descendant tree. The VRAM holder is the owner; custom-node subprocesses ride along; a python.exe under
+// another port can never be claimed here, because only the netstat owner of ComfyUI's own port roots the family
+// (077 batch 3's generic-runner rule). Decision 2A: attestation is live / off only - an idle ComfyUI keeps its
+// last checkpoint resident in VRAM, so the family's 'idle' attestation (heartbeat zeros) would paint a false 0
+// over a real holding; 'loading' sits inside an already-live running job, and 'unloading' / 'failed' have no
+// honest signal - all recorded absent, not invented. Tile-id letter 'c', distinct from 's' / 'b' / 'o' / 'l' so
+// saved layouts resolve.
+const COMFYUI_MIRROR = defineMirror({ key: 'comfyui', name: 'ComfyUI', letter: 'c' });
 defineSource('comfyui.models', '/api/comfy/models', 'comfyui', 5000);
 
 // ---------- Current job ----------
@@ -161,4 +173,4 @@ subscribeSource('comfyui', (d, err) => {
   if (err) { meta.textContent = 'Could not reach AI_SCOPE server: ' + err.message; return; }
   meta.textContent = (d.online ? 'connected to ' + d.url : 'ComfyUI offline') + ' · ' + d.totalRuns + ' runs saved · updates every 2 s';
 });
-defineScopeLayout('comfyui', () => layoutOf([{ lens: 'comfyui.current', settings: { width: 'full' } }, 'comfyui.runs', 'comfyui.installed']));
+defineScopeLayout('comfyui', () => layoutOf([{ lens: 'comfyui.current', settings: { width: 'full' } }, 'comfyui.runs', 'comfyui.installed']).concat(COMFYUI_MIRROR.layout()));   // AI_SCOPE-083: mirror family tail

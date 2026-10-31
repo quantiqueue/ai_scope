@@ -243,8 +243,10 @@ http.createServer((req, res) => {
   if (owner && !scopes.isInstalled(owner[1])) return sendJson(res, 404, { error: 'Scope not installed: ' + owner[1] });
   if (url.pathname === '/api/comfy') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    // AI_SCOPE-083: ComfyUI's mirror lenses ride the 084 delta (see /api/ollama) - &since=<t> sends only newer points.
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(comfystats.getState(limit)));
+    return res.end(JSON.stringify(comfystats.getState(limit, since)));
   }
   if (url.pathname === '/api/comfy/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
