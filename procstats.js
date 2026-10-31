@@ -95,9 +95,10 @@ const attested = {};    // key -> 'live' | 'idle' | 'off' | 'loading' | 'unloadi
 // AI_SCOPE-084 (item 2 of the user's kickoff notes, 2026-10-29): an attestation that says "this app is using
 // nothing" also says "nothing to measure", so the app stops being resolved at all and the sampler work for it
 // stops. The zero heartbeat above already writes the points for 'idle' / 'off' / 'loading' / 'unloading' /
-// 'failed', so the tiles keep their wording and their zeros with no sampling. A key nobody attests (ComfyUI,
-// Ollama, llama.cpp today) keeps being watched exactly as before. The app modules keep calling watch() every
-// poll, so arming again - the first moment of a load - is immediate, and the pace is asked back at once.
+// 'failed', so the tiles keep their wording and their zeros with no sampling. A key nobody attests keeps being
+// watched exactly as before - ComfyUI today; Ollama attests since 081 and llama.cpp since 082. The app modules
+// keep calling watch() every poll, so arming again - the first moment of a load - is immediate, and the pace is
+// asked back at once.
 const WATCH_STATES = { live: 1, loading: 1, unloading: 1 };
 function armed(key) { const s = attested[key]; return s === undefined ? true : !!WATCH_STATES[s]; }
 function armedKeys() { return Object.keys(watches).filter(function (k) { return armed(k); }); }
@@ -137,11 +138,12 @@ function refreshWatch(key) {
 }
 // Ask proctop for its fastest honest pace while anything actually needs numbers, and release it when nothing does
 // (084: one sampler, one rate - the Processes lenses ride the same period rather than a separate display cadence).
-// AI_SCOPE-091: "armed" is not the same as "needs numbers". A scope that never attests a state (ComfyUI, Ollama,
-// llama.cpp today) is armed by definition, and armed-but-absent apps were holding the one shared sampler at 2 s
-// around the clock - ~5.5 % of a core instead of the 0.7 % of the 30 s idle pace - and overriding Settings →
-// Engine → Process Refresh Rate for anyone who chose a slower rate. The demand now follows what exists:
-// an app that reported live / loading / unloading, a family we actually found, or a watched port seen listening.
+// AI_SCOPE-091: "armed" is not the same as "needs numbers". A scope that never attests a state (ComfyUI still;
+// Ollama and llama.cpp attest since 081 and 082) is armed by definition, and armed-but-absent apps were holding
+// the one shared sampler at 2 s around the clock - ~5.5 % of a core instead of the 0.7 % of the 30 s idle pace -
+// and overriding Settings → Engine → Process Refresh Rate for anyone who chose a slower rate. The demand now
+// follows what exists: an app that reported live / loading / unloading, a family we actually found, or a watched
+// port seen listening.
 function needsFastPace() {
   return armedKeys().some(function (k) {
     const s = attested[k];
