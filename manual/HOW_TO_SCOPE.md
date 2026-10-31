@@ -10,14 +10,14 @@ Back to the [README](../README.md) · [Manual](README.md)
 | **Processes** (built in) | Your AI apps' own VRAM, GPU, CPU and RAM (AI processes), and the top 5 processes by CPU, RAM, I/O (read / write), and per graphics card GPU, VRAM and shared GPU memory, each with a 5-minute line per process |
 | **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit |
 | **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit |
-| **ComfyUI** | Current job (step progress, speed, time left), run history with thumbnails, installed models (filter by type) |
+| **ComfyUI** | Current run (step progress, speed, time left), run history with thumbnails, installed models (filter by type) |
 | **Strata** | Current request (reading / thinking / answering, tok/s, prompt and context fill), loaded model (experts in VRAM, speculation), request history (reused prompt tokens, hit rate), installed models with Strata's own fit verdict |
 | **llama.cpp** | A llama.cpp server (`llama serve` or `llama-server`): current request (tok/s, tokens, prompt, context), loaded models (quantization, size, context, slots, VRAM per card), installed models (a router's models folder), slots (busy / idle, context used), request history (estimated from the server's slots) |
-| **Custom** | A custom scope is your own page made of lenses from any installed scope, e.g. ComfyUI's current job next to Strata's current request and your GPU tiles. |
+| **Custom** | A custom scope is your own page made of lenses from any installed scope, e.g. ComfyUI's current run next to Strata's current request and your GPU tiles. |
 
 - Click **+** to open the Scopes page. It has three sections: **Installable scopes** (install, settings, remove), **Built-in scopes** (Hardware, Processes) and **Custom scopes**. Click **Install** on a scope, check its settings (e.g. Bionic's data folder) and its tab is added. **Remove** takes the tab away and stops that scope; **Settings** changes an installed scope's settings. Click a scope to reopen a closed tab.
 - Drag tabs to reorder them; close a tab with its **×**. Each browser remembers its own tabs and order.
-- **While something runs**, each *Current request / Current job* card says what it's doing ("Running — reading prompt", "Running — sampling (+2 queued)") and shows a **System load** row (whole-computer GPU, VRAM, CPU and RAM). Where AI_SCOPE can find the app's own process, ComfyUI's *Current job* card shows a **ComfyUI process** row instead, and the Bionic, Ollama, Strata and llama.cpp *Current request* cards a **Bionic / Ollama / Strata / llama.cpp process** row: the GPU %, VRAM (per card), CPU and RAM used by the app's own process (for these, the process that runs the model: llama-server for Bionic and Ollama, strata.exe for Strata, llama.exe or llama-server.exe for llama.cpp). GPU and VRAM per process come from Windows' GPU performance counters, or on Linux from `nvidia-smi` (NVIDIA cards); macOS shows CPU and RAM only. On Linux and macOS an app running as another user (e.g. Ollama's Linux service) is found by its process name. Their *Loaded in memory* / *Loaded model* tables also show how much of the model sits on each graphics card. When idle it tells you the next step ("Load a model in Strata to see live stats.").
+- **While something runs**, each *Current request / Current run* card says what it's doing ("Running — reading prompt", "Running — sampling (+2 queued)") and shows a **System load** row (whole-computer GPU, VRAM, CPU and RAM). Where AI_SCOPE can find the app's own process, ComfyUI's *Current run* card shows a **ComfyUI process** row instead, and the Bionic, Ollama, Strata and llama.cpp *Current request* cards a **Bionic / Ollama / Strata / llama.cpp process** row: the GPU %, VRAM (per card), CPU and RAM used by the app's own process (for these, the process that runs the model: llama-server for Bionic and Ollama, strata.exe for Strata, llama.exe or llama-server.exe for llama.cpp). GPU and VRAM per process come from Windows' GPU performance counters, or on Linux from `nvidia-smi` (NVIDIA cards); macOS shows CPU and RAM only. On Linux and macOS an app running as another user (e.g. Ollama's Linux service) is found by its process name. Their *Loaded in memory* / *Loaded model* tables also show how much of the model sits on each graphics card. When idle it tells you the next step ("Load a model in Strata to see live stats.").
 - The request and run tables have a **Peak load** column: the highest GPU % and VRAM while each one ran (hover for CPU and RAM too).
 - On the **Bionic and Strata pages**, the same measurements also appear as **their own Hardware tiles** — GPU / VRAM / RAM / CPU / I/O for that app's processes, laid out like the Hardware scope's (see [App Hardware tiles](#app-hardware-tiles-hardware-mirror-lenses)).
 - Model and publisher names link to their Hugging Face / Ollama / LM Studio catalog pages (opens a new tab).
@@ -46,7 +46,7 @@ The cog shows in edit mode, in each lens's edit bar. Every lens has:
 Some lenses also have:
 
 - **Rows per page** (request, run and installed-model tables; default 5).
-- **Show process stats** (the *Current request* / *Current job* cards): the app's process row, or System load (on by default).
+- **Show process stats** (the *Current request* / *Current run* cards): the app's process row, or System load (on by default).
 - Their own settings, e.g. the Hardware GPU lens's card and GPU usage / VRAM / both, the Disk tile's disk, the Processes lenses' rows (per app or per process), graphics card and dwm.exe (see [Processes scope](#processes-scope)), and an app's Hardware tiles — the GPU tile's graphics card and GPU usage / VRAM, the RAM tile's Working / Committed (see [App Hardware tiles](#app-hardware-tiles-hardware-mirror-lenses)).
 
 The change is saved with the page when you save.
@@ -62,7 +62,7 @@ The **Bionic** and **Strata** pages carry a set of tiles that mirror the Hardwar
 - These can differ from the **Hardware** scope by design: one measures the app, the other the whole card.
 - The sub line says what the app is doing: "**Bionic Offline**", "**No Model Loaded**", "**Loading…**", "**Unloading…**", "**Load failed**" — during a load the tiles read 0 until the load's own processes are measurable, and an old sample shows the big number as **n/a** rather than a frozen last value. Hovering a tile's line shows both the app's and the Hardware scope's value at that time.
 - Cog settings: the GPU tile's **Graphics card** and **Show** (GPU usage / VRAM), the RAM tile's **Show** (Working / Committed). Committed compares the app's committed memory against the PC's commit ceiling (the same ceiling the Hardware RAM tile can show), which is what runs out when a model won't fit — not free RAM.
-- **Power and PCIe are not mirrored**: those are measurements of the card, not of a process. Other app scopes (Ollama, ComfyUI, llama.cpp) currently show their process numbers in the *Current request / Current job* card's process row.
+- **Power and PCIe are not mirrored**: those are measurements of the card, not of a process. Other app scopes (Ollama, ComfyUI, llama.cpp) currently show their process numbers in the *Current request / Current run* card's process row.
 - On a **custom scope** page you can place these tiles next to Hardware's. New tiles only appear on a page you haven't saved, or after **Reset to default**.
 
 ## Disk tiles (Hardware)
@@ -98,7 +98,7 @@ For a llama.cpp server: `llama serve -m <model.gguf>` (the `llama` launcher, por
 
 ## Custom scopes
 
-A custom scope is your own page made of lenses from any installed scope, e.g. ComfyUI's current job next to Strata's current request and your GPU tiles.
+A custom scope is your own page made of lenses from any installed scope, e.g. ComfyUI's current run next to Strata's current request and your GPU tiles.
 
 - **Create**: Scopes page (**+**) → **Create Custom Scope**, give it a name. It opens as a new tab, ready to edit.
 - **Edit** with the **pencil**, like any page (see [Editing pages and lens settings](#editing-pages-and-lens-settings)); the Add lens dialog lists the lenses of every installed scope. A new, empty custom scope opens in edit mode. There's no Reset to default.

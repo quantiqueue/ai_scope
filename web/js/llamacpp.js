@@ -227,11 +227,5 @@ defineLens({
   },
 });
 
-// ---------- The llama.cpp scope page: header line + its lenses ----------
-subscribeSource('llamacpp', (d, err) => {
-  const meta = document.getElementById('lcMeta');
-  if (err) { meta.textContent = 'Could not reach AI_SCOPE server: ' + err.message; return; }
-  meta.textContent = (d.online ? 'connected to ' + d.url + (d.router ? ' (router)' : '') + (d.build ? ' · build ' + d.build : '') : d.needsKey ? 'llama.cpp server at ' + d.url + ' needs an API key' : 'llama.cpp server offline') +
-    ' · ' + d.totalRequests + ' requests saved · updates every ½ s';
-});
+// AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, 'llamacpp.loaded', 'llamacpp.requests', 'llamacpp.installed', 'llamacpp.slots']).concat(LLAMACPP_MIRROR.layout()));   // AI_SCOPE-082: mirror family tail

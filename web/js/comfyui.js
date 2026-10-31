@@ -1,4 +1,4 @@
-// AI_SCOPE dashboard - ComfyUI scope: current job, runs, installed models.
+// AI_SCOPE dashboard - ComfyUI scope: current run, run history, installed models.
 // Data: /api/comfy (runs, live progress) and /api/comfy/models (model files, every 5 s).
 // Every card/table is a lens (lens.js), so it can also be shown on custom scopes, more than once.
 
@@ -21,17 +21,17 @@ defineSource('comfyui', '/api/comfy?limit=100', null, null, null, 'processHistor
 const COMFYUI_MIRROR = defineMirror({ key: 'comfyui', name: 'ComfyUI', letter: 'c' });
 defineSource('comfyui.models', '/api/comfy/models', 'comfyui', 5000);
 
-// ---------- Current job ----------
+// ---------- Current run ----------    (AI_SCOPE-088: the user's label rename - "Current job" → "Current run")
 defineLens({
   id: 'comfyui.current', scope: 'comfyui', size: 'wide',
-  name: 'Current job',
+  name: 'Current run',
   description: 'The workflow ComfyUI is running: model, step progress, speed, elapsed time and ComfyUI\'s own GPU, VRAM, CPU and RAM use.',
   settings: [PROC_STATS_FIELD],
   markup: nowCardMarkup([
     { box:'progBox', label:'Progress', labelK:'progLabel', k:'prog', bar:'bar' },
     { box:'rateBox', label:'Speed', k:'rate', small:true },
     { box:'timeBox', label:'Elapsed', labelK:'timeLabel', k:'time' },
-  ], 'Current job'),
+  ], 'Current run'),
   render(L, d) {
     const $ = L.$, cur = d.current;
     $('dot').className = 'dot' + (cur ? ' live' : d.online ? '' : ' off');
@@ -167,10 +167,5 @@ defineLens({
   },
 });
 
-// ---------- The ComfyUI scope page: header line + its lenses ----------
-subscribeSource('comfyui', (d, err) => {
-  const meta = document.getElementById('cMeta');
-  if (err) { meta.textContent = 'Could not reach AI_SCOPE server: ' + err.message; return; }
-  meta.textContent = (d.online ? 'connected to ' + d.url : 'ComfyUI offline') + ' · ' + d.totalRuns + ' runs saved · updates every 2 s';
-});
+// AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 defineScopeLayout('comfyui', () => layoutOf([{ lens: 'comfyui.current', settings: { width: 'full' } }, 'comfyui.runs', 'comfyui.installed']).concat(COMFYUI_MIRROR.layout()));   // AI_SCOPE-083: mirror family tail

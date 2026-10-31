@@ -159,15 +159,7 @@ defineLens({
   },
 });
 
-// ---------- The Bionic scope page: header line + its lenses ----------
-subscribeSource('bionic', (data, err) => {
-  const meta = document.getElementById('meta');
-  if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }
-  const lmApi = SOURCES['bionic.models'].data;
-  meta.textContent =
-    (lmApi ? (lmApi.online ? 'connected to ' + lmApi.url + ' (API ' + lmApi.apiVersion + ')' : 'Bionic\'s local server offline') + ' · ' : '') +
-    data.rows.length + ' latest requests · updated ' + new Date().toLocaleTimeString() + ' · updates every 2 s';
-});
+// AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 // AI_SCOPE-077: the mirror rows (per-card GPU + VRAM pairs, not on macOS; then the bottom row
 // Bionic CPU · Bionic RAM (Working) · Bionic RAM (Committed) · Bionic I/O on every OS) follow the loaded
 // models, exactly like Strata's default (072 / 073 / 075 / 076 rules via mirror.js).

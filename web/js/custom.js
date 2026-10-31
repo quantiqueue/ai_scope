@@ -15,16 +15,14 @@ function customPage(cs) {
   return addPage({
     id, kind: 'custom', panel, grid: panel.querySelector('[data-cgrid]'),
     items: () => (customById(id) || { lenses: [] }).lenses,
-    // name + "Custom scope · n lenses" (or what to do while editing)
+    // AI_SCOPE-088: helper text gone - the header carries only the custom scope's name.
+    // The meta span stays as the save-error line (pageError in layout.js).
     head: pg => {
       const c = customById(id);
       if (!c) return;
       pg.panel.querySelector('h1').textContent = c.name;
-      const n = (pg.editing ? pg.draft : c.lenses).length;
       const m = pg.panel.querySelector('.section-head > .meta');
-      if (!m.classList.contains('bad')) m.textContent = pg.editing
-        ? (n ? 'Editing · add, remove or drag lenses, then save' : 'Empty · add lenses to build this page')
-        : 'Custom scope · ' + n + ' lens' + (n === 1 ? '' : 'es');
+      if (m && !m.classList.contains('bad')) m.textContent = '';
     },
     save: async list => {
       const r = await postJson('/api/custom-scopes/update', { id: id, lenses: list });

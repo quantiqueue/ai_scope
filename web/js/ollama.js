@@ -218,15 +218,11 @@ defineLens({
   },
 });
 
-// ---------- The Ollama scope page: header line + its lenses ----------
-// Header line, with a "?" right after the proxy status that opens the relay setup help under the header.
+// AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title and the "?" button.
+// The subscription stays for the help wiring: the "?" and its relay-setup card need fresh data.
 subscribeSource('ollama', (d, err) => {
-  const a = document.getElementById('oMetaA'), b = document.getElementById('oMetaB'), btn = document.getElementById('oHeadHelpBtn');
-  if (err) { a.textContent = 'Could not reach AI_SCOPE server: ' + err.message; b.textContent = ''; btn.hidden = true; return; }
-  const px = d.proxy;
-  a.textContent = (d.online ? 'connected to ' + d.url + (d.version ? ' · v' + d.version : '') : 'Ollama offline') +
-    ' · proxy ' + (px.listening ? 'on :' + px.port : 'not running' + (px.error ? ' (' + px.error + ')' : ''));
-  b.textContent = ' · ' + d.totalRequests + ' requests saved · updates every 2 s';
+  if (err) return;
+  const btn = document.getElementById('oHeadHelpBtn');
   btn.hidden = false;
   const box = document.getElementById('oHeadHelp'), html = ollamaHelpHtml(d);
   if (box.innerHTML !== html) box.innerHTML = html;

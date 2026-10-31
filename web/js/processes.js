@@ -276,10 +276,5 @@ defineScopeLayout('processes', () => {
   if (procHas('io')) items.push({ lens: 'processes.io', settings: {} });   // AI_SCOPE-030
   return items;
 });
-subscribeSource('processes', (d, err) => {
-  const meta = document.getElementById('pMeta');
-  if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }
-  meta.textContent = !d.supported ? 'not available on this system'
-    : d.at ? 'updated ' + new Date(d.at).toLocaleTimeString() + ' · every ' + Math.round(d.every / 1000) + ' s · ' + d.procs.length + ' processes'
-    : d.error ? 'Process stats unavailable' : 'starting…';
-}, document.querySelector('[data-panel="processes"] .section-head'));
+// AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
+// The subscription that fed it also carried the visibleOnly page hook; the page's own lenses now keep the source alive.

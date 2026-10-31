@@ -167,13 +167,7 @@ defineLens({
 // lens ids and tile ids are unchanged ('s' prefixes), so saved layouts and the hover keep working.
 const STRATA_MIRROR = defineMirror({ key: 'strata', name: 'Strata', letter: 's' });
 
-// ---------- The Strata scope page: header line + its lenses ----------
-subscribeSource('strata', (d, err) => {
-  const meta = document.getElementById('sMeta');
-  if (err) { meta.textContent = 'Could not reach AI_SCOPE server: ' + err.message; return; }
-  meta.textContent = (d.online ? 'connected to ' + d.url + (d.version ? ' · Strata ' + d.version : '') + (d.engineVersion ? ' · engine ' + d.engineVersion : '')
-    : 'Strata offline') + ' · ' + d.totalRequests + ' requests saved · updates every 2 s';
-});
+// AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 // AI_SCOPE-072: default gets one row of Strata GPU + VRAM tiles per card after Installed Models; on macOS the
 // tiles stay out of the default (no per-process GPU stats there) but remain addable - they answer
 // "Not available on this system" until 062 changes that.

@@ -285,11 +285,11 @@ defineLens({
   },
 });
 
-// Setting of the Current request / Current job lenses (AI_SCOPE-020): show the process stats row (below) or not.
+// Setting of the Current request / Current run lenses (AI_SCOPE-020): show the process stats row (below) or not.
 const PROC_STATS_FIELD = { id: 'procStats', label: 'Show process stats', type: 'toggle', default: true,
   tip: 'While a request or job runs: the row with GPU, VRAM, CPU and RAM use — of the app\'s own process where known, otherwise of the whole computer.' };
 
-// ---- "System load" row on the Current request / Current job cards ----
+// ---- "System load" row on the Current request / Current run cards ----
 // Whole-computer totals from the latest Hardware sample (all apps together, not this request alone).
 // Shown only while something is running.
 // The "System load" row on the running-request cards: whole-computer GPU / VRAM / CPU / RAM.
@@ -432,9 +432,4 @@ defineScopeLayout('hardware', () => {
   disks.forEach(x => items.push({ lens: 'hardware.disk', settings: { disk: x.id } }));   // AI_SCOPE-030
   return items;
 });
-subscribeSource('hardware', (d, err) => {
-  const meta = document.getElementById('hwMeta');
-  if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }
-  const s = hwLatest(d);
-  meta.textContent = s ? 'updated ' + new Date(s.t).toLocaleTimeString() + ' · every 2 s' : 'warming up…';
-});
+// AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).

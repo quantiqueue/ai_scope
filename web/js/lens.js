@@ -227,7 +227,7 @@ function lensHeadMarkup(title, extra) {
   return '<div class="lhead"><span class="ltab"><span class="ltitle">' + title + '</span></span>' + (extra || '') + '</div>';
 }
 
-// "Current request" card (wide; ComfyUI: title "Current job"). The header tab always shows the title; the card's
+// "Current request" card (wide; ComfyUI: title "Current run"). The header tab always shows the title; the card's
 // first line shows the state (dot + "Idle — no request running" / "Strata is not running" / …). boxes after "Model": { box, label, labelK, k, small, bar }
 //   box = data-k of the whole box (to hide it), labelK = data-k of the label (when it changes), bar = data-k of a progress bar.
 function nowCardMarkup(boxes, title) {
