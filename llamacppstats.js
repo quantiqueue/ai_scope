@@ -430,7 +430,7 @@ function poll() {
   if (busy) return;
   busy = true;
   timer = null;
-  const done = function () { busy = false; schedule(); };
+  const done = function () { busy = false; procstats.attest('llamacpp', mirrorState()); schedule(); };   // AI_SCOPE-082: attest each cycle
   if (!base) {
     const list = configured ? [configured] : CANDIDATES;
     return detect(list, 0, function (b, d, locked) {
@@ -469,6 +469,29 @@ function poll() {
   });
 }
 
+// ---------- Hardware Mirror Lens attestation (AI_SCOPE-082; family rules: ~/ai-scope-terminology.md) ----------
+// Kickoff decision 2A: three states, each read straight from llama.cpp's own answers - nothing invented.
+//  live - reachable and a model is loaded (router: /models calls one loaded; single: /props names a model and it
+//         is not sleeping). procstats' real samples are then the only writer of the history; a missed process
+//         lookup stays a gap + n/a, never a false zero.
+//  idle - reachable, nothing loaded. In router mode the router's own process stays alive (44 MB on snow), but the
+//         mirror counts the model-holding family, so zeros are honest, "No Model Loaded" is the wording (077),
+//         and 084's arming gate releases the shared 2 s demand for an idle app (the cost 091 raised).
+//         A single-model server started with --sleep-after-idle is idle too: the model is out of memory even
+//         though the process lives (is_sleeping, already read for the model row at modelInfo()).
+//  off  - unreachable (goOffline): zeros, sub "llama.cpp Offline".
+// 'loading' is deliberately NOT attested: llama.cpp has no status AI_SCOPE can read that says a load is running
+// without asking a router about an unloaded model - which LOADS it (006's gotcha). 'unloading' / 'failed' are
+// recorded as absent from llama.cpp's API rather than invented (the 081 precedent for states the API lacks).
+// Kickoff 2B stays open as a test: if a router's /models is ever seen to carry a loading status string, that is
+// the honest moment to attest it - the router on snow has an empty models folder, so no load can be observed.
+function mirrorState() {
+  if (!online) return 'off';
+  if (router) return order.some(function (id) { return models[id] && models[id].state === 'loaded'; }) ? 'live' : 'idle';
+  const m = models[order[0]];
+  return m && m.state === 'loaded' && !(m.props && m.props.is_sleeping) ? 'live' : 'idle';
+}
+
 // ---------- state for the page ----------
 // Size on disk of a model file (router models that aren't loaded have no meta), read once per path.
 const fileSizes = {};
@@ -499,12 +522,19 @@ function modelInfo(m) {
     metricsOn: m.metricsOn === true,
   };
 }
-function getState(limit) {
+// AI_SCOPE-082: since (AI_SCOPE-084 item 7) sends only processHistory points newer than it - the mirror lenses keep
+// the ring on the client (web/js/mirror.js appends what arrives), so the 5-minute ring never rides the whole payload.
+// The two family fields sit in the object BEFORE the offline return: an uninstalled or unreachable server still has
+// to deliver the attested 'off' zeros (ollamastats.js / stratastats.js are the pattern; 077's review batch rule).
+function getState(limit, since) {
   const out = { online: online, url: base || keyNeeded || configured || null, error: lastError, needsKey: !!keyNeeded,
                 router: router, build: rootProps && rootProps.build_info || null, slotsEnabled: null,
                 model: null, models: [], slots: [], current: [], average: null,
                 totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),
-                process: procstats.get('llamacpp'), processSupported: procstats.supported() };
+                process: procstats.get('llamacpp'), processSupported: procstats.supported(),
+                // the Hardware Mirror Lens family: the 5-minute per-process ring and the Hardware card names / totals
+                processHistory: procstats.history('llamacpp', since || 0),
+                processCards: hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; }) };
   if (!online) return out;
   // loaded models first, then the rest in the server's order
   const list = order.map(function (id) { return models[id]; }).filter(Boolean);
@@ -570,6 +600,7 @@ function stop() {
   if (online) dropSlots();
   forgetModels();
   procstats.unwatch('llamacpp');
+  procstats.unattest('llamacpp');   // AI_SCOPE-082: an uninstalled scope stops claiming history (like 081 / strata / bionic)
   online = false; rootProps = null; router = null; lastError = null; base = null;
 }
 

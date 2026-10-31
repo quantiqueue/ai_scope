@@ -8,7 +8,17 @@ const lcCtx = n => n == null ? '—' : n % 1024 === 0 ? (n / 1024) + 'K' : lcK(n
 const LC_EXACT = 'Exact: from the server\'s own counters (--metrics), the request ran alone on its model';
 const LC_EST = 'Estimated from AI_SCOPE\'s looks at the server\'s slots (every ½ s, ¼ s while busy; llama.cpp keeps no per-request timings)';
 
-defineSource('llamacpp', '/api/llamacpp?limit=100', 'llamacpp', 1000);
+defineSource('llamacpp', '/api/llamacpp?limit=100', 'llamacpp', 1000, null, 'processHistory');   // AI_SCOPE-082 / 084: the mirror history ring goes out as a delta (?since=)
+
+// AI_SCOPE-082: the Hardware Mirror Lens family for llama.cpp (GPU / RAM Working / RAM Committed / CPU / I/O over
+// llama.cpp's own processes) comes from the shared defineMirror factory - web/js/mirror.js (077). The watch shape is
+// the one llamacppstats.js has run since 006 (decision 1A: the server process plus the model children it owns, in
+// router mode; a generic launcher parent is excluded by the name filter). Attestation is live / idle / off read
+// from the server's own answers (decision 2A); 'loading' / 'unloading' / 'failed' are absent from llama.cpp's API
+// as far as AI_SCOPE can see them without making a router load something, so they are recorded, not invented.
+// Tile-id letter 'l' (<letter>gp / <letter>ram_ / <letter>cpu / <letter>io), kept clear of 's' (Strata), 'b'
+// (Bionic) and 'o' (Ollama) so saved layouts resolve.
+const LLAMACPP_MIRROR = defineMirror({ key: 'llamacpp', name: 'llama.cpp', letter: 'l' });
 
 // ---------- Current request ----------
 defineLens({
@@ -224,4 +234,4 @@ subscribeSource('llamacpp', (d, err) => {
   meta.textContent = (d.online ? 'connected to ' + d.url + (d.router ? ' (router)' : '') + (d.build ? ' · build ' + d.build : '') : d.needsKey ? 'llama.cpp server at ' + d.url + ' needs an API key' : 'llama.cpp server offline') +
     ' · ' + d.totalRequests + ' requests saved · updates every ½ s';
 });
-defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, 'llamacpp.loaded', 'llamacpp.requests', 'llamacpp.installed', 'llamacpp.slots']));
+defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, 'llamacpp.loaded', 'llamacpp.requests', 'llamacpp.installed', 'llamacpp.slots']).concat(LLAMACPP_MIRROR.layout()));   // AI_SCOPE-082: mirror family tail

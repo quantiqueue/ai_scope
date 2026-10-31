@@ -270,8 +270,10 @@ http.createServer((req, res) => {
   }
   if (url.pathname === '/api/llamacpp') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    // AI_SCOPE-082: llama.cpp's mirror lenses ride the 084 delta (see /api/ollama) - &since=<t> sends only newer points.
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(llamacppstats.getState(limit)));
+    return res.end(JSON.stringify(llamacppstats.getState(limit, since)));
   }
   if (url.pathname === '/api/bionic/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
