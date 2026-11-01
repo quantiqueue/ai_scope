@@ -172,7 +172,9 @@ const STRATA_MIRROR = defineMirror({ key: 'strata', name: 'Strata', letter: 's' 
 // loaded model's last 20 saved requests (d.average - the same server-computed number the running card prints).
 // The line covers ONLY time actually spent generating: idle polls write no points, so between requests the chart
 // honestly breaks (092 reads each point's own `every` stamp) - no invented zeros, no fabricated history (077/072).
-// Window is the shared 5 minutes (SPARK_WIN), the meter and chart scale to the window max, and the spark's title
+// Window: the shared 5 minutes (SPARK_WIN), and since 2026-11-01 the LINE is pinned to the clock (sparkFresh):
+// a burst ages out of the chart five minutes after its last sample, like the always-on sparklines. The big value
+// is NOT time-bound (D2 unchanged). The meter and chart scale to the (fresh) window max, and the spark's title
 // says so. Hover rides hardware.js's MIRROR_HOVER dispatch (prefix 'stps').
 const TPS_HIST = [];   // client ring merged from the payload - the append-and-prune shape mirror.js established
 subscribeSource('strata', d => {
@@ -193,7 +195,7 @@ defineLens({
   render(L, d) {
     const box = L.el.querySelector('[data-tile="stps"]'); if (!box) return;
     box.querySelector('.ltitle').title = TPS_TIP;
-    const pts = sparkWindow(TPS_HIST);
+    const pts = sparkFresh(TPS_HIST);
     const maxT = Math.max(10, 1.25 * pts.reduce(function (a, x) { return Math.max(a, x.v || 0); }, 0));   // window only: "top of the chart" is what you SEE
     const segs = sparkSegs(pts, h => h.v == null ? null : Math.min(100, 100 * h.v / maxT));
     const run = d.current && d.current.tokS != null ? d.current.tokS : null;
@@ -209,7 +211,7 @@ defineLens({
   },
 });
 MIRROR_HOVER.push({ prefix: 'stps', fn: (spark, f, guide, tip) => {   // tok/s at that time, model named - the axis rule is the shared one
-  sparkHover(spark, f, guide, tip, sparkWindow(TPS_HIST), hs => (hs.v != null ? fmtTps(hs.v) + (hs.m ? ' · ' + cutName(hs.m) : '') : 'n/a'));
+  sparkHover(spark, f, guide, tip, sparkFresh(TPS_HIST), hs => (hs.v != null ? fmtTps(hs.v) + (hs.m ? ' · ' + cutName(hs.m) : '') : 'n/a'));
 } });
 
 // ---------- Strata Prompt tok/s (AI_SCOPE-093 slice 2) ----------
@@ -218,6 +220,12 @@ MIRROR_HOVER.push({ prefix: 'stps', fn: (spark, f, guide, tip) => {   // tok/s a
 // Big value: live prefill tok/s while reading; the token-weighted average of the loaded model's last 20 saved
 // requests (d.promptAverage, built exactly like d.average) when it is not. While another request is GENERATING
 // the big value is that historical average - never a replay of a finished prefill's mean as a live number.
+// REVISED 2026-11-01 (user: "i think that should have the same neighbour treatment as hit rate"): Strata's
+// prefill mean goes absent for 16-18 s in the MIDDLE of a continuing prompt, and the pace-stamped ring broke
+// one run into clusters with hover "n/a" holes. The server now stamps each ptps point with the real wait
+// since the previous sample, so the line joins neighbours across dropouts (no invented points); this hover
+// snaps to the nearest SAMPLE and prints that sample's own time - never n/a while the ring holds points.
+// Window: like gen, the LINE cuts at now - SPARK_WIN (sparkFresh, 2026-11-01); the big value is not time-bound.
 const PTPS_HIST = [];
 subscribeSource('strata', d => {
   const add = (d && d.promptHistory) || [];
@@ -238,7 +246,7 @@ defineLens({
   render(L, d) {
     const box = L.el.querySelector('[data-tile="sptps"]'); if (!box) return;
     box.querySelector('.ltitle').title = PTPS_TIP;
-    const pts = sparkWindow(PTPS_HIST);
+    const pts = sparkFresh(PTPS_HIST);
     const maxT = Math.max(100, 1.25 * pts.reduce(function (a, x) { return Math.max(a, x.v || 0); }, 0));   // window only; floor is a prompt-scale 100 tok/s
     const segs = sparkSegs(pts, h => h.v == null ? null : Math.min(100, 100 * h.v / maxT));
     const read = d.current && READ_PHASES[d.current.phase];
@@ -255,14 +263,22 @@ defineLens({
     box.querySelector('.spark').title = 'Top of the chart = ' + fmtTps(maxT) + ' tok/s (window max)';
   },
 });
-MIRROR_HOVER.push({ prefix: 'sptps', fn: (spark, f, guide, tip) => {   // prefill tok/s at that time, model named
-  sparkHover(spark, f, guide, tip, sparkWindow(PTPS_HIST), hs => (hs.v != null ? fmtK(hs.v) + ' tok/s' + (hs.m ? ' · ' + cutName(hs.m) : '') : 'n/a'));
+MIRROR_HOVER.push({ prefix: 'sptps', fn: (spark, f, guide, tip) => {   // nearest sample by time, its OWN time printed (neighbour join, 2026-11-01)
+  const pts = sparkFresh(PTPS_HIST); if (!pts.length) return;
+  const r = sparkRange(pts), tc = r.t0 + f * (r.t1 - r.t0);
+  let best = pts[0];
+  for (let i = 1; i < pts.length; i++) if (Math.abs(pts[i].t - tc) < Math.abs(best.t - tc)) best = pts[i];
+  const x = sparkX(best.t, r);
+  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
+  tip.hidden = false; tip.style.left = x + '%';
+  tip.textContent = (best.v != null ? fmtTps(best.v) + ' tok/s' : 'n/a') + ' · ' + new Date(best.t).toLocaleTimeString() + (best.m ? ' · ' + cutName(best.m) : '');
 } });
 
 // ---------- Strata Context (AI_SCOPE-093 slice 3) ----------
 // Context fill, same time axis: one point per 2 s poll while a request runs (prompt + generated - the number the
 // running card shows, sampled with the identical computation so the two can never disagree). Each run is a rising
-// ramp; between runs the line breaks. Big value: live while running; while idle it is the fill the engine was
+// ramp; between runs the line breaks. Window: the LINE cuts at now - SPARK_WIN (sparkFresh, 2026-11-01); an idle
+// stretch ages the board out. Big value: live while running; while idle it is the fill the engine was
 // LAST SEEN HOLDING - a real claim only while the same instance is still loaded (server-checked, d.contextState;
 // Strata keeps its KV cache between requests, which is what makes the next turn reuse millions of tokens).
 const CTX_HIST = [];
@@ -285,7 +301,7 @@ defineLens({
     const box = L.el.querySelector('[data-tile="sctx"]'); if (!box) return;
     box.querySelector('.ltitle').title = CTX_TIP;
     const st = d.contextState;
-    const pts = sparkWindow(CTX_HIST);
+    const pts = sparkFresh(CTX_HIST);
     const ceil = (st && st.max) || Math.max(1, pts.reduce(function (a, x) { return Math.max(a, x.v || 0); }, 0));   // the loaded window when known, else what the line reached
     const segs = sparkSegs(pts, h => h.v == null ? null : Math.min(100, 100 * h.v / ceil));
     const big = st && st.used != null ? fmtK(st.used) + (st.max ? '<small> / ' + fmtCtx(st.max) + '</small>' : '') : NA_HTML;
@@ -299,7 +315,66 @@ defineLens({
   },
 });
 MIRROR_HOVER.push({ prefix: 'sctx', fn: (spark, f, guide, tip) => {   // fill at that time
-  sparkHover(spark, f, guide, tip, sparkWindow(CTX_HIST), hs => (hs.v != null ? fmtK(hs.v) + ' tok' + (hs.m ? ' · ' + cutName(hs.m) : '') : 'n/a'));
+  sparkHover(spark, f, guide, tip, sparkFresh(CTX_HIST), hs => (hs.v != null ? fmtK(hs.v) + ' tok' + (hs.m ? ' · ' + cutName(hs.m) : '') : 'n/a'));
+} });
+
+// ---------- Strata Hit rate (AI_SCOPE-093 slice 4) ----------
+// The expert-VRAM hit rate of FINISHED requests - Strata's own hit_rate, the exact number the Requests table's
+// Hit rate column shows (share of needed experts already in VRAM; the rest came from RAM). First EVENT-keyed
+// series in 093 (open question 3): the point is the request, not the poll.
+// No new server ring, no new payload field - d.rows (the last 100 saved requests the source already sends) ARE
+// the series: requests persist in strata-requests.jsonl, so the lens keeps history across reloads and model
+// switches, and 094 inherits one copy to unify rather than a fifth. A request that reports no hit rate carries
+// no point at all - the line joins its neighbours across it (never a zero - 072 no-invented-numbers rule).
+// H1 REVISED (user, 2026-11-01: "it should be connected"): the x axis is the REQUEST SEQUENCE, not the clock.
+// One even step per kept request, every neighbour joined by the line; the clock survives in the labels (the
+// sub prints the newest request's end time, the hover names each point's). The 092 time axis compressed the
+// same 100 events into their real span, so one idle night stretched x over ~12 h: a dense burst squashed to
+// a left sliver and the newest request stood alone at the right edge - a 1-point polyline draws nothing, so
+// the latest hit rate was on the board but invisible. A flat stretch here means "requests kept coming out
+// like this", never "a number during idle". The ring lenses (tps/ptps/ctx) KEEP the clock axis and its
+// breaks: their gaps are the information; a per-request share has no clock face to gap across.
+// sparkSegs is still the painter: points carry t = sequence index and every: 1, so no gap can ever break
+// (the 1.5 s floor dwarfs 1) and x spans 0-100 across the kept requests. Hover cannot use the shared
+// sparkHover (it reads cursor time against point times and prints the cursor's clock) - an index series
+// picks the nearest REQUEST by index and prints that request's own end time, same guide/tip painting.
+// The count rule (last 100 saved requests, no time cut) is SUPERSEDED 2026-11-01 (user: "i want the window to be
+// 5 min, just like other similar sparklines"): the LINE rides the same 5-minute window as the ring lenses, pinned
+// to the clock - only requests that ENDED inside the last SPARK_WIN draw, and an idle stretch ages the line out.
+// Big value (H2, = the user's spec: live AND idle both the latest finished request): NOT time-bound; the sub line
+// names when it ended, so an empty line still answers honestly. Scale (H3): a bounded share, so chart and meter
+// sit on a fixed 0-100%.
+let HIT_PTS = [];   // the series the last render drew; the hover reads it - no separate ring, the rows ARE the data
+const HIT_TIP = 'Share of the model\'s needed experts already in VRAM at each finished request (the rest came from RAM) - Strata\'s own number, the same the Requests table shows. Each step is one finished request, in order and evenly spaced (the axis is the request sequence, not the clock); the hover names each request\'s end time. The big number is the latest finished request, however old; the line covers the requests that ended in the last 5 minutes.';
+defineLens({
+  id: 'strata.hit', scope: 'strata', size: 'tile',
+  name: 'Hit rate',
+  description: 'Strata expert-VRAM hit rate per finished request: the requests of the last 5 minutes as a line, the latest request\'s number as the big value.',
+  markup: () => tileHtml({ id: 'shrate', label: 'Strata Hit rate' }),
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="shrate"]'); if (!box) return;
+    box.querySelector('.ltitle').title = HIT_TIP;
+    const rows = Array.isArray(d.rows) ? d.rows : [];                     // newest first, the source's own order
+    const finished = rows.filter(r => r && r.hitRate != null && r.end != null);   // no rate / no end time: no point
+    const kept = finished.filter(r => r.end >= Date.now() - SPARK_WIN);   // 5-minute line window, pinned to the clock (2026-11-01)
+    HIT_PTS = kept.slice().reverse().map((r, i) => ({ t: i, every: 1, v: r.hitRate, m: r.model, end: r.end }));   // index axis, oldest first
+    const segs = sparkSegs(HIT_PTS, h => h.v == null ? null : 100 * h.v); // fixed scale: the share IS the percent
+    const last = finished[0];
+    const v = last ? last.hitRate : null;
+    sparkTile(box, v == null ? null : 100 * v, v == null ? NA_HTML : fmtPct(v),
+      last ? 'last req · ' + fmtWhen(last.end) + ' · ' + cutName(last.model)
+        : d.online ? 'no requests recorded yet' : 'Strata Offline',
+      segs);
+    box.querySelector('.spark').title = 'Top of the chart = 100% (fixed) · one step per request, in order';
+  },
+});
+MIRROR_HOVER.push({ prefix: 'shrate', fn: (spark, f, guide, tip) => {   // nearest REQUEST by index; its own end time, not the cursor's
+  const n = HIT_PTS.length; if (!n) return;
+  const ix = Math.max(0, Math.min(n - 1, Math.round(f * (n - 1))));
+  const p = HIT_PTS[ix], x = n > 1 ? 100 * ix / (n - 1) : 100;
+  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
+  tip.hidden = false; tip.style.left = x + '%';
+  tip.textContent = (p.v != null ? fmtPct(p.v) : 'n/a') + ' · ended ' + fmtWhen(p.end) + (p.m ? ' · ' + cutName(p.m) : '');
 } });
 
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
@@ -311,6 +386,6 @@ MIRROR_HOVER.push({ prefix: 'sctx', fn: (spark, f, guide, tip) => {   // fill at
 // every OS (procstats reports CPU % on Windows, Linux and macOS). AI_SCOPE-076: "Strata I/O" closes that row
 // (the tile answers "Windows only for now" where the counters do not exist).
 // AI_SCOPE-077: the mirror rows come from the shared family helper - same items, same order, same ids.
-// AI_SCOPE-093: the TPS + Prompt-TPS + Context trio leads its own row right after the current-request card
+// AI_SCOPE-093: the TPS + Prompt-TPS + Context + Hit-rate row leads its own row right after the current-request card
 // (user placement 2026-10-31; the loaded / requests / installed cards are full-width, so the tile row is theirs alone).
-defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.tps', 'strata.ptps', 'strata.ctx', 'strata.loaded', 'strata.requests', 'strata.installed']).concat(STRATA_MIRROR.layout()));
+defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.tps', 'strata.ptps', 'strata.ctx', 'strata.hit', 'strata.loaded', 'strata.requests', 'strata.installed']).concat(STRATA_MIRROR.layout()));

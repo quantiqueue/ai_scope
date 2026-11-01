@@ -76,6 +76,15 @@ function sparkPrune(a, winMs) {              // keep everything newer than (newe
   return a;
 }
 function sparkWindow(a, winMs) { return sparkPrune(Array.isArray(a) ? a.slice() : [], winMs); }   // the same slice, without touching the caller's ring
+// A ring sampled only while some gate is open (093's gen / prompt / context lenses) ages against its NEWEST point,
+// so a burst that ended hours ago stays on the board forever, stretched edge to edge. For those lenses the RENDER
+// and HOVER window is pinned to the wall clock instead (user, 2026-11-01: "i want the window to be 5 min, just
+// like other similar sparklines" - the always-on tiles get this for free because they sample every cycle).
+// sparkPrune stays the ring's own memory rule; big values are NOT time-bound - only the drawn series cuts here.
+function sparkFresh(a, winMs) {
+  const cut = Date.now() - (winMs || SPARK_WIN);
+  return (Array.isArray(a) ? a : []).filter(function (p) { return spTime(p) >= cut; });
+}
 const sparkRange = a => (a && a.length) ? { t0: spTime(a[0]), t1: spTime(a[a.length - 1]) } : null;
 const sparkX = (t, r) => r.t1 > r.t0 ? 100 * (t - r.t0) / (r.t1 - r.t0) : 100;
 function sparkMed(a) {                        // typical spacing of a series - the fallback when its points carry no stamp

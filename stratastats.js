@@ -135,10 +135,17 @@ function pushTps(t, every, v, model) {
 // AI_SCOPE-093 slice 2 (strata.ptps lens): the same shape for prompt-processing speed. Strata reports
 // live.prefill_tok_s_mean - a running mean of the CURRENT request's prefill. Only the prompt phases count
 // ('reading' / 'thinking'): sampling during 'generating' would replay a finished mean as fresh history,
-// which the 072 no-invented-numbers rule forbids. Idle polls again add nothing - clusters are runs.
+// which the 072 no-invented-numbers rule forbids. Idle polls again add nothing.
+// REVISED 2026-11-01 (user, after a live minutes-long prefill): Strata skips the mean on some polls in the
+// MIDDLE of a continuing prompt (observed 16-18 s absences), and the fixed 2 s pace stamp made the 092
+// break rule chop one run into clusters with hover n/a holes. ptps points now carry the REAL wait since
+// the previous ptps sample as their `every`, so a gap can never be 3x the stamp it is measured against -
+// neighbours join, nothing is invented in the dropout. The tps / ctx rings keep the pace stamp: there an
+// absence genuinely means the request ended, and the break is the information.
 let ptpsHist = [];
 function pushPtps(t, every, v, model) {
-  ptpsHist.push({ t: t, every: every, v: v, m: model });
+  const prev = ptpsHist.length ? ptpsHist[ptpsHist.length - 1].t : t - every;
+  ptpsHist.push({ t: t, every: t - prev, v: v, m: model });
   const last = ptpsHist[ptpsHist.length - 1].t;
   while (ptpsHist.length > 1 && ptpsHist[1].t < last - TPS_WINDOW) ptpsHist.shift();
   if (ptpsHist.length > TPS_CAP) ptpsHist.splice(0, ptpsHist.length - TPS_CAP);
