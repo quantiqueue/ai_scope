@@ -323,51 +323,52 @@ MIRROR_HOVER.push({ prefix: 'sctx', fn: (spark, f, guide, tip) => {   // nearest
 // already sends) ARE the series, persisted in strata-requests.jsonl, so the lens keeps history across reloads
 // and model switches; 094 inherits one copy rather than a fifth. A request that reports no hit rate carries
 // no point at all (never a zero - 072 no-invented-numbers rule).
-// AXIS, settled 2026-11-01 17:50 (user: "the behavior for all 4's sparkline: render data points within the
-// scope of 5 minutes. It should shift left for every refresh... create an edge border if an N/A occurs on
-// refresh"): the CLOCK BOARD like the ring lenses - points at their END TIMES on a sliding 5-minute span.
-// History of the answer, superseded in order: (a) 092 clock axis + 3x breaks - one idle night stretched x
-// over ~12 h, bursts squashed, the newest request an invisible 1-point segment; (b) request-INDEX axis,
-// neighbours joined; (c) index axis cut to requests ending inside 5 min. All replaced: the board bounds the
-// squash by construction, and a hit rate is only defined at the instant a request FINISHES, so every other
-// refresh is N/A for this lens - each finished request renders as a bordered bar (points carry every: 0, the
-// painter's break rule then splits every run into single-sample bars). A comb of bars sliding left off the
-// edge IS the event data, honestly painted; a flat-topped comb means steady good rates.
-// BIG VALUE (user spec 2026-11-01 17:50): the latest finished request's rate WHILE it is inside the board
-// (that is the live face, H2 unchanged); an N/A board (nothing finished in 5 min) presents the average of
-// the last 20 recorded hit rates for the lens, the sub naming when the newest was recorded.
+// AXIS, REVISED AGAIN 2026-11-01 ~18:35 (user: "i want it to be per request instead of per refresh. i want
+// to show up to the last 100 data points from requests"): the 17:50 clock-board comb is SUPERSEDED for this
+// lens - on a per-request axis a "refresh without data" does not exist; the data points ARE the requests.
+// Up to the last 100 saved requests that carry a hit rate, one point each, evenly stepped along the request
+// sequence (t = index, every: 1 for the 092 painter: no gap can break, x spans 0-100, neighbours always
+// connected - the line joins across a request that reports no rate, never a zero (072)). History of the
+// answer, superseded in order: (a) 092 clock axis + 3x breaks - an overnight ~12 h span squashed bursts and
+// stranded the newest request as an invisible lone point; (b) 11:56 index axis, joined; (c) 15:53 index axis
+// cut to a 5-min clock window; (d) 17:50 clock-board bordered event bars. Back to (b), now with the 100-point
+// cap explicit. "Shift left" survives in its per-request form: each finished request steps the whole series
+// one slot left. The axis has no clock face, so times live in the labels (the sub names the newest request's
+// end time, the hover names each point's).
+// BIG VALUE: the latest finished request's rate, sub "last req · <end time> · <model>" (H2; the 17:50 stale-
+// board avg fallback is MOOT on this axis - it had no off state: the line is non-empty whenever any saved
+// request carries a rate, and that fallback was built from the very same rows).
 // Scale (H3): a bounded share, so chart and meter sit on a fixed 0-100%.
-let HIT_RING = [];   // the board's series the last render drew (oldest first, t = end time); the hover reads it
-let HIT_T1 = Date.now();   // the board time of the last render (hover parity) - see STPS_T1
-const HIT_TIP = 'Share of the model\'s needed experts already in VRAM at each finished request (the rest came from RAM) - Strata\'s own number, the same the Requests table shows. A rate exists only at the instant a request finishes, so each finished request is a bordered bar at its end time on a 5-minute board that shifts left every refresh; the hover names each request\'s end time. Big number: the latest finished request while inside 5 minutes, otherwise the average of the last 20 recorded hit rates.';
+let HIT_PTS = [];   // the series the last render drew (oldest first, t = index; end = the request's own end time); the hover reads it
+const HIT_TIP = 'Share of the model\'s needed experts already in VRAM at each finished request (the rest came from RAM) - Strata\'s own number, the same the Requests table shows. One point per finished request, in order and evenly spaced (the axis is the request sequence, not the clock; up to the last 100 saved requests; the line joins across requests that report no rate, never a zero); the hover names each request\'s end time. The big number is the latest finished request.';
 defineLens({
   id: 'strata.hit', scope: 'strata', size: 'tile',
   name: 'Hit rate',
-  description: 'Strata expert-VRAM hit rate per finished request on a 5-minute clock board: the latest request\'s number while it is on the board, the average of the last 20 recorded rates when it is not.',
+  description: 'Strata expert-VRAM hit rate per finished request: up to the last 100 saved requests as one connected line, the latest request\'s number as the big value.',
   markup: () => tileHtml({ id: 'shrate', label: 'Strata Hit rate' }),
   render(L, d) {
     const box = L.el.querySelector('[data-tile="shrate"]'); if (!box) return;
     box.querySelector('.ltitle').title = HIT_TIP;
     const rows = Array.isArray(d.rows) ? d.rows : [];                     // newest first, the source's own order
     const finished = rows.filter(r => r && r.hitRate != null && r.end != null);   // no rate / no end time: no point
-    const now = Date.now(); HIT_T1 = now;   // remember the board this render drew
-    HIT_RING = finished.slice().reverse().map(r => ({ t: r.end, every: 0, v: r.hitRate, m: r.model, end: r.end }));   // clock axis, oldest first; every: 0 = an event, every other refresh is N/A
-    const clk = sparkClockSegs(HIT_RING, now, h => h.v == null ? null : 100 * h.v); // fixed scale: the share IS the percent
+    HIT_PTS = finished.slice(0, 100).reverse().map((r, i) => ({ t: i, every: 1, v: r.hitRate, m: r.model, end: r.end }));   // per-request axis (18:35): up to the last 100 data points, oldest first
+    const segs = sparkSegs(HIT_PTS, h => h.v == null ? null : 100 * h.v); // fixed scale: the share IS the percent
     const last = finished[0];
-    const fresh = last && last.end >= now - SPARK_WIN;
-    let v = null, sub;
-    if (fresh) { v = last.hitRate; sub = 'last req · ' + fmtWhen(last.end) + ' · ' + cutName(last.model); }
-    else {
-      const vals = finished.slice(0, 20).map(r => r.hitRate);             // N/A board: the avg of the lens's last 20 data points (17:50 spec)
-      if (vals.length) { v = vals.reduce((a, x) => a + x, 0) / vals.length; sub = 'avg last ' + vals.length + ' req · newest ended ' + fmtWhen(last.end); }
-      else sub = d.online ? 'no requests recorded yet' : 'Strata Offline';
-    }
-    sparkTile(box, v == null ? null : 100 * v, v == null ? NA_HTML : fmtPct(v), sub, clk.segs, clk.caps);
-    box.querySelector('.spark').title = 'Top of the chart = 100% (fixed) · one bar per finished request, last 5 minutes';
+    const v = last ? last.hitRate : null;
+    sparkTile(box, v == null ? null : 100 * v, v == null ? NA_HTML : fmtPct(v),
+      last ? 'last req · ' + fmtWhen(last.end) + ' · ' + cutName(last.model)
+        : d.online ? 'no requests recorded yet' : 'Strata Offline',
+      segs);   // interior caps rule: one fully joined run edge-to-edge draws no borders
+    box.querySelector('.spark').title = 'Top of the chart = 100% (fixed) · one step per request, in order, up to the last 100';
   },
 });
-MIRROR_HOVER.push({ prefix: 'shrate', fn: (spark, f, guide, tip) => {   // nearest REQUEST to the cursor's board time, its own end time printed
-  sparkClockHover(spark, f, guide, tip, HIT_RING, hp => (hp.v != null ? fmtPct(hp.v) + ' · ended ' + fmtWhen(hp.end) + (hp.m ? ' · ' + cutName(hp.m) : '') : 'n/a'), HIT_T1);
+MIRROR_HOVER.push({ prefix: 'shrate', fn: (spark, f, guide, tip) => {   // nearest REQUEST by index; its own end time, not the cursor's
+  const n = HIT_PTS.length; if (!n) return;
+  const ix = Math.max(0, Math.min(n - 1, Math.round(f * (n - 1))));
+  const p = HIT_PTS[ix], x = n > 1 ? 100 * ix / (n - 1) : 100;
+  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
+  tip.hidden = false; tip.style.left = x + '%';
+  tip.textContent = (p.v != null ? fmtPct(p.v) + ' · ended ' + fmtWhen(p.end) : 'n/a') + (p.m ? ' · ' + cutName(p.m) : '');
 } });
 
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
