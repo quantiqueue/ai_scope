@@ -180,8 +180,9 @@ const pcieOf = (s, i) => { const g = s && s.gpus && s.gpus[i]; return g && g.pci
 const pcieScale = (hist, i) => Math.max(1, 1.25 * hist.reduce((a, s) => { const g = pcieOf(s, i); return g ? Math.max(a, g.pcieRx || 0, g.pcieTx || 0) : a; }, 0));
 // 092: both PCIe lines share the one time-mapped axis; a card that stops reporting breaks its line rather than
 // stretching the gap. The scale is computed over the same window the chart draws, so the ceiling matches what is on screen.
-function pciePath(pts, i, key, max) {
-  return sparkPath(sparkSegs(pts, s => { const g = s.gpus && s.gpus[i]; return g && g[key] != null ? Math.min(100, 100 * (g[key] || 0) / max) : null; }));
+// Edge caps (2026-11-01): the painters take SEGMENTS so one pass paints line, and sparkCapsInto closes both runs.
+function pcieSegs(pts, i, key, max) {
+  return sparkSegs(pts, s => { const g = s.gpus && s.gpus[i]; return g && g[key] != null ? Math.min(100, 100 * (g[key] || 0) / max) : null; });
 }
 const fmtMb = m => m == null ? '—' : m >= 1024 ? (m / 1024).toFixed(2) + ' GB/s' : Math.round(m) + ' MB/s';
 function linkText(l) {
@@ -229,8 +230,10 @@ defineLens({
     v.querySelector('.sub').textContent = lt ? lt + ' · ' + name : name;   // 068: name the card next to the link text
     if (lt) v.querySelector('.sub').title = 'PCIe link between card and PC: Gen sets the per-lane speed, × the lanes (Gen 4 ×16 = 16 GB/s). Showing current vs what the card could use at most — current can drop while the card is idle; below max explains slow model loads.';
     v.querySelector('.meter > div').style.width = Math.max(0, Math.min(100, 100 * both / scale)) + '%';
-    v.querySelector('.line').setAttribute('d', pciePath(hwWin(d), i, 'pcieRx', scale));
-    v.querySelector('.wline').setAttribute('d', pciePath(hwWin(d), i, 'pcieTx', scale));
+    const rxSegs = pcieSegs(hwWin(d), i, 'pcieRx', scale), txSegs = pcieSegs(hwWin(d), i, 'pcieTx', scale);
+    v.querySelector('.line:not(.wline)').setAttribute('d', sparkPath(rxSegs));
+    v.querySelector('.wline').setAttribute('d', sparkPath(txSegs));
+    sparkCapsInto(v, rxSegs, txSegs);
     v.querySelector('.spark').title = 'Top of the chart = ' + fmtMb(scale) + ' (rx / tx MB/s)';
   },
 });
@@ -242,8 +245,9 @@ const diskOf = (s, id) => s && s.disks ? (id ? s.disks.find(x => x.id === id) : 
 // The lines are scaled to the busiest moment of the last 5 minutes (+25 %), at least 1 MB/s.
 const diskScale = (hist, id) => Math.max(1e6, 1.25 * hist.reduce((a, s) => { const x = diskOf(s, id); return x ? Math.max(a, x.read || 0, x.write || 0) : a; }, 0));
 // 092: same time-mapped axis and the same break rule as every other lens; a disk that stops reporting is a hole, not a slope.
-function diskPath(pts, id, key, max) {
-  return sparkPath(sparkSegs(pts, s => { const x = diskOf(s, id); return x ? Math.min(100, 100 * (x[key] || 0) / max) : null; }));
+// Edge caps (2026-11-01): SEGMENTS come back so sparkPath + sparkCapsInto paint each run's borders in one pass.
+function diskSegs(pts, id, key, max) {
+  return sparkSegs(pts, s => { const x = diskOf(s, id); return x ? Math.min(100, 100 * (x[key] || 0) / max) : null; });
 }
 defineLens({
   id: 'hardware.disk', scope: 'hardware', size: 'tile',
@@ -279,8 +283,10 @@ defineLens({
     el.querySelector('.sub').textContent = sub; el.querySelector('.sub').title = 'Active time = how busy the disk was (like Task Manager)';
     el.querySelector('.meter > div').style.width = Math.max(0, Math.min(100, x.active || 0)) + '%';
     const max = diskScale(hwScaleHist(d), id);
-    el.querySelector('.line:not(.wline)').setAttribute('d', diskPath(hwWin(d), id, 'read', max));
-    el.querySelector('.wline').setAttribute('d', diskPath(hwWin(d), id, 'write', max));
+    const rdSegs = diskSegs(hwWin(d), id, 'read', max), wrSegs = diskSegs(hwWin(d), id, 'write', max);
+    el.querySelector('.line:not(.wline)').setAttribute('d', sparkPath(rdSegs));
+    el.querySelector('.wline').setAttribute('d', sparkPath(wrSegs));
+    sparkCapsInto(el, rdSegs, wrSegs);
     el.querySelector('.spark').title = 'Top of the chart = ' + fmtRate(max);
   },
 });

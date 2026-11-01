@@ -111,6 +111,37 @@ function sparkSegs(pts, yOf) {                // -> one polyline per run of poin
 }
 const sparkPath = segs => segs.map(s => s.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join('')).join('');
 const sparkArea = segs => segs.filter(s => s.length).map(s => sparkPath([s]) + ' L' + s[s.length - 1][0].toFixed(2) + ' 100 L' + s[0][0].toFixed(2) + ' 100 Z').join('');
+// ---------- Edge caps: the border a segment end wears where it faces N/A (AI_SCOPE-097) ----------
+// A segment end that stops in the MIDDLE of the board faces an honest N/A hole: the line broke there, so
+// the run CLOSES with a border from that point down to the baseline, painted in the SAME stroke as its
+// series (accent, or the amber-dashed wline style for the write / tx line). A one-sample breakless tick
+// becomes a visible thin bar (it IS one real measurement). Ends that sit at the board's own left/right
+// edges are NOT bordered (user, 2026-11-01): there the window merely cut a continuing series - a border
+// would claim the run ended when the data did not. Pure string helper; sparkCapsInto applies it:
+// primary list -> path.caps (under the first line), optional second list -> path.caps.wline.
+const sparkCaps = segs => (segs || []).filter(s => s && s.length).map(s => {
+  const cap = p => 'M' + p[0].toFixed(2) + ' 100 L' + p[0].toFixed(2) + ' ' + p[1].toFixed(2);
+  const interior = x => x > 1e-6 && x < 100 - 1e-6;
+  if (s.length === 1) return interior(s[0][0]) ? cap(s[0]) + cap(s[0]) : '';   // a lone sample: bar only away from the edges
+  let d = '';
+  if (interior(s[0][0])) d += cap(s[0]);                                        // left end faces a hole
+  if (interior(s[s.length - 1][0])) d += cap(s[s.length - 1]);                  // right end faces a hole
+  return d;
+}).join('');
+function sparkCapsInto(el, segs, wSegs) {   // el: anything holding the spark svg (.tile or .tilebox)
+  const NS = 'http://www.w3.org/2000/svg';
+  // The SPARK svg, never a header icon svg (a 24x24 icon once swallowed this search): prefer the .spark box.
+  const svg = el && el.querySelector ? (el.querySelector('.spark svg') || el.querySelector('svg')) : null; if (!svg) return;
+  const mk = cls => { const p = document.createElementNS(NS, 'path'); p.setAttribute('class', cls); return p; };
+  const put = (cls, before, d) => {
+    let cp = svg.querySelector('path.' + cls.replace(' ', '.'));
+    if (!cp) { cp = mk(cls); const ref = svg.querySelector(before); if (!ref) return; ref.parentNode.insertBefore(cp, ref); }
+    cp.setAttribute('d', d);
+  };
+  put('caps', 'path.line', sparkCaps(segs));
+  if (wSegs) put('caps wline', 'path.wline', sparkCaps(wSegs));
+  else { const cw = svg.querySelector('path.caps.wline'); if (cw) cw.setAttribute('d', ''); }
+}
 // Draw a tile's value, sub line, meter and time-mapped lines (the one tile painter for Hardware and the mirrors).
 function sparkTile(el, value, big, sub, segs) {
   if (!el) return;
@@ -120,6 +151,7 @@ function sparkTile(el, value, big, sub, segs) {
   el.querySelector('.meter > div').style.width = (value == null ? 0 : Math.max(0, Math.min(100, value))) + '%';
   el.querySelector('.line').setAttribute('d', sparkPath(segs));
   el.querySelector('.area').setAttribute('d', sparkArea(segs));
+  sparkCapsInto(el, segs);   // edge caps: every spark tile closes its runs (2026-11-01 rule)
 }
 // Hover on a time-mapped line: the guide and tip sit at the CURSOR time; the value comes from the nearest sample
 // in that series, within about two of its own intervals (and never closer than 4 s, never further than 60 s).

@@ -263,8 +263,10 @@ function defineMirror(spec) {
       el.querySelector('.sub').textContent = c.inactive ? stateText(c.state) + ' · ' + sub : sub;
       el.querySelector('.sub').title = c.inactive ? stateTitle(c.state) : IO_TIP;
       el.querySelector('.meter > div').style.width = (tot == null ? 0 : Math.max(0, Math.min(100, 100 * tot / max))) + '%';
-      el.querySelector('.line:not(.wline)').setAttribute('d', sparkPath(ioSegs(pts, 'ioRead', max)));
-      el.querySelector('.wline').setAttribute('d', sparkPath(ioSegs(pts, 'ioWrite', max)));
+      const rdSegs = ioSegs(pts, 'ioRead', max), wrSegs = ioSegs(pts, 'ioWrite', max);
+      el.querySelector('.line:not(.wline)').setAttribute('d', sparkPath(rdSegs));
+      el.querySelector('.wline').setAttribute('d', sparkPath(wrSegs));
+      sparkCapsInto(el, rdSegs, wrSegs);   // edge caps (2026-11-01 rule)
       el.querySelector('.spark').title = 'Top of the chart = ' + fmtRate(max);
     },
   });

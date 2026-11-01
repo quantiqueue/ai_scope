@@ -133,7 +133,7 @@ function sparkHtml(series, m, samples) {
   const top = Math.max(m.floor, 1.25 * Math.max(...series.filter(v => v != null)));   // headroom: a steady value sits at 80 %, not on the edge
   const pts = samples.map((s, i) => ({ t: s.at, every: s.every, v: series[i] }));
   const segs = sparkSegs(pts, p => (p.v == null ? null : 100 * p.v / top));
-  return '<td class="pspark"><div class="pspk"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><path class="area" d="' + sparkArea(segs) + '"></path><path class="line" d="' + sparkPath(segs) + '"></path>' +
+  return '<td class="pspark"><div class="pspk"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><path class="area" d="' + sparkArea(segs) + '"></path><path class="caps" d="' + sparkCaps(segs) + '"></path><path class="line" d="' + sparkPath(segs) + '"></path>' +
     '<line class="guide" y1="0" y2="100" style="display:none"></line></svg><div class="ptip" hidden></div></div></td>';
 }
 // Hover on a row's line: the value at that time (like the Hardware tiles). 092: the cursor picks a TIME on the
