@@ -136,16 +136,14 @@ function pushTps(t, every, v, model) {
 // live.prefill_tok_s_mean - a running mean of the CURRENT request's prefill. Only the prompt phases count
 // ('reading' / 'thinking'): sampling during 'generating' would replay a finished mean as fresh history,
 // which the 072 no-invented-numbers rule forbids. Idle polls again add nothing.
-// REVISED 2026-11-01 (user, after a live minutes-long prefill): Strata skips the mean on some polls in the
-// MIDDLE of a continuing prompt (observed 16-18 s absences), and the fixed 2 s pace stamp made the 092
-// break rule chop one run into clusters with hover n/a holes. ptps points now carry the REAL wait since
-// the previous ptps sample as their `every`, so a gap can never be 3x the stamp it is measured against -
-// neighbours join, nothing is invented in the dropout. The tps / ctx rings keep the pace stamp: there an
-// absence genuinely means the request ended, and the break is the information.
+// REVISED AGAIN 2026-11-01 17:50 (user: "Gen, Prompt, and Context, and Hit should create an edge border if an
+// N/A occurs on refresh"): the real-wait stamp from the neighbour-join revision (below the 12:09 note) is
+// SUPERSEDED - it hid dropouts by making every gap equal its own stamp. ptps points carry the 2 s PACE stamp
+// like tps / ctx, so a poll that found no mean is a visible N/A hole on the clock board, bordered at the faces
+// that face it. Absence is information, not something to paper over.
 let ptpsHist = [];
 function pushPtps(t, every, v, model) {
-  const prev = ptpsHist.length ? ptpsHist[ptpsHist.length - 1].t : t - every;
-  ptpsHist.push({ t: t, every: t - prev, v: v, m: model });
+  ptpsHist.push({ t: t, every: every, v: v, m: model });
   const last = ptpsHist[ptpsHist.length - 1].t;
   while (ptpsHist.length > 1 && ptpsHist[1].t < last - TPS_WINDOW) ptpsHist.shift();
   if (ptpsHist.length > TPS_CAP) ptpsHist.splice(0, ptpsHist.length - TPS_CAP);

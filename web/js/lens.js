@@ -76,11 +76,11 @@ function sparkPrune(a, winMs) {              // keep everything newer than (newe
   return a;
 }
 function sparkWindow(a, winMs) { return sparkPrune(Array.isArray(a) ? a.slice() : [], winMs); }   // the same slice, without touching the caller's ring
-// A ring sampled only while some gate is open (093's gen / prompt / context lenses) ages against its NEWEST point,
-// so a burst that ended hours ago stays on the board forever, stretched edge to edge. For those lenses the RENDER
-// and HOVER window is pinned to the wall clock instead (user, 2026-11-01: "i want the window to be 5 min, just
-// like other similar sparklines" - the always-on tiles get this for free because they sample every cycle).
-// sparkPrune stays the ring's own memory rule; big values are NOT time-bound - only the drawn series cuts here.
+// The render/hover cut for the 093 quartet (gate-sampled rings): points inside the last SPARK_WIN of the WALL
+// CLOCK. (sparkPrune anchors to the newest point, so a burst that stopped being fed stayed the "newest" thing
+// and sat on the board forever - user, 2026-11-01. The always-on tiles get clock freshness for free because
+// they sample every cycle.) Since the clock-board revision this helper serves the y-scale inputs (window max)
+// and the hover filter; the line itself is painted by sparkClockSegs, which boards the same window.
 function sparkFresh(a, winMs) {
   const cut = Date.now() - (winMs || SPARK_WIN);
   return (Array.isArray(a) ? a : []).filter(function (p) { return spTime(p) >= cut; });
@@ -128,7 +128,7 @@ const sparkCaps = segs => (segs || []).filter(s => s && s.length).map(s => {
   if (interior(s[s.length - 1][0])) d += cap(s[s.length - 1]);                  // right end faces a hole
   return d;
 }).join('');
-function sparkCapsInto(el, segs, wSegs) {   // el: anything holding the spark svg (.tile or .tilebox)
+function sparkCapsInto(el, segs, wSegs, capsOverride) {   // el: anything holding the spark svg (.tile or .tilebox)
   const NS = 'http://www.w3.org/2000/svg';
   // The SPARK svg, never a header icon svg (a 24x24 icon once swallowed this search): prefer the .spark box.
   const svg = el && el.querySelector ? (el.querySelector('.spark svg') || el.querySelector('svg')) : null; if (!svg) return;
@@ -138,12 +138,75 @@ function sparkCapsInto(el, segs, wSegs) {   // el: anything holding the spark sv
     if (!cp) { cp = mk(cls); const ref = svg.querySelector(before); if (!ref) return; ref.parentNode.insertBefore(cp, ref); }
     cp.setAttribute('d', d);
   };
-  put('caps', 'path.line', sparkCaps(segs));
+  put('caps', 'path.line', capsOverride !== undefined ? capsOverride : sparkCaps(segs));
   if (wSegs) put('caps wline', 'path.wline', sparkCaps(wSegs));
   else { const cw = svg.querySelector('path.caps.wline'); if (cw) cw.setAttribute('d', ''); }
 }
+// ---------- The clock board (AI_SCOPE-093 quartet, user 2026-11-01 17:50) ----------
+// "render data points within the scope of 5 minutes. It should shift left for every refresh." The board is the
+// last SPARK_WIN of the WALL CLOCK: x=0 is (now - 5 min), x=100 is now, so every 2 s payload slides the data one
+// pace left and points age off the left edge on their own - the newest-anchored stretch kept the board standing
+// still. These rings are sampled only while their gate is open, so "an N/A occurs on refresh" = a poll produced
+// no sample: detected when the wait since the PREVIOUS sampled point exceeds that point's own pace stamp (+ a
+// 1 s jitter slack). The line breaks there, and BOTH faces of every such hole get an edge border (097, drawn in
+// the series' own stroke) - a lone sample between holes renders as a bordered bar. Off-board neighbours decide
+// the left faces: a run that merely enters the board (its predecessor was consecutive) wears no border - the
+// window cut a living series; it did not run out. The newest run's right face borders when the LATEST refresh
+// produced nothing (its last point is more than a slack behind the board's now edge).
+// Returns { segs, caps } in the sparkSegs conventions so sparkPath / sparkArea serve unchanged.
+const SPARK_NA_SLACK = 1000;
+function sparkClockSegs(ring, t1, yOf, winMs) {
+  const w = winMs || SPARK_WIN, t0 = t1 - w, a = Array.isArray(ring) ? ring : [];
+  const P = [];
+  let prev = null;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i], t = spTime(p);
+    let y = null; try { y = yOf(p); } catch (e) { y = null; }
+    if (y == null) { prev = p; continue; }                                   // valueless point: an N/A, never plotted
+    if (t < t0) { prev = p; continue; }                                      // off-board: it still informs the left faces
+    const gap = prev ? t - spTime(prev) : t - t0;
+    const raw = prev ? prev.every : p.every;   // event lenses stamp every: 0 (an event IS the only non-N/A refresh) - null falls back to 2 s
+    const base = (raw == null ? 2000 : raw) + SPARK_NA_SLACK;   // the wait expected across that gap
+    P.push({ x: Math.max(0, Math.min(100, 100 * (t - t0) / w)),
+             y: 100 - Math.max(0, Math.min(100, y)), t: t, capL: gap > base });
+    prev = p;
+  }
+  const runs = [];
+  for (const q of P) { if (!runs.length || q.capL) runs.push([q]); else runs[runs.length - 1].push(q); }
+  const segs = runs.map(r => r.map(q => [q.x, q.y]));
+  const cap = q => 'M' + q[0].toFixed(2) + ' 100 L' + q[0].toFixed(2) + ' ' + q[1].toFixed(2);
+  const capD = [];
+  for (let k = 0; k < runs.length; k++) {
+    if (runs[k][0].capL) capD.push(cap(segs[k][0]));
+    const last = runs[k][runs[k].length - 1];
+    // right face: an interior hole (the next run starts broken) - or, for the newest run, the latest refresh was N/A.
+    const rightHole = k + 1 < runs.length ? runs[k + 1][0].capL : t1 - last.t > SPARK_NA_SLACK;
+    if (rightHole) capD.push(cap(segs[k][segs[k].length - 1]));
+  }
+  return { segs: segs, caps: capD.join('') };
+}
+// Hover on a clock board: the cursor's fraction maps to the BOARD's time (t0 + f*w); snap the guide to the
+// nearest SAMPLE on the board and print that sample's own time - the shared sparkHover times the RING, which
+// was the stretched-window assumption. textOf(point) builds the tip.
+function sparkClockHover(spark, f, guide, tip, ring, textOf, t1, winMs) {
+  if (!(t1 > 0)) t1 = Date.now();   // NaN-proof board edge: an omitted t1 used to park every tip at left: NaN% (invalid -> container's left edge)
+  const w = winMs || SPARK_WIN, t0 = t1 - w, tc = t0 + f * w;
+  const a = Array.isArray(ring) ? ring : [];
+  let best = null;
+  for (const p of a) {
+    const t = spTime(p);
+    if (t < t0 || t > t1) continue;
+    if (!best || Math.abs(t - tc) < Math.abs(spTime(best) - tc)) best = p;
+  }
+  if (!best) return;
+  const x = Math.max(0, Math.min(100, 100 * (spTime(best) - t0) / w));
+  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
+  tip.hidden = false; tip.style.left = x + '%';
+  tip.textContent = textOf(best);
+}
 // Draw a tile's value, sub line, meter and time-mapped lines (the one tile painter for Hardware and the mirrors).
-function sparkTile(el, value, big, sub, segs) {
+// capsOverride: precomputed caps string (the clock-board lenses paint adjacency-decided borders, not interior ones).
+function sparkTile(el, value, big, sub, segs, capsOverride) {
   if (!el) return;
   el.querySelector('.v').innerHTML = big;
   el.querySelector('.sub').textContent = sub;
@@ -151,7 +214,7 @@ function sparkTile(el, value, big, sub, segs) {
   el.querySelector('.meter > div').style.width = (value == null ? 0 : Math.max(0, Math.min(100, value))) + '%';
   el.querySelector('.line').setAttribute('d', sparkPath(segs));
   el.querySelector('.area').setAttribute('d', sparkArea(segs));
-  sparkCapsInto(el, segs);   // edge caps: every spark tile closes its runs (2026-11-01 rule)
+  sparkCapsInto(el, segs, null, capsOverride);   // edge caps: every spark tile closes its runs (2026-11-01 rule)
 }
 // Hover on a time-mapped line: the guide and tip sit at the CURSOR time; the value comes from the nearest sample
 // in that series, within about two of its own intervals (and never closer than 4 s, never further than 60 s).
