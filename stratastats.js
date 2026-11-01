@@ -116,6 +116,50 @@ function collectRequests(instances) {
   });
 }
 
+// ---------- live generation-speed history (AI_SCOPE-093 slice 1, strata.tps lens) ----------
+// One point per poll while Strata reports live.tok_s - the engine's own number; the field is optional, and an
+// absent one is a gap, never a derived stand-in (the 072 no-invented-numbers rule). Time-sized like the procstats
+// rings (092): keep the window plus one older sample so the leftmost segment enters from the edge; the count is a
+// safety cap only. Each point carries `every` (the 2 s poll pace that made it) so a chart judges a gap by the pace
+// of that moment, and `m` (the model) for the hover and any later per-model series. Idle polls add NOTHING:
+// between requests the line breaks honestly - absence of a number is never a number (077).
+const TPS_WINDOW = 300000, TPS_CAP = 170;
+let tpsHist = [];
+function pushTps(t, every, v, model) {
+  tpsHist.push({ t: t, every: every, v: v, m: model });
+  const last = tpsHist[tpsHist.length - 1].t;
+  while (tpsHist.length > 1 && tpsHist[1].t < last - TPS_WINDOW) tpsHist.shift();
+  if (tpsHist.length > TPS_CAP) tpsHist.splice(0, tpsHist.length - TPS_CAP);
+}
+
+// AI_SCOPE-093 slice 2 (strata.ptps lens): the same shape for prompt-processing speed. Strata reports
+// live.prefill_tok_s_mean - a running mean of the CURRENT request's prefill. Only the prompt phases count
+// ('reading' / 'thinking'): sampling during 'generating' would replay a finished mean as fresh history,
+// which the 072 no-invented-numbers rule forbids. Idle polls again add nothing - clusters are runs.
+let ptpsHist = [];
+function pushPtps(t, every, v, model) {
+  ptpsHist.push({ t: t, every: every, v: v, m: model });
+  const last = ptpsHist[ptpsHist.length - 1].t;
+  while (ptpsHist.length > 1 && ptpsHist[1].t < last - TPS_WINDOW) ptpsHist.shift();
+  if (ptpsHist.length > TPS_CAP) ptpsHist.splice(0, ptpsHist.length - TPS_CAP);
+}
+
+// AI_SCOPE-093 slice 3 (strata.ctx lens): context fill sampled while a request runs (prompt + generated -
+// the number the running card shows), so each run draws a rising ramp. ctxLast is the fill the engine was
+// LAST SEEN holding: Strata keeps its KV cache between requests on the same loaded instance (that is what
+// makes the next turn report millions of reused tokens), so an idle "current context" is a real claim only
+// while the same instance is still loaded - an unload or a model switch makes it stale, and getState checks
+// the instance id before returning it.
+let ctxHist = [];
+let ctxLast = null;   // { t, v, m, id }
+function pushCtx(t, every, v, model, instId) {
+  ctxHist.push({ t: t, every: every, v: v, m: model });
+  const last = ctxHist[ctxHist.length - 1].t;
+  while (ctxHist.length > 1 && ctxHist[1].t < last - TPS_WINDOW) ctxHist.shift();
+  if (ctxHist.length > TPS_CAP) ctxHist.splice(0, ctxHist.length - TPS_CAP);
+  ctxLast = { t: t, v: v, m: model, id: instId };
+}
+
 // ---------- polling ----------
 function poll() {
   if (busy) return;
@@ -129,6 +173,18 @@ function poll() {
       return;
     }
     online = true; lastError = null; native = d; fetchedAt = Date.now();
+    // AI_SCOPE-093: a generation-speed point for this cycle when Strata says a request is active and reports its
+    // own live tok/s (same instance pick and phase gate as the running card - the two must agree).
+    const tInst = pickInstance(d), tLive = tInst && tInst.metrics ? tInst.metrics.live : null;
+    if (tInst && ACTIVE[tInst.phase] && tLive && num(tLive.tok_s) != null) pushTps(fetchedAt, 2000, num(tLive.tok_s), tInst.label || tInst.model || 'unknown');
+    // AI_SCOPE-093 slice 2: the prefill mean, prompt phases only (the phase gate is the honest bit - see above).
+    if (tInst && (tInst.phase === 'reading' || tInst.phase === 'thinking') && tLive && num(tLive.prefill_tok_s_mean) != null) pushPtps(fetchedAt, 2000, num(tLive.prefill_tok_s_mean), tInst.label || tInst.model || 'unknown');
+    // AI_SCOPE-093 slice 3: context fill while a request is active - same computation as the running card's
+    // contextUsed in getState (prompt + generated), so the tile and the card can never disagree.
+    if (tInst && ACTIVE[tInst.phase] && tLive) {
+      const cP = num(tLive.prompt_tokens), cG = num(tLive.generated);
+      if (cP != null) pushCtx(fetchedAt, 2000, cP + (cG || 0), tInst.label || tInst.model || 'unknown', tInst.id);
+    }
     const enginePorts = d.instances.map(function (i) { return +i.port; }).filter(function (p) { return p > 0 && p < 65536; });
     // 077 review batch 2: attestation from the app's own API - engine instances loaded => 'live' (a
     // missed process lookup stays a gap, never zeros); no instances => 'idle' (nothing is loaded, it
@@ -206,7 +262,7 @@ function getState(limit, since) {
   const d = native;
   const out = { online: online, url: base, error: lastError, fetchedAt: fetchedAt || null,
                 version: null, engineVersion: null, updateNotice: null,
-                current: null, loaded: null, totals: null, average: null, installed: [],
+                current: null, loaded: null, totals: null, average: null, promptAverage: null, installed: [],
                 totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse() };
   // Strata's model process(es): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded.
   // AI_SCOPE-072: processCards (Hardware card names / totals for the tile labels) and processHistory (5 min,
@@ -217,6 +273,9 @@ function getState(limit, since) {
   out.process = procstats.get('strata'); out.processSupported = procstats.supported();
   out.processHistory = procstats.history('strata', since);   // AI_SCOPE-084: ?since=<t> sends only the new points
   out.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
+  out.tpsHistory = tpsHist;   // AI_SCOPE-093: the whole (small) ring rides every answer - the client appends only newer points
+  out.promptHistory = ptpsHist;   // AI_SCOPE-093 slice 2
+  out.contextHistory = ctxHist;   // AI_SCOPE-093 slice 3
   if (!d) return out;
   out.version = d.version || null;
   out.engineVersion = (d.engineInfo && d.engineInfo.version) || (d.engine && d.engine.version) || null;
@@ -247,6 +306,13 @@ function getState(limit, since) {
     if (t) out.totals = { since: num(t.since) != null ? t.since * 1000 : null, requests: num(t.requests),
                           promptTokens: num(t.prompt_tokens), reused: num(t.reused), outputTokens: num(t.output_tokens),
                           draftsOffered: num(t.drafts_offered), draftsAccepted: num(t.drafts_accepted) };
+    // AI_SCOPE-093 slice 3: the context tile's big number. Live while a request runs (the card's own contextUsed);
+    // idle is the last-seen held fill, claimed ONLY while the same instance id is still loaded - Strata keeps its
+    // KV cache between requests (that is why the next one reuses millions of tokens), but an unload or a loaded
+    // model change makes the held number stale, and then the honest answer is no answer.
+    const cMax = num(eng.max_context) || num(inst.context);
+    if (out.current && out.current.contextUsed != null) out.contextState = { used: out.current.contextUsed, max: cMax || null, model: out.current.model, at: fetchedAt, live: true };
+    else if (ctxLast && ctxLast.id === inst.id) out.contextState = { used: ctxLast.v, max: cMax || null, model: inst.label || ctxLast.m, at: ctxLast.t, live: false };
   }
   // Token-weighted average generation speed for the loaded model's recent saved requests.
   const model = out.loaded ? out.loaded.label : (requests.length ? requests[requests.length - 1].model : null);
@@ -255,6 +321,14 @@ function getState(limit, since) {
     let tok = 0, ms = 0;
     recent.forEach(function (r) { tok += r.outputTokens; ms += r.decodeMs; });
     out.average = { model: model, genTps: tok / (ms / 1000), requests: recent.length };
+  }
+  // AI_SCOPE-093 slice 2: the same token-weighted pattern for prompt speed (tokens actually read after cache
+  // reuse over prefill time), so the two idle numbers are computed alike and the tiles agree in style.
+  const precent = requests.filter(function (r) { return r.model === model && r.promptRead && r.promptMs; }).slice(-20);
+  if (precent.length) {
+    let pTok = 0, pMs = 0;
+    precent.forEach(function (r) { pTok += r.promptRead; pMs += r.promptMs; });
+    out.promptAverage = { model: model, promptTps: pTok / (pMs / 1000), requests: precent.length };
   }
   const inst2 = d.installed && Array.isArray(d.installed.models) ? d.installed.models : [];
   out.installed = inst2.map(function (x) {
