@@ -41,6 +41,7 @@ let local = false;          // base is on this PC (model children reachable on 1
 let timer = null, busy = false, running = false;
 let online = false, lastError = null;
 let keyNeeded = null;       // URL of a llama.cpp server that answered 401 (needs --api-key's key)
+let apiKey = '';            // token for --api-key servers (the scope's 'API key' setting), sent as Bearer
 let rootProps = null, rootPropsAt = 0;
 let router = null;          // router mode: { maxInstances, autoload } (null = single model)
 let models = {};            // id -> { id, name, state, path, port, meta, props, propsAt, slots, slotsEnabled }
@@ -58,8 +59,10 @@ function baseName(p) { return p ? String(p).split(/[\\/]/).pop() : null; }
 function getJson(b, path, timeout, cb) {
   let u;
   try { u = new URL(b + path); } catch (e) { return cb(e); }
+  const headers = { accept: 'application/json' };   // a --api-key server gets the Bearer token when one is set
+  if (apiKey) headers.authorization = 'Bearer ' + apiKey;
   const req = http.get({ hostname: u.hostname, port: u.port || 80, path: u.pathname + u.search, timeout: timeout,
-                         headers: { accept: 'application/json' } }, function (res) {
+                         headers: headers }, function (res) {
     let body = '';
     res.setEncoding('utf8');
     res.on('data', function (d) { if (body.length < 4000000) body += d; });
@@ -230,7 +233,7 @@ function getLogo(theme) { return theme === 'dark' ? (logo.dark || logo.light) : 
 // ---------- polling ----------
 // A server started with --api-key answers 401 without the key; llama.cpp's Server header still tells it apart.
 function needsKey(err, h) { return !!err && err.status === 401 && /llama\.cpp/i.test(String(h && h.server || '')); }
-const KEY_MSG = 'This llama.cpp server needs an API key (started with --api-key), which AI_SCOPE can\'t send yet. Start it without --api-key to watch it.';
+const KEY_MSG = 'This llama.cpp server needs an API key (started with --api-key). Put it in this scope\'s "API key" setting, or start the server without --api-key.';
 function detect(list, i, cb, locked) {
   if (i >= list.length) return cb(null, null, locked);
   getJson(list[i], '/props', 1500, function (err, d, h) {
@@ -368,7 +371,8 @@ const METRICS_IDLE_MS = 5000;   // totals while idle; every look while a slot is
 function getText(b, path, timeout, cb) {
   let u;
   try { u = new URL(b + path); } catch (e) { return cb(e); }
-  const req = http.get({ hostname: u.hostname, port: u.port || 80, path: u.pathname + u.search, timeout: timeout }, function (res) {
+  const req = http.get({ hostname: u.hostname, port: u.port || 80, path: u.pathname + u.search, timeout: timeout,   // /metrics also carries the key
+                         headers: apiKey ? { authorization: 'Bearer ' + apiKey } : {} }, function (res) {
     let body = '';
     res.setEncoding('utf8');
     res.on('data', function (d) { if (body.length < 200000) body += d; });
@@ -559,6 +563,7 @@ function start(settings) {
   stop();
   settings = settings || {};
   configured = String(settings.url || '').trim().replace(/\/+$/, '');
+  apiKey = String(settings.apiKey || '').trim();   // optional key for a --api-key server
   base = configured || null;
   if (!requestsLoaded) { requestsLoaded = true; loadRequests(); }
   running = true;
