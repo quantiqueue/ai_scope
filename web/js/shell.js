@@ -389,10 +389,13 @@ async function postScope(action, body) {
   return postJson('/api/scopes/' + action, body);
 }
 function fieldHtml(f, edit) {
-  const v = edit ? f.value : f.default;
+  // Secrets stay server-side: never prefilled (list() only sends 'set'), shown as a password field.
+  const secret = f.type === 'secret';
+  const v = secret ? '' : (edit ? f.value : f.default);
+  const ph = secret && edit && f.value === 'set' ? 'Set - enter a new value to replace it' : f.placeholder;
   return '<div class="field"><label for="sf-' + f.key + '">' + escH(f.label) + (f.required ? '' : ' <span class="opt">(optional)</span>') + '</label>' +
-    '<input id="sf-' + f.key + '" name="' + f.key + '" data-type="' + f.type + '" type="' + (f.type === 'number' ? 'number' : 'text') + '"' +
-    ' value="' + escH(v == null ? '' : v) + '" placeholder="' + escH(f.placeholder) + '" spellcheck="false" autocomplete="off"' +
+    '<input id="sf-' + f.key + '" name="' + f.key + '" data-type="' + f.type + '" type="' + (f.type === 'number' ? 'number' : secret ? 'password' : 'text') + '"' +
+    ' value="' + escH(v == null ? '' : v) + '" placeholder="' + escH(ph) + '" spellcheck="false" autocomplete="' + (secret ? 'new-password' : 'off') + '"' +
     (f.min != null ? ' min="' + f.min + '"' : '') + (f.max != null ? ' max="' + f.max + '"' : '') + '>' +
     (f.help ? '<div class="help">' + escH(f.help) + '</div>' : '') +
     '<div class="ferr" data-err="' + f.key + '" hidden></div></div>';
