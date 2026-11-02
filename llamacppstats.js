@@ -25,7 +25,9 @@ const hwstats = require('./hwstats');
 const procstats = require('./procstats');   // process stats: VRAM per card, GPU %, CPU, RAM (Windows)
 // `llama serve` runs the model in llama.exe itself; in router mode each model is a child llama.exe. Plain builds:
 // llama-server.exe. Watched by port, so Bionic's / Ollama's own llama-server.exe children (other ports) are not mixed in.
-const MODEL_PROCS = ['llama.exe', 'llama-server.exe'];
+// 'unsloth': Unsloth Studio's launcher (comm 'unsloth') owns the proxied port and hides its fds; on Linux it is
+// the only process naming the app, and it anchors the engine's tree (see the procstats.js nixResolve anchor).
+const MODEL_PROCS = ['llama.exe', 'llama-server.exe', 'unsloth'];
 const paths = require('./paths');
 
 const CANDIDATES = ['http://127.0.0.1:9931', 'http://127.0.0.1:8080'];
