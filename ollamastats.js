@@ -27,6 +27,7 @@ const PROXY_HOST = '127.0.0.1';
 const paths = require('./paths');                       // data folder: ~/.ai_scope
 const REQ_FILE = paths.file('ollama-requests.jsonl');
 const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
+const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
 const MAX_BODY_CAPTURE = 4 * 1024 * 1024;                // request bodies bigger than this: model name via regex
 const TRACKED = /^\/(api\/(generate|chat)|v1\/(chat\/)?completions)$/;
 
@@ -354,10 +355,11 @@ function average() {
   const done = requests.filter(function (r) { return r.genTps; });
   if (!done.length) return null;
   const model = done[done.length - 1].model;
-  const rs = done.filter(function (r) { return r.model === model; }).slice(-20);
-  let tok = 0, ms = 0;
-  rs.forEach(function (r) { tok += r.genTokens; ms += r.genMs; });
-  return { model: model, requests: rs.length, genTps: ms ? tok / (ms / 1000) : null };
+  // AI_SCOPE-094 slice 3: the shared token-weighted builder. The old copy summed r.genTokens here,
+  // which slice 2 had renamed to outputTokens - the sum went NaN and the payload silently answered
+  // genTps: null. Fixed and covered by ai-scope-094-slice1\094-avg-parity.js.
+  const a = reqstats.avgSpeed(done, model, { timeField: 'genMs' });
+  return { model: model, requests: a ? a.requests : 0, genTps: a ? a.value : null };
 }
 // vram: hwstats.vramInfo() (card sizes); Ollama can split a model across cards.
 // AI_SCOPE-081: since (AI_SCOPE-084 item 7) sends only processHistory points newer than it - the mirror

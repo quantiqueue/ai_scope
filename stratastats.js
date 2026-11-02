@@ -26,6 +26,7 @@ const paths = require('./paths');                       // data folder: ~/.ai_sc
 const DEFAULT_URL = 'http://127.0.0.1:47831';
 const REQ_FILE = paths.file('strata-requests.jsonl');
 const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
+const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
 
 let base = DEFAULT_URL;
 let timer = null;
@@ -321,22 +322,14 @@ function getState(limit, since) {
     if (out.current && out.current.contextUsed != null) out.contextState = { used: out.current.contextUsed, max: cMax || null, model: out.current.model, at: fetchedAt, live: true };
     else if (ctxLast && ctxLast.id === inst.id) out.contextState = { used: ctxLast.v, max: cMax || null, model: inst.label || ctxLast.m, at: ctxLast.t, live: false };
   }
-  // Token-weighted average generation speed for the loaded model's recent saved requests.
+  // AI_SCOPE-094 slice 3: both idle numbers come from one shared token-weighted builder; what stays
+  // here is what only Strata knows - which label the loaded model carries, and that its prompt
+  // speed is the tokens ACTUALLY READ after cache reuse, not the whole prompt.
   const model = out.loaded ? out.loaded.label : (requests.length ? requests[requests.length - 1].model : null);
-  const recent = requests.filter(function (r) { return r.model === model && r.outputTokens && r.genMs; }).slice(-20);
-  if (recent.length) {
-    let tok = 0, ms = 0;
-    recent.forEach(function (r) { tok += r.outputTokens; ms += r.genMs; });
-    out.average = { model: model, genTps: tok / (ms / 1000), requests: recent.length };
-  }
-  // AI_SCOPE-093 slice 2: the same token-weighted pattern for prompt speed (tokens actually read after cache
-  // reuse over prefill time), so the two idle numbers are computed alike and the tiles agree in style.
-  const precent = requests.filter(function (r) { return r.model === model && r.promptRead && r.promptMs; }).slice(-20);
-  if (precent.length) {
-    let pTok = 0, pMs = 0;
-    precent.forEach(function (r) { pTok += r.promptRead; pMs += r.promptMs; });
-    out.promptAverage = { model: model, promptTps: pTok / (pMs / 1000), requests: precent.length };
-  }
+  const a = reqstats.avgSpeed(requests, model, { timeField: 'genMs' });
+  if (a) out.average = { model: model, genTps: a.value, requests: a.requests };
+  const pa = reqstats.avgSpeed(requests, model, { tokensField: 'promptRead', timeField: 'promptMs' });
+  if (pa) out.promptAverage = { model: model, promptTps: pa.value, requests: pa.requests };
   const inst2 = d.installed && Array.isArray(d.installed.models) ? d.installed.models : [];
   out.installed = inst2.map(function (x) {
     const c = catalogEntry(d, x.model);

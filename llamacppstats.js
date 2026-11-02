@@ -31,6 +31,7 @@ const paths = require('./paths');
 const CANDIDATES = ['http://127.0.0.1:9931', 'http://127.0.0.1:8080'];
 const REQ_FILE = paths.file('llamacpp-requests.jsonl');
 const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
+const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
 const POLL_MS = 500;           // all slots idle (a request's start is known to about ± ¼ s)
 const POLL_BUSY_MS = 250;      // a slot busy: look more often for better speed / timing estimates
 const PROPS_MS = 10000;
@@ -578,12 +579,11 @@ function getState(limit, since) {
   });
   out.current.sort(function (a, b) { return a.elapsedMs - b.elapsedMs; });
   // token-weighted average generation speed of the recent requests (the loaded model's, or any in router mode)
-  const recent = requests.filter(function (r) { return r.genTps && r.outputTokens && (router || !out.model || r.model === out.model.name); }).slice(-20);
-  if (recent.length) {
-    let tok = 0, sec = 0;
-    recent.forEach(function (r) { tok += r.outputTokens; sec += r.outputTokens / r.genTps; });
-    if (sec > 0) out.average = { model: router ? null : out.model && out.model.name, genTps: tok / sec, requests: recent.length };
-  }
+  // AI_SCOPE-094 slice 3: the shared builder, with the rate-implied seconds this scope needs
+  // (llama.cpp gives per-request speed from the slot counters, never a duration to sum).
+  const anyModel = !!(router || !out.model);
+  const a = reqstats.avgSpeed(requests, anyModel ? null : out.model.name, { anyModel: anyModel, rateField: 'genTps' });
+  if (a) out.average = { model: router ? null : out.model && out.model.name, genTps: a.value, requests: a.requests };
   return out;
 }
 

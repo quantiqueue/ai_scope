@@ -4,6 +4,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
 const os = require('os');
 
 // Where the logs are: <data folder>/apps/bionic/server-logs (Bionic), else <data folder>/server-logs (LM Studio desktop).
@@ -196,14 +197,13 @@ function getCurrentRequest() {
 }
 
 // Token-weighted average generation speed for the most recently used model.
+// AI_SCOPE-094 slice 3: one shared builder (reqstats); Bionic passes limit: null because its rows
+// are read from the log with no saved ring, and they arrive newest-first.
 function getAverage(rows) {
   if (!rows.length) return null;
   const model = rows[0].model;
-  let tokens = 0, ms = 0, n = 0;
-  rows.forEach(function (r) {
-    if (r.model === model && r.outputTokens && r.genMs) { tokens += r.outputTokens; ms += r.genMs; n++; }
-  });
-  return ms ? { model: model, genTps: tokens / (ms / 1000), requests: n } : null;
+  const a = reqstats.avgSpeed(rows, model, { timeField: 'genMs', limit: null });
+  return a ? { model: model, genTps: a.value, requests: a.requests } : null;
 }
 
 module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage, tsToMs: tsToMs };
