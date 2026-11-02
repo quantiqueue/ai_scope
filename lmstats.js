@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
+const hwstats = require('./hwstats');              // AI_SCOPE-094 slice 4: peakBetween for each request
 const os = require('os');
 
 // Where the logs are: <data folder>/apps/bionic/server-logs (Bionic), else <data folder>/server-logs (LM Studio desktop).
@@ -73,8 +74,12 @@ function parseText(text, file, rows) {
         end: endMs, start: null,
         promptMs: +m[2], promptTokens: +m[3], promptTps: +m[4],
         genMs: null, outputTokens: null, genTps: null, durationMs: null,
-        firstTokenMs: +m[2], firstTokenDerived: true,
+        firstTokenMs: +m[2],
       };
+      // Bionic's log gives prompt eval / eval / total time and the speeds: all exact except the
+      // first-token column, which the log cannot answer at all (zero TTFT lines in the whole month
+      // of logs - checked on box), so prefill time stands in for it and is marked as standing in.
+      reqstats.setProv(cur, 'firstTokenMs', reqstats.PROV.SUBSTITUTE);
       rows.push(cur);
     } else if (cur && (m = RE_EVAL.exec(line)) && +m[1] === cur.task) {
       cur.genMs = +m[2]; cur.outputTokens = +m[3]; cur.genTps = +m[4];
@@ -110,6 +115,31 @@ function forgetGone(files) {
   Object.keys(parsed).forEach(function (f) { if (!keep[f]) delete parsed[f]; });
 }
 
+// AI_SCOPE-094 slice 4: the whole-PC peak per Bionic request lives here, like every other scope
+// (Strata / Ollama / llama.cpp / Comfy all attach it in their own module). It used to be done in
+// server.js, which is why it needed a key of its own and an inferred window start.
+// The log lines are stamped only when a request ends, so Bionic's `end` is a whole-second stamp:
+// the cache keeps a computed peak across the re-reads, and a row younger than 4 s is left without
+// one so the 2 s samples covering its end have had time to arrive.
+const PEAK_CACHE_MAX = 5000;
+const peakCache = new Map();
+function attachPeak(r) {
+  if (!r || r.peak !== undefined) return;
+  const end = r.end;
+  if (end == null || r.durationMs == null) return;
+  const key = r.key;
+  if (peakCache.has(key)) { r.peak = peakCache.get(key); return; }
+  if (Date.now() - end < 4000) return;                       // not final yet - retry on the next poll
+  const from = r.start != null ? r.start - 1000 : end - r.durationMs - 1000;
+  const p = hwstats.peakBetween(from, end + 2000);
+  const oldest = hwstats.oldestSample();
+  if (p || oldest == null || end < oldest) {                 // final: found, or too old to ever find
+    peakCache.set(key, p);
+    if (peakCache.size > PEAK_CACHE_MAX) peakCache.delete(peakCache.keys().next().value);
+  }
+  r.peak = p;
+}
+
 // Returns the newest `limit` requests, newest first.
 function getLatestRequests(limit) {
   limit = limit || 100;
@@ -122,7 +152,7 @@ function getLatestRequests(limit) {
   for (let i = files.length - 1; i >= 0 && rows.length < limit; i--) {
     const c = parseFile(files[i]);
     if (!c) continue;
-    for (let j = c.rows.length - 1; j >= 0 && rows.length < limit; j--) rows.push(c.rows[j]);
+    for (let j = c.rows.length - 1; j >= 0 && rows.length < limit; j--) { attachPeak(c.rows[j]); rows.push(c.rows[j]); }
   }
   return { logDir: dir, rows: rows };
 }

@@ -199,11 +199,12 @@ defineLens({
 // everything else is slot arithmetic (≈), and `quick` rows know only the combined token total -
 // so Generated stays a gap there rather than showing a prompt+generation sum (decision: gap + tag).
 function llamacppReqTitle(key, r) {
-  if (key === 'duration') return r.exact ? 'prompt ' + fmtSec(r.promptMs) + ' + generation ' + fmtSec(r.genMs) : null;
+  const pv = f => provOf(r, f);
+  if (key === 'duration') return pv('durationMs') === 'derived' ? 'prompt ' + fmtSec(r.promptMs) + ' + generation ' + fmtSec(r.genMs) : null;
   if (key === 'prompt') return r.promptTps ? 'read at ' + fmtTps(r.promptTps) + ' tok/s in ' + fmtSec(r.promptMs) : null;
-  if (key === 'generated') return r.quick ? 'this server saw the request start and finish between two looks: only its combined prompt + generation token count is known' : (r.outputEstimated ? 'From the slot\u2019s token count after it finished' : null);
-  if (key === 'genTps') return (r.exact || r.genExact) ? LC_EXACT : LC_EST;
-  if (key === 'firstToken') return r.firstTokenDerived ? 'Derived: the server\u2019s metrics give the prompt-eval time, not a first-token time' : null;
+  if (key === 'generated') return r.quick ? 'this server saw the request start and finish between two looks: only its combined prompt + generation token count is known' : (pv('outputTokens') === 'estimated' ? 'From the slot\u2019s token count after it finished' : null);
+  if (key === 'genTps') return pv('genTps') === 'derived' ? LC_EXACT : LC_EST;
+  if (key === 'firstToken') return pv('firstTokenMs') === 'substitute' ? 'Substituted: the server\u2019s metrics give the prompt-eval time, not a first-token time' : null;
   return null;
 }
 const LLAMACPP_REQ = {

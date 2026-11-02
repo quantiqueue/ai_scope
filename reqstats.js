@@ -44,4 +44,38 @@ function avgSpeed(rows, model, o) {
   return { value: t / s, requests: picked.length, tokens: t, seconds: s };
 }
 
-module.exports = { avgSpeed: avgSpeed };
+// ---------- AI_SCOPE-094 slice 4: one provenance vocabulary for every number on a record ----------
+// Four dialects of the same question existed (llama.cpp exact / genExact / outputEstimated / quick,
+// Ollama measured, Strata genDerived, Bionic firstTokenDerived). They asked the same thing: where did
+// this number come from? So a record now answers it per field, in four words.
+//
+//   exact       the app measured this quantity and reported it
+//   derived     AI_SCOPE did one arithmetic step on the app's own reported numbers (tokens ÷ time,
+//               the difference between two counters). Trustworthy, just not measured as such.
+//   estimated   AI_SCOPE reconstructed it from polling or interpolation - no per-request measurement
+//               backs the number, so a table shows it with ≈, as llama.cpp has always done.
+//   substitute  the value answers a DIFFERENT question from the one the column asks: a prefill
+//               duration sitting in the First token column because the app reports no first-token
+//               time at all. Shown with ≈ and its reason spelled out - it is not a measurement of
+//               the quantity the header names.
+//
+// A field with no entry is the app's own number (exact). A number that does not exist is absent,
+// which is a gap on screen - never a zero and never an average (the 072 rule).
+// `quick` stays what it always was: a statement about what the observer could see, not about a
+// number's arithmetic. It belongs with the row, not the field.
+const PROV = { EXACT: 'exact', DERIVED: 'derived', ESTIMATED: 'estimated', SUBSTITUTE: 'substitute' };
+const MARKED = { estimated: true, substitute: true };   // the two kinds a table shows with ≈
+
+function setProv(r, field, kind) {
+  if (!r) return;
+  if (kind === PROV.EXACT) { if (r.src) delete r.src[field]; return; }   // the default needs no bytes on disk
+  (r.src = r.src || {})[field] = kind;
+}
+function prov(r, field) {
+  const s = r && r.src;
+  return (s && s[field]) || PROV.EXACT;
+}
+// The one question the tables ask: does this number need a marker?
+function isMarked(r, field) { return !!MARKED[prov(r, field)]; }
+
+module.exports = { avgSpeed: avgSpeed, PROV: PROV, setProv: setProv, prov: prov, isMarked: isMarked };

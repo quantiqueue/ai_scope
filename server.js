@@ -57,23 +57,8 @@ function sendWebFile(res, name, type) {
 }
 
 // Which scope each data endpoint belongs to: endpoints of scopes that aren't installed answer 404.
-// Peak whole-PC load per Bionic request. Its log rows are re-read on every poll, so peaks are cached
-// in memory by row. The log timestamp is written when the request finishes (1 s resolution).
-const lmPeaks = new Map();
-function lmPeak(r) {
-  const key = r.timestamp + '|' + r.task;
-  if (lmPeaks.has(key)) return lmPeaks.get(key);
-  const end = lmstats.tsToMs(r.timestamp);
-  if (end == null || r.durationMs == null) return null;
-  const oldest = hwstats.oldestSample();
-  if (Date.now() - end < 4000) return null;          // let the samples after the end come in first
-  const p = hwstats.peakBetween(end - r.durationMs - 1000, end + 2000);
-  if (p || oldest == null || end < oldest) {          // final: found, or too old to ever find
-    lmPeaks.set(key, p);
-    if (lmPeaks.size > 5000) lmPeaks.delete(lmPeaks.keys().next().value);
-  }
-  return p;
-}
+// AI_SCOPE-094 slice 4: the per-request whole-PC peak used to be computed here for Bionic, with its
+// own cache and an inferred window start. It lives in lmstats.js now, like every other scope.
 const SCOPE_ROUTES = [['/api/bionic', 'bionic'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata'], ['/api/llamacpp', 'llamacpp']];
 const PKG_VERSION = require('./package.json').version;
 // App scopes whose processes procstats watches (key = scope id), for the Processes scope's AI processes lens.
@@ -311,7 +296,6 @@ http.createServer((req, res) => {
     let body;
     try {
       body = lmstats.getLatestRequests(limit);
-      body.rows.forEach(r => { r.peak = lmPeak(r); });
       body.current = lmstats.getCurrentRequest();
       // A model unloaded mid-request (or its llama-server ended) leaves no "stop processing" line in the log, so the
       // request would look like it's running until the log has been silent for 2 min. Bionic's API knows better.

@@ -48,6 +48,9 @@ const store = reqstore.createStore({
   mapRow: function (r) {
     if (r.reused !== undefined) { r.cachedTokens = r.reused; delete r.reused; }
     if (r.decodeMs !== undefined) { r.genMs = r.decodeMs; delete r.decodeMs; }
+    // slice 4: lines saved before the provenance vocabulary carry the old boolean instead.
+    if (r.genDerived !== undefined) { if (r.genDerived) reqstats.setProv(r, 'genTps', reqstats.PROV.DERIVED); delete r.genDerived; }
+    if (r.promptTps != null) reqstats.setProv(r, 'promptTps', reqstats.PROV.DERIVED);
     return r;
   },
   onError: function (msg) { lastError = msg; }
@@ -83,7 +86,7 @@ function toRow(inst, x) {
   const dur = num(x.duration_s) != null ? x.duration_s * 1000 : null;
   const promptRead = num(x.prompt_read);
   const promptMs = num(x.prompt_ms), genMs = num(x.decode_ms), out = num(x.output_tokens);
-  return {
+  const row = {
     key: inst.id + ':' + x.id, id: String(x.id), instanceId: inst.id,
     model: inst.label || inst.model || 'unknown', variant: inst.model || null,
     start: end != null && dur != null ? end - dur : null, end: end, durationMs: dur, finish: x.finish || null,
@@ -92,12 +95,18 @@ function toRow(inst, x) {
     promptTokens: num(x.prompt_tokens), cachedTokens: num(x.reused), promptRead: promptRead, outputTokens: out,
     promptMs: promptMs, genMs: genMs,
     genTps: num(x.decode_tok_s) != null ? x.decode_tok_s : (out && genMs ? out / (genMs / 1000) : null),
-    genDerived: num(x.decode_tok_s) == null && !!(out && genMs),   // computed here, not Strata's number
     promptTps: promptRead && promptMs ? promptRead / (promptMs / 1000) : null,
     firstTokenMs: num(x.first_engine_token_s) != null ? x.first_engine_token_s * 1000 : null,
     hitRate: num(x.hit_rate),
     draftsOffered: num(x.drafts_offered), draftsAccepted: num(x.drafts_accepted),
   };
+  // AI_SCOPE-094 slice 4: provenance. Every count and duration above is Strata's own reading, so it
+  // needs no entry (no entry = exact). Speed is the exception: Strata reports decode_tok_s, and when
+  // it does not we divide tokens by time ourselves; its prompt speed is always ours, since Strata
+  // gives no prompt-token rate at all.
+  if (num(x.decode_tok_s) == null) reqstats.setProv(row, 'genTps', reqstats.PROV.DERIVED);
+  reqstats.setProv(row, 'promptTps', reqstats.PROV.DERIVED);
+  return row;
 }
 function collectRequests(instances) {
   const now = Date.now();

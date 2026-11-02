@@ -142,10 +142,13 @@ defineLens({
 // includes that load, which is why it keeps a column of its own). Ollama reports no prompt-cache
 // number, so the Cached column is an honest gap.
 function ollamaReqTitle(key, r) {
+  const pv = f => provOf(r, f);
   if (key === 'model') return r.endpoint;
   if (key === 'generated') return r.thinkTokens ? fmtNum(r.thinkTokens) + ' of these were thinking tokens' : null;
-  if (key === 'genTps') return r.measured ? 'measured by the proxy (OpenAI-style endpoint)' : null;
-  if (key === 'firstToken') return r.firstTokenDerived ? 'Derived: no stream first-token stamp arrived, so this is model load + prompt eval time' : null;
+  if (key === 'genTps') return pv('genMs') === 'derived' ? 'generation time timed by the AI_SCOPE relay (OpenAI-style endpoint)' : null;
+  if (key === 'firstToken') { const k = pv('firstTokenMs');
+    return k === 'substitute' ? 'Substituted: no stream first-token stamp arrived, so this is model load + prompt eval time'
+         : k === 'derived' ? 'Timed by the AI_SCOPE relay: when the first token of the stream arrived' : null; }
   if (key === 'duration') return 'whole request, model load included (see Load Time)';
   return null;
 }

@@ -103,11 +103,14 @@ defineLens({
 // ---------- Requests ----------
 // AI_SCOPE-094 slice 2: shared Requests columns. Bionic has no column of its own — everything it
 // reports is in the uniform set. Its first-token number is the prefill duration (the log carries
-// no TTFT line), which lmstats marks firstTokenDerived, so the cell shows ≈ with the reason.
+// no TTFT line), which lmstats marks as a substitute, so the cell shows ≈ with the reason.
 const BIONIC_REQ = {
   title: 'Requests', pager: true, keyOf: r => r.key, hint: '',
   foot: '\n      <div class="err" data-k="err" hidden></div>',
-  titleOf: (key, r) => key === 'finished' ? r.timestamp : (key === 'duration' ? 'from Bionic\'s log: total time for the task' : null)
+  titleOf: (key, r) => key === 'finished' ? r.timestamp
+    : key === 'duration' ? 'from Bionic\'s log: total time for the task'
+    : key === 'firstToken' && provOf(r, 'firstTokenMs') === 'substitute' ? 'Bionic\'s log carries no first-token line at all, so this is the prompt-eval time'
+    : null
 };
 defineLens({
   id: 'bionic.requests', scope: 'bionic', size: 'full',

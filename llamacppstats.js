@@ -55,8 +55,30 @@ const store = reqstore.createStore({
   // AI_SCOPE-094 slice 2: rows saved before the explicit flags carried no `exact` at all, and the
   // old client read "absent" as estimated. Say so on read so those lines keep their ≈.
   mapRow: function (r) {
-    if (r.exact === undefined) r.exact = false;
-    if (r.genExact === undefined) r.genExact = false;
+    // slice 4: the 59 lines saved before this change carry the old boolean dialect. Read them as
+    // provenance instead, so the ≈ on an estimated line and the plain counter numbers on a settled
+    // line both survive - the files themselves are never rewritten.
+    const P = reqstats.PROV;
+    if (r.exact === undefined && r.genExact === undefined && r.src === undefined) r.exact = false;
+    if (r.src === undefined) {
+      const settled = r.exact === true;
+      if (settled) {
+        reqstats.setProv(r, 'outputTokens', P.EXACT);
+        if (r.genMs != null) reqstats.setProv(r, 'genMs', P.EXACT);
+        if (r.promptMs != null) reqstats.setProv(r, 'promptMs', P.EXACT);
+        if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
+        if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
+        if (r.durationMs != null) reqstats.setProv(r, 'durationMs', P.DERIVED);
+        if (r.cachedTokens != null) reqstats.setProv(r, 'cachedTokens', P.EXACT);
+      } else {
+        if (r.genTps != null) reqstats.setProv(r, 'genTps', P.ESTIMATED);
+        if (r.firstTokenMs != null) reqstats.setProv(r, 'firstTokenMs', P.ESTIMATED);
+        if (r.durationMs != null) reqstats.setProv(r, 'durationMs', P.ESTIMATED);
+      }
+      if (r.outputEstimated) reqstats.setProv(r, 'outputTokens', P.ESTIMATED);
+      if (r.firstTokenDerived) reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
+    }
+    ['exact', 'genExact', 'outputEstimated', 'firstTokenDerived'].forEach(k => { delete r[k]; });
     return r;
   },
   onError: function (msg) { lastError = msg; }
@@ -137,13 +159,18 @@ function finish(rec, idleAt, after) {
   const row = {
     key: Date.now().toString(36) + '-' + (nextKey++), slot: rec.slot, task: rec.task, model: rec.model,
     start: Math.round(rec.start), end: Math.round(end), durationMs: Math.round(end - rec.start),
-    promptTokens: rec.prompt, cachedTokens: rec.cached || null, outputTokens: out || null, outputEstimated: outEst || undefined,
+    promptTokens: rec.prompt, cachedTokens: rec.cached || null, outputTokens: out || null,
     genTps: genTps, firstTokenMs: firstAt != null ? Math.round(firstAt - rec.start) : null,
-    // AI_SCOPE-094 slice 2: these rows come from slot arithmetic, so exactness is stated explicitly
-    // (false) rather than left absent — the shared columns read the flag, and settlePeriod() below
-    // overwrites these with true when the server's /metrics counters confirm the request ran alone.
-    exact: false, genExact: false,
+    // AI_SCOPE-094 slice 4: these rows are reconstructed from ½ s (¼ s busy) looks at the slot
+    // counters, so the speed, the end, the duration and the first token are ESTIMATED, not measured.
+    // The token counts come straight off the slot, so they stay exact. settlePeriod() below promotes
+    // a row to exact when the server's /metrics counters show it ran alone.
   };
+  const P = reqstats.PROV;
+  if (outEst) reqstats.setProv(row, 'outputTokens', P.ESTIMATED);
+  if (row.genTps != null) reqstats.setProv(row, 'genTps', P.ESTIMATED);
+  if (row.firstTokenMs != null) reqstats.setProv(row, 'firstTokenMs', P.ESTIMATED);
+  reqstats.setProv(row, 'durationMs', P.ESTIMATED);
   later(row);
   const m = models[rec.model];
   if (m && m.period) m.period.rows.push(row);
@@ -410,19 +437,23 @@ function settlePeriod(m, base, after, period) {
   const pp = after.promptTokens - base.promptTokens, ps = after.promptSec - base.promptSec;
   const dc = after.cached - base.cached;
   if (!(dp > 0 && ds > 0) || (r.outputTokens && Math.abs(dp - r.outputTokens) > 2)) return;   // not this request's numbers
-  // generation: exact. llama counts its speed over the gaps between tokens (n - 1), as in its own timings.
-  r.outputTokens = dp; delete r.outputEstimated;
-  r.genTps = (dp > 1 ? dp - 1 : dp) / ds; r.genMs = Math.round(ds * 1000); r.genExact = true;
+  // generation: the counters measured it, so the counts and the two durations are exact.
+  const P = reqstats.PROV;
+  r.outputTokens = dp; reqstats.setProv(r, 'outputTokens', P.EXACT);
+  r.genTps = (dp > 1 ? dp - 1 : dp) / ds; r.genMs = Math.round(ds * 1000);
+  reqstats.setProv(r, 'genMs', P.EXACT);
+  reqstats.setProv(r, 'genTps', P.DERIVED);      // one step of arithmetic on two measured counters
   // prompt: only when the counters show its work (seen 0 for a request that was already running when AI_SCOPE
   // restarted) - else the first-token / duration estimates stay
   if (!(pp > 0 && ps > 0) && !(dc > 0)) return;
-  if (pp > 0 && ps > 0) r.promptTps = pp / ps;
-  r.promptMs = Math.round(ps * 1000);
-  if (dc >= 0) r.cachedTokens = dc || null;
-  r.firstTokenMs = r.promptMs; r.firstTokenDerived = true;   // the metrics give prefill time, not a TTFT
-  r.durationMs = Math.round((ps + ds) * 1000);
+  if (pp > 0 && ps > 0) { r.promptTps = pp / ps; reqstats.setProv(r, 'promptTps', P.DERIVED); }
+  r.promptMs = Math.round(ps * 1000); reqstats.setProv(r, 'promptMs', P.EXACT);
+  if (dc >= 0) { r.cachedTokens = dc || null; reqstats.setProv(r, 'cachedTokens', P.EXACT); }
+  // llama's metrics give the prefill duration, never a first-token time: the column is answered by a
+  // SUBSTITUTE, which is exactly why it carries a marker (the same convention Bionic's log forces).
+  r.firstTokenMs = r.promptMs; reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
+  r.durationMs = Math.round((ps + ds) * 1000); reqstats.setProv(r, 'durationMs', P.DERIVED);
   r.start = r.end - r.durationMs;
-  r.exact = true;
 }
 function anyBusy() { return Object.keys(slotState).some(function (k) { return slotState[k].busy; }); }
 function schedule() {

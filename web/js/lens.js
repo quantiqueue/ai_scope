@@ -355,24 +355,26 @@ function nowCardMarkup(boxes, title) {
 // never reports stays a gap (—) — never a zero, never an average (the 072 rule) — and a number
 // AI_SCOPE computed rather than read is marked as computed.
 const REQ_UNIFORM = ['finished', 'duration', 'model', 'prompt', 'cached', 'generated', 'genTps', 'promptTps', 'firstToken', 'peak'];
-function reqApprox(r) { return r && (r.exact === false || r.genExact === false || r.outputEstimated) ? '≈ ' : ''; }
 // A scope's own tooltip wins; the built-in fallback still applies when it returns nothing, so a
-// scope adding tooltips can never silence the honesty notes (the probe caught that: Bionic's
+// scope adding tooltips can never silence the honesty notes (the slice-2 probe caught that: Bionic's
 // derived first-token reason vanished as soon as the scope supplied a titleOf at all).
 function reqTip(o, key, r, fallback) {
   const t = o && o.titleOf ? o.titleOf(key, r) : null;
   return t != null ? t : (typeof fallback === 'function' ? fallback(r) : fallback);
 }
+// The marker now comes from the record's own provenance (core.js provOf / provText), not from a
+// per-scope flag dialect: `≈` wherever the number was estimated or substituted, plain where the app
+// reported it or where one arithmetic step on reported numbers produced it.
 const REQ_COLS = {
   finished:   { th: 'Finished',    td: (r, o) => '<td' + tattr(reqTip(o, 'finished', r, null)) + '>' + escH(o.when ? o.when(r) : fmtWhen(r.end)) + '</td>' },
-  duration:   { th: 'Duration',    td: (r, o) => '<td' + tattr(reqTip(o, 'duration', r, null)) + '>' + (r.durationMs != null ? reqApprox(r) + fmtSec(r.durationMs) : (r.quick ? '< 1 s' : ONONE)) + '</td>' },
+  duration:   { th: 'Duration',    td: (r, o) => '<td' + tattr(reqTip(o, 'duration', r, provText(r, 'durationMs'))) + '>' + (r.durationMs != null ? (provMarked(r, 'durationMs') ? '\u2248 ' : '') + fmtSec(r.durationMs) : (r.quick ? '< 1 s' : ONONE)) + '</td>' },
   model:      { th: 'Model',       td: (r, o) => '<td class="model"' + tattr(reqTip(o, 'model', r, null)) + '>' + (o.statusOf ? o.statusOf(r) : '') + nameHtml(r.model || ONONE) + (o.tagOf ? o.tagOf(r) : '') + '</td>' },
   prompt:     { th: 'Prompt',      td: (r, o) => '<td' + tattr(reqTip(o, 'prompt', r, null)) + '>' + fmtNum(r.promptTokens) + '</td>' },
   cached:     { th: 'Cached',      td: (r, o) => '<td' + tattr(reqTip(o, 'cached', r, 'Prompt tokens reused from the cache (not read again)')) + '>' + fmtNum(r.cachedTokens) + '</td>' },
-  generated:  { th: 'Generated',   td: (r, o) => '<td' + tattr(reqTip(o, 'generated', r, null)) + '>' + (r.outputTokens != null ? (r.outputEstimated ? '≈ ' : '') + fmtNum(r.outputTokens) : ONONE) + '</td>' },
-  genTps:     { th: 'Gen tok/s',   td: (r, o) => '<td class="tps"' + tattr(reqTip(o, 'genTps', r, r.genDerived ? 'Computed here: tokens ÷ generation time' : null)) + '>' + (r.genTps != null ? reqApprox(r) + fmtTps(r.genTps) : ONONE) + '</td>' },
-  promptTps:  { th: 'Prompt tok/s', td: (r, o) => '<td' + tattr(reqTip(o, 'promptTps', r, r.promptDerived ? 'Computed here: tokens ÷ prompt time' : null)) + '>' + (r.promptTps != null ? fmtTps(r.promptTps) : ONONE) + '</td>' },
-  firstToken: { th: 'First token', td: (r, o) => '<td' + tattr(reqTip(o, 'firstToken', r, r.firstTokenDerived ? 'Derived: the app reports no first-token time; this is the prompt-eval duration' : null)) + '>' + (r.firstTokenMs != null ? (r.firstTokenDerived ? '≈ ' : reqApprox(r)) + fmtSec(r.firstTokenMs) : ONONE) + '</td>' },
+  generated:  { th: 'Generated',   td: (r, o) => '<td' + tattr(reqTip(o, 'generated', r, provText(r, 'outputTokens'))) + '>' + (r.outputTokens != null ? (provMarked(r, 'outputTokens') ? '\u2248 ' : '') + fmtNum(r.outputTokens) : ONONE) + '</td>' },
+  genTps:     { th: 'Gen tok/s',   td: (r, o) => '<td class="tps"' + tattr(reqTip(o, 'genTps', r, provText(r, 'genTps'))) + '>' + (r.genTps != null ? (provMarked(r, 'genTps') ? '\u2248 ' : '') + fmtTps(r.genTps) : ONONE) + '</td>' },
+  promptTps:  { th: 'Prompt tok/s', td: (r, o) => '<td' + tattr(reqTip(o, 'promptTps', r, provText(r, 'promptTps'))) + '>' + (r.promptTps != null ? (provMarked(r, 'promptTps') ? '\u2248 ' : '') + fmtTps(r.promptTps) : ONONE) + '</td>' },
+  firstToken: { th: 'First token', td: (r, o) => '<td' + tattr(reqTip(o, 'firstToken', r, provText(r, 'firstTokenMs'))) + '>' + (r.firstTokenMs != null ? (provMarked(r, 'firstTokenMs') ? '\u2248 ' : '') + fmtSec(r.firstTokenMs) : ONONE) + '</td>' },
   peak:       { th: 'Peak load',   td: (r) => peakCell(r.peak) },
   // scope-exclusive columns, always after the uniform block
   hitRate:    { th: 'Hit Rate',    td: (r) => '<td title="Share of needed experts already in VRAM (the rest came from RAM)">' + fmtPct(r.hitRate) + '</td>' },

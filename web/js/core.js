@@ -129,6 +129,17 @@ const fmtNum = n => n == null ? '—' : n.toLocaleString();
 const fmtTps = n => n == null ? '—' : n.toFixed(1);
 // AI_SCOPE-094: moved here from strata.js so the shared Requests columns (lens.js) can use it.
 const fmtPct = f => f == null ? '—' : Math.round(f * 100) + '%';
+// AI_SCOPE-094 slice 4: where a number came from (the server writes `src` per field; see reqstats.js).
+// exact / derived need no marker; estimated and substitute do - they are not measurements.
+const provOf = (r, f) => (r && r.src && r.src[f]) || 'exact';
+const provMarked = (r, f) => { const k = provOf(r, f); return k === 'estimated' || k === 'substitute'; };
+const provText = (r, f) => {
+  const k = provOf(r, f);
+  if (k === 'estimated') return 'Estimated by AI_SCOPE from what it could see between polls - the app gave no per-request measurement';
+  if (k === 'substitute') return 'Substituted: this app reports no such measurement, so the column carries a related number instead';
+  if (k === 'derived') return 'Computed by AI_SCOPE from the app\u2019s own reported numbers';
+  return null;
+};
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // Icon of custom scopes (tabs, Scopes page, dialogs): four tiles.

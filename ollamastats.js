@@ -48,9 +48,27 @@ const store = reqstore.createStore({
   onLoaded: function (rows) { rows.forEach(function (r) { if (r.id >= nextId) nextId = r.id + 1; }); },
   // AI_SCOPE-094 slice 2: the saved lines from before the rename carry the old names; map them on read.
   mapRow: function (r) {
+    const hadSrc = r.src !== undefined;                 // rows written after slice 4 need no back-fill
     if (r.genTokens !== undefined) { r.outputTokens = r.genTokens; delete r.genTokens; }
     if (r.totalMs !== undefined) { r.durationMs = r.totalMs; delete r.totalMs; }
     if (r.ttftMs !== undefined) { r.firstTokenMs = r.ttftMs; delete r.ttftMs; }
+    // slice 4: the old boolean dialects become provenance entries on read.
+    const P = reqstats.PROV;
+    if (r.measured) {
+      reqstats.setProv(r, 'genMs', P.DERIVED); reqstats.setProv(r, 'promptMs', P.DERIVED);
+      reqstats.setProv(r, 'durationMs', P.DERIVED);
+    }
+    if (r.genDerived) reqstats.setProv(r, 'genTps', P.DERIVED);
+    if (r.promptDerived) reqstats.setProv(r, 'promptTps', P.DERIVED);
+    if (r.firstTokenDerived) reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
+    ['measured', 'genDerived', 'promptDerived', 'firstTokenDerived'].forEach(k => { delete r[k]; });
+    // And lines saved before any of those flags existed: Ollama never reported a speed or a
+    // first-token time, so every one of those numbers on an old line is ours.
+    if (!hadSrc) {
+      if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
+      if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
+      if (r.firstTokenMs != null) reqstats.setProv(r, 'firstTokenMs', P.DERIVED);
+    }
     return r;
   }
 });
@@ -262,24 +280,36 @@ function finish(rec, aborted) {
               error: rec.error || (rec.status && rec.status !== 200 ? 'HTTP ' + rec.status : null),
               outputTokens: null, genMs: null, promptTokens: null, promptMs: null, loadMs: null,
               firstTokenMs: rec.firstAt ? rec.firstAt - rec.start : null, durationMs: end - rec.start,
-              thinkTokens: rec.think || null, measured: false };
+              thinkTokens: rec.think || null };
+  // AI_SCOPE-094 slice 4: provenance, one rule - Ollama's own API numbers are exact (no entry
+  // needed), anything the relay timed or divided out is derived.
+  const P = reqstats.PROV;
   if (f) {   // native API: Ollama's own timings (nanoseconds)
     r.outputTokens = num(f.eval_count); r.genMs = nsToMs(f.eval_duration);
     r.promptTokens = num(f.prompt_eval_count); r.promptMs = nsToMs(f.prompt_eval_duration);
     r.loadMs = nsToMs(f.load_duration);
     if (num(f.total_duration)) r.durationMs = nsToMs(f.total_duration);
-    if (r.firstTokenMs == null) { r.firstTokenMs = (r.loadMs || 0) + (r.promptMs || 0); r.firstTokenDerived = true; }
-  } else {   // OpenAI-compatible API or cut-off stream: timings measured by the proxy
-    r.measured = true;
+    else reqstats.setProv(r, 'durationMs', P.DERIVED);            // our clock, not Ollama's total
+    // No stream first-token stamp: load + prefill answers a DIFFERENT question from the column's,
+    // so it is a substitute, not merely a derived figure.
+    if (r.firstTokenMs == null) r.firstTokenMs = (r.loadMs || 0) + (r.promptMs || 0);
+  } else {   // OpenAI-compatible API or cut-off stream: timings measured by the relay
     r.outputTokens = u && num(u.completion_tokens) != null ? u.completion_tokens : (rec.tokens || null);
+    if (!(u && num(u.completion_tokens) != null)) reqstats.setProv(r, 'outputTokens', P.DERIVED);
     r.promptTokens = u ? num(u.prompt_tokens) : null;
     if (rec.firstAt && rec.lastAt > rec.firstAt) r.genMs = rec.lastAt - rec.firstAt;
+    reqstats.setProv(r, 'genMs', P.DERIVED);
+    reqstats.setProv(r, 'promptMs', P.DERIVED);                   // never reported on this path
+    reqstats.setProv(r, 'durationMs', P.DERIVED);
   }
+  // The relay's own first-token observation is derived (a clock reading, not an Ollama number);
+  // where no stamp arrived at all, the column carries load + prefill instead - a substitute.
+  if (r.firstTokenMs != null) reqstats.setProv(r, 'firstTokenMs', rec.firstAt ? P.DERIVED : P.SUBSTITUTE);
   // genTps / promptTps are always ours (tokens ÷ time), so both carry the derived marker.
   r.genTps = r.outputTokens && r.genMs ? r.outputTokens / (r.genMs / 1000) : null;
-  if (r.genTps != null) r.genDerived = true;
+  if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
   r.promptTps = r.promptTokens && r.promptMs ? r.promptTokens / (r.promptMs / 1000) : null;
-  if (r.promptTps != null) r.promptDerived = true;
+  if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
   r.peak = hwstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
   if ((r.status === 'ok' || rec.tokens || r.error) && !isEmptyCall(r)) saveRequest(r);
   if (r.model !== 'unknown' && !installed.some(function (m) { return m.name === r.model; })) tagsAt = 0;
