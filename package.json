@@ -38,6 +38,8 @@
     "scopes.json",
     "customscopes.js",
     "paths.js",
+    "reqstore.js",
+    "reqstats.js",
     "hwstats.js",
     "diskstats.js",
     "diskstats.ps1",
