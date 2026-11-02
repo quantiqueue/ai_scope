@@ -14,4 +14,4 @@ Ollama reports token speed and timings only to the app that sent the request, so
 | ComfyUI | URL (empty = try `:8188`, then `:8000`) |
 | Ollama | URL (default `http://127.0.0.1:11434`), relay port (default `11435`) |
 | Strata | Strata app URL (empty = `http://127.0.0.1:47831`, shown in Strata under *Connect Strata to an app*) |
-| llama.cpp | Server URL (empty = try `:9931` for `llama serve`, then `:8080` for `llama-server`) |
+| llama.cpp | Server URL (empty = try `:9931` for `llama serve`, then `:8080` for `llama-server`), API key (optional; sent as `Authorization: Bearer` for a server started with `--api-key`; an **API key** is a secret field - stored server-side only, the page and `/api/scopes` show just "set", never the value) |

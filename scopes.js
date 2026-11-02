@@ -105,11 +105,18 @@ function install(id, input) {
   if (sc.builtin) return { ok: false, error: sc.name + ' is built in' };
   const v = validate(sc, input);
   if (Object.keys(v.errors).length) return { ok: false, errors: v.errors };
+  // Secrets are masked in list(), so the form posts them empty when unchanged - an empty secret keeps what is stored.
+  const prior = (state[id] && state[id].settings) || {};
+  (sc.settings || []).forEach(function (f) {
+    if (f.type === 'secret' && v.settings[f.key] === '' && prior[f.key]) v.settings[f.key] = prior[f.key];
+  });
   if (state[id]) stopScope(id);
   state[id] = { installedAt: (state[id] && state[id].installedAt) || Date.now(), settings: v.settings };
   saveState();
   startScope(id);
-  console.log('[scopes] installed ' + id + ' ' + JSON.stringify(v.settings));
+  const logged = {};   // secret values never reach the log - only whether one is set
+  (sc.settings || []).forEach(function (f) { logged[f.key] = f.type === 'secret' ? (v.settings[f.key] ? 'set' : '') : v.settings[f.key]; });
+  console.log('[scopes] installed ' + id + ' ' + JSON.stringify(logged));
   return { ok: true };
 }
 function remove(id) {
@@ -133,9 +140,11 @@ function list() {
       id: sc.id, name: sc.name, desc: sc.desc || '', icon: sc.icon || '', logo: !!sc.logo, builtin: !!sc.builtin,
       installed: isInstalled(sc.id), installedAt: st ? st.installedAt : null, error: errors[sc.id] || null,
       settings: (sc.settings || []).map(function (f) {
+        const val = st && st.settings && st.settings[f.key] != null ? st.settings[f.key] : defaultOf(f);
         return { key: f.key, label: f.label || f.key, type: f.type || 'text', placeholder: f.placeholder || '', help: f.help || '',
                  required: !!f.required, min: f.min, max: f.max, default: defaultOf(f),
-                 value: st && st.settings && st.settings[f.key] != null ? st.settings[f.key] : defaultOf(f) };
+                 // secret values stay server-side: the page (and GET /api/scopes) only ever sees 'set' or ''
+                 value: f.type === 'secret' ? (val ? 'set' : '') : val };
       }),
     };
   });
