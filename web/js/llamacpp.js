@@ -194,35 +194,34 @@ defineLens({
 });
 
 // ---------- Requests ----------
+// AI_SCOPE-094 slice 2: shared Requests columns; llama.cpp's own Slot column appended last.
+// Its numbers keep their honesty markers: `exact` rows come from the server's /metrics counters,
+// everything else is slot arithmetic (≈), and `quick` rows know only the combined token total -
+// so Generated stays a gap there rather than showing a prompt+generation sum (decision: gap + tag).
+function llamacppReqTitle(key, r) {
+  if (key === 'duration') return r.exact ? 'prompt ' + fmtSec(r.promptMs) + ' + generation ' + fmtSec(r.genMs) : null;
+  if (key === 'prompt') return r.promptTps ? 'read at ' + fmtTps(r.promptTps) + ' tok/s in ' + fmtSec(r.promptMs) : null;
+  if (key === 'generated') return r.quick ? 'this server saw the request start and finish between two looks: only its combined prompt + generation token count is known' : (r.outputEstimated ? 'From the slot\u2019s token count after it finished' : null);
+  if (key === 'genTps') return (r.exact || r.genExact) ? LC_EXACT : LC_EST;
+  if (key === 'firstToken') return r.firstTokenDerived ? 'Derived: the server\u2019s metrics give the prompt-eval time, not a first-token time' : null;
+  return null;
+}
+const LLAMACPP_REQ = {
+  title: 'Requests', pager: true, extra: ['slot'], keyOf: r => r.key, titleOf: llamacppReqTitle,
+  tagOf: r => r.quick ? '<span class="tag" title="Started and finished between two looks at the server, so only its size is known (prompt + output tokens together)">quick</span>' : ''
+};
 defineLens({
   id: 'llamacpp.requests', scope: 'llamacpp', size: 'full',
   name: 'Requests',
-  description: 'Finished requests seen in the server\'s slots: tokens, estimated speed, first token, duration, peak load.',
+  description: 'Finished requests seen in the server\'s slots: tokens, speeds, first token, duration, peak load.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Requests', pager:true,
-    cols:['Finished', 'Model', 'Slot', 'Prompt', 'Cached', 'Output', 'Gen tok/s', 'First token', 'Duration', 'Peak load'] }),
+  markup: reqTableMarkup(LLAMACPP_REQ),
   render(L, d) {
     const $ = L.$;
     $('hint').innerHTML = '— <span title="' + escH(LC_EST) + '">≈ = estimated</span>' + ((d.models || []).some(m => m.metricsOn) ? '; requests that ran alone are exact (server metrics)' : ' · start the server with --metrics for exact numbers');
     $('empty').hidden = d.rows.length > 0;
     $('empty').textContent = 'No requests yet. Requests from the server\'s web chat and from apps using its API appear here once they finish.';
-    $('rows').innerHTML = paginate(L.key, d.rows.map(r => {
-      const isNew = isNewRow(L, r.key);
-      const approx = r.exact ? '' : '≈ ';
-      const quick = r.quick ? '<span class="tag" title="Started and finished between two looks at the server, so only its size is known (prompt + output tokens together)">quick</span>' : '';
-      return '<tr' + (isNew ? ' class="new"' : '') + '>' +
-        '<td>' + escH(fmtWhen(r.end)) + '</td>' +
-        '<td class="model">' + nameHtml(r.model || ONONE) + quick + '</td>' +
-        '<td>' + (r.slot != null ? r.slot : ONONE) + '</td>' +
-        '<td' + (r.promptTps ? ' title="read at ' + fmtTps(r.promptTps) + ' tok/s in ' + fmtSec(r.promptMs) + '"' : '') + '>' + fmtNum(r.promptTokens) + '</td>' +
-        '<td title="Prompt tokens reused from the slot\'s cache">' + (r.cachedTokens ? fmtNum(r.cachedTokens) : ONONE) + '</td>' +
-        '<td' + (r.quick ? ' title="prompt + output together"' : r.outputEstimated ? ' title="From the slot\'s token count after it finished"' : '') + '>' +
-          fmtNum(r.quick ? r.totalTokens : r.outputTokens) + '</td>' +
-        '<td class="tps" title="' + escH(r.exact || r.genExact ? LC_EXACT : LC_EST) + '">' + (r.genTps != null ? (r.genExact ? '' : approx) + fmtTps(r.genTps) : ONONE) + '</td>' +
-        '<td>' + (r.firstTokenMs == null ? ONONE : r.exact ? fmtSec(r.firstTokenMs) : r.firstTokenMs < 1000 ? '< 1 s' : '≈ ' + fmtSec(r.firstTokenMs)) + '</td>' +
-        '<td' + (r.exact ? ' title="prompt ' + fmtSec(r.promptMs) + ' + generation ' + fmtSec(r.genMs) + '"' : '') + '>' +
-          (r.durationMs != null ? approx + fmtSec(r.durationMs) : r.quick ? '< 1 s' : ONONE) + '</td>' + peakCell(r.peak) + '</tr>';
-    }), $('pager'), L.settings.perPage).join('');
+    $('rows').innerHTML = paginate(L.key, d.rows.map(r => reqRow(L, r, LLAMACPP_REQ)), $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
 });

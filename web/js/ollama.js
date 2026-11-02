@@ -138,16 +138,30 @@ defineLens({
 });
 
 // ---------- Requests (with the "?" relay setup help) ----------
+// AI_SCOPE-094 slice 2: shared Requests columns; Ollama's own Load Time appended (its total
+// includes that load, which is why it keeps a column of its own). Ollama reports no prompt-cache
+// number, so the Cached column is an honest gap.
+function ollamaReqTitle(key, r) {
+  if (key === 'model') return r.endpoint;
+  if (key === 'generated') return r.thinkTokens ? fmtNum(r.thinkTokens) + ' of these were thinking tokens' : null;
+  if (key === 'genTps') return r.measured ? 'measured by the proxy (OpenAI-style endpoint)' : null;
+  if (key === 'firstToken') return r.firstTokenDerived ? 'Derived: no stream first-token stamp arrived, so this is model load + prompt eval time' : null;
+  if (key === 'duration') return 'whole request, model load included (see Load Time)';
+  return null;
+}
+const OLLAMA_REQ = {
+  title: 'Requests', pager: true, extra: ['loadMs'], keyOf: r => r.id, titleOf: ollamaReqTitle,
+  headExtra: '\n      <button class="helpbtn" data-k="helpBtn" type="button" title="Why only these requests? How to set it up" aria-expanded="false">?</button>',
+  before: '\n      <div class="relaywarn" data-k="warn" hidden><span data-k="warnText"></span> <button type="button" class="linkbtn" data-k="warnHelp">How to set up the relay</button></div>' +
+    '\n      <div class="helpcard" data-k="help" hidden></div>',
+  statusOf: r => r.status === 'ok' ? '' : '<span class="status ' + (r.status === 'aborted' ? 'interrupted' : 'error') + '" title="' + escH(r.error || '') + '">' + escH(r.status) + '</span> '
+};
 defineLens({
   id: 'ollama.requests', scope: 'ollama', size: 'full',
   name: 'Requests',
-  description: 'Finished requests sent through the AI_SCOPE relay: speeds, tokens, load time, first token, peak load.',
+  description: 'Finished requests sent through the AI_SCOPE relay: tokens, speeds, first token, duration, peak load.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Requests', pager:true,
-    headExtra: '\n      <button class="helpbtn" data-k="helpBtn" type="button" title="Why only these requests? How to set it up" aria-expanded="false">?</button>',
-    before: '\n      <div class="relaywarn" data-k="warn" hidden><span data-k="warnText"></span> <button type="button" class="linkbtn" data-k="warnHelp">How to set up the relay</button></div>' +
-      '\n      <div class="helpcard" data-k="help" hidden></div>',
-    cols:['Timestamp', 'Model', 'Gen tok/s', 'Gen tokens', 'Prompt tok/s', 'Prompt tokens', 'Load time', 'Time to first token', 'Total time', 'Peak load'] }),
+  markup: reqTableMarkup(OLLAMA_REQ),
   init(L) {
     const toggle = open => {
       const box = L.$('help');
@@ -172,21 +186,7 @@ defineLens({
     $('empty').innerHTML = px.listening
       ? 'No requests captured yet. Click <b>?</b> above to see how to send requests through AI_SCOPE.'
       : 'The AI_SCOPE proxy could not start' + (px.error ? ': ' + escH(px.error) : '') + '. Pick another relay port in the Ollama scope&#39;s <b>Settings</b>.';
-    $('rows').innerHTML = paginate(L.key, d.rows.map(r => {
-      const isNew = isNewRow(L, r.id);
-      const approx = r.measured ? ' title="measured by the proxy (OpenAI-style endpoint)"' : '';
-      const statusTag = r.status === 'ok' ? '' : '<span class="status ' + (r.status === 'aborted' ? 'interrupted' : 'error') + '" title="' + escH(r.error || '') + '">' + escH(r.status) + '</span> ';
-      return '<tr' + (isNew ? ' class="new"' : '') + '>' +
-        '<td>' + escH(fmtWhen(r.start)) + '</td>' +
-        '<td class="model" title="' + escH(r.endpoint) + '">' + statusTag + nameHtml(r.model) + '</td>' +
-        '<td class="tps"' + approx + '>' + fmtTps(r.genTps) + '</td>' +
-        '<td title="' + (r.thinkTokens ? fmtNum(r.thinkTokens) + ' of these were thinking tokens' : '') + '">' + fmtNum(r.genTokens) + '</td>' +
-        '<td>' + fmtTps(r.promptTps) + '</td>' +
-        '<td>' + fmtNum(r.promptTokens) + '</td>' +
-        '<td>' + (r.loadMs != null ? fmtSec(r.loadMs) : ONONE) + '</td>' +
-        '<td>' + fmtSec(r.ttftMs) + '</td>' +
-        '<td>' + fmtSec(r.totalMs) + '</td>' + peakCell(r.peak) + '</tr>';
-    }), $('pager'), L.settings.perPage).join('');
+    $('rows').innerHTML = paginate(L.key, d.rows.map(r => reqRow(L, r, OLLAMA_REQ)), $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
 });

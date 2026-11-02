@@ -25,7 +25,7 @@ const paths = require('./paths');                       // data folder: ~/.ai_sc
 
 const DEFAULT_URL = 'http://127.0.0.1:47831';
 const REQ_FILE = paths.file('strata-requests.jsonl');
-const MAX_IN_MEMORY = 1000;
+const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
 
 let base = DEFAULT_URL;
 let timer = null;
@@ -34,10 +34,24 @@ let online = false;
 let lastError = null;
 let native = null;          // last good /api/native response
 let fetchedAt = 0;
-let requests = [];          // saved finished requests, oldest first
 const known = {};           // key -> true (saved)
 const waiting = {};         // key -> raw request seen but not saved yet (waiting for the samples after it ended)
-let requestsLoaded = false;
+// One store, one file, this scope's own 1000-row ring. `requests` is the store's live array:
+// the store mutates it in place, so every reader below keeps seeing the same array.
+const store = reqstore.createStore({
+  file: REQ_FILE,
+  accept: function (r) { return !!r.key && !known[r.key]; },   // dedupe what the file already holds
+  remember: function (r) { if (r.key) known[r.key] = true; },
+  // AI_SCOPE-094 slice 2: old files are never rewritten, so every line saved before this rename
+  // arrives with the old names. Map them on read (the map is permanent, not transitional).
+  mapRow: function (r) {
+    if (r.reused !== undefined) { r.cachedTokens = r.reused; delete r.reused; }
+    if (r.decodeMs !== undefined) { r.genMs = r.decodeMs; delete r.decodeMs; }
+    return r;
+  },
+  onError: function (msg) { lastError = msg; }
+});
+const requests = store.rows();
 let logo = { tried: 0, light: null, dark: null };   // Strata's mark for light / dark backgrounds
 
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
@@ -59,37 +73,25 @@ function getJson(path, timeout, cb) {
   req.on('error', function (e) { cb(e); });
 }
 
-// ---------- saved requests ----------
-function loadRequests() {
-  let text = '';
-  try { text = fs.readFileSync(REQ_FILE, 'utf8'); } catch (e) { return; }
-  text.split(/\r?\n/).forEach(function (l) {
-    if (!l.trim()) return;
-    try { const r = JSON.parse(l); if (r && r.key && !known[r.key]) { known[r.key] = true; requests.push(r); } } catch (e) { /* skip bad line */ }
-  });
-  requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests = requests.slice(-MAX_IN_MEMORY);
-}
-function saveRequest(r) {
-  known[r.key] = true;
-  requests.push(r);
-  if (requests.length > 1 && (requests[requests.length - 2].end || 0) > (r.end || 0)) requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests.shift();
-  try { paths.ensure(); fs.appendFileSync(REQ_FILE, JSON.stringify(r) + '\n'); } catch (e) { lastError = 'save failed: ' + e.message; }
-}
+// ---------- saved requests (the store does the read, parse, sort, trim, append, cap) ----------
+function loadRequests() { store.load(); }
+function saveRequest(r) { store.append(r); }
 // One finished request from the engine's metrics -> our row. `time` is when it finished (seconds).
 function toRow(inst, x) {
   const end = num(x.time) != null ? x.time * 1000 : null;
   const dur = num(x.duration_s) != null ? x.duration_s * 1000 : null;
   const promptRead = num(x.prompt_read);
-  const promptMs = num(x.prompt_ms), decodeMs = num(x.decode_ms), out = num(x.output_tokens);
+  const promptMs = num(x.prompt_ms), genMs = num(x.decode_ms), out = num(x.output_tokens);
   return {
     key: inst.id + ':' + x.id, id: String(x.id), instanceId: inst.id,
     model: inst.label || inst.model || 'unknown', variant: inst.model || null,
     start: end != null && dur != null ? end - dur : null, end: end, durationMs: dur, finish: x.finish || null,
-    promptTokens: num(x.prompt_tokens), reused: num(x.reused), promptRead: promptRead, outputTokens: out,
-    promptMs: promptMs, decodeMs: decodeMs,
-    genTps: num(x.decode_tok_s) != null ? x.decode_tok_s : (out && decodeMs ? out / (decodeMs / 1000) : null),
+    // AI_SCOPE-094 slice 2: canonical names — Strata's `reused` is the shared Cached column,
+    // and its `decode_ms` is generation time (`genMs`), like every other scope.
+    promptTokens: num(x.prompt_tokens), cachedTokens: num(x.reused), promptRead: promptRead, outputTokens: out,
+    promptMs: promptMs, genMs: genMs,
+    genTps: num(x.decode_tok_s) != null ? x.decode_tok_s : (out && genMs ? out / (genMs / 1000) : null),
+    genDerived: num(x.decode_tok_s) == null && !!(out && genMs),   // computed here, not Strata's number
     promptTps: promptRead && promptMs ? promptRead / (promptMs / 1000) : null,
     firstTokenMs: num(x.first_engine_token_s) != null ? x.first_engine_token_s * 1000 : null,
     hitRate: num(x.hit_rate),
@@ -309,7 +311,7 @@ function getState(limit, since) {
     }
     const t = m.totals;
     if (t) out.totals = { since: num(t.since) != null ? t.since * 1000 : null, requests: num(t.requests),
-                          promptTokens: num(t.prompt_tokens), reused: num(t.reused), outputTokens: num(t.output_tokens),
+                          promptTokens: num(t.prompt_tokens), cachedTokens: num(t.reused), outputTokens: num(t.output_tokens),
                           draftsOffered: num(t.drafts_offered), draftsAccepted: num(t.drafts_accepted) };
     // AI_SCOPE-093 slice 3: the context tile's big number. Live while a request runs (the card's own contextUsed);
     // idle is the last-seen held fill, claimed ONLY while the same instance id is still loaded - Strata keeps its
@@ -321,10 +323,10 @@ function getState(limit, since) {
   }
   // Token-weighted average generation speed for the loaded model's recent saved requests.
   const model = out.loaded ? out.loaded.label : (requests.length ? requests[requests.length - 1].model : null);
-  const recent = requests.filter(function (r) { return r.model === model && r.outputTokens && r.decodeMs; }).slice(-20);
+  const recent = requests.filter(function (r) { return r.model === model && r.outputTokens && r.genMs; }).slice(-20);
   if (recent.length) {
     let tok = 0, ms = 0;
-    recent.forEach(function (r) { tok += r.outputTokens; ms += r.decodeMs; });
+    recent.forEach(function (r) { tok += r.outputTokens; ms += r.genMs; });
     out.average = { model: model, genTps: tok / (ms / 1000), requests: recent.length };
   }
   // AI_SCOPE-093 slice 2: the same token-weighted pattern for prompt speed (tokens actually read after cache
@@ -354,7 +356,7 @@ function start(settings) {
   stop();
   settings = settings || {};
   base = String(settings.url || DEFAULT_URL).replace(/\/+$/, '');
-  if (!requestsLoaded) { requestsLoaded = true; loadRequests(); }
+  loadRequests();          // the store ignores a second load (AI_SCOPE-094 slice 1)
   poll();
   timer = setInterval(poll, 2000);
 }

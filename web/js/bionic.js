@@ -101,31 +101,24 @@ defineLens({
 });
 
 // ---------- Requests ----------
+// AI_SCOPE-094 slice 2: shared Requests columns. Bionic has no column of its own — everything it
+// reports is in the uniform set. Its first-token number is the prefill duration (the log carries
+// no TTFT line), which lmstats marks firstTokenDerived, so the cell shows ≈ with the reason.
+const BIONIC_REQ = {
+  title: 'Requests', pager: true, keyOf: r => r.key, hint: '',
+  foot: '\n      <div class="err" data-k="err" hidden></div>',
+  titleOf: (key, r) => key === 'finished' ? r.timestamp : (key === 'duration' ? 'from Bionic\'s log: total time for the task' : null)
+};
 defineLens({
   id: 'bionic.requests', scope: 'bionic', size: 'full',
   name: 'Requests',
-  description: 'Finished requests from Bionic\'s server logs: speeds, tokens, first token, total time, peak load.',
+  description: 'Finished requests from Bionic\'s server logs: tokens, speeds, first token, duration, peak load.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Requests', pager:true,
-    hint: '',
-    foot: '\n      <div class="err" data-k="err" hidden></div>',
-    cols:['Timestamp', 'Model', 'Gen tok/s', 'Gen tokens', 'Prompt tok/s', 'Prompt tokens', 'Time to first token', 'Total time', 'Peak load'] }),
+  markup: reqTableMarkup(BIONIC_REQ),
   render(L, data) {
     const $ = L.$;
     $('err').hidden = !data.error; $('err').textContent = data.error || '';
-    const rows = data.rows.map(r => {
-      const isNew = isNewRow(L, r.timestamp + '|' + r.task);
-      return '<tr' + (isNew ? ' class="new"' : '') + '>' +
-        '<td title="' + esc(r.timestamp || '') + '">' + esc(lmTs(r.timestamp) ? fmtWhen(lmTs(r.timestamp)) : (r.timestamp || '—')) + '</td>' +
-        '<td class="model">' + nameHtml(r.model) + '</td>' +
-        '<td class="tps">' + fmtTps(r.genTps) + '</td>' +
-        '<td>' + fmtNum(r.genTokens) + '</td>' +
-        '<td>' + fmtTps(r.promptTps) + '</td>' +
-        '<td>' + fmtNum(r.promptTokens) + '</td>' +
-        '<td>' + fmtSec(r.promptMs) + '</td>' +
-        '<td>' + fmtSec(r.totalMs) + '</td>' + peakCell(r.peak) + '</tr>';
-    });
-    $('rows').innerHTML = paginate(L.key, rows, $('pager'), L.settings.perPage).join('');
+    $('rows').innerHTML = paginate(L.key, data.rows.map(r => reqRow(L, r, BIONIC_REQ)), $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
 });

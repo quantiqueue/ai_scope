@@ -26,7 +26,7 @@ let PROXY_PORT = 11435;
 const PROXY_HOST = '127.0.0.1';
 const paths = require('./paths');                       // data folder: ~/.ai_scope
 const REQ_FILE = paths.file('ollama-requests.jsonl');
-const MAX_IN_MEMORY = 1000;
+const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
 const MAX_BODY_CAPTURE = 4 * 1024 * 1024;                // request bodies bigger than this: model name via regex
 const TRACKED = /^\/(api\/(generate|chat)|v1\/(chat\/)?completions)$/;
 
@@ -37,7 +37,23 @@ let loaded = [];
 let installed = [];
 let tagsAt = 0;
 let proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null };
-let requests = [];          // newest last
+// One store, one file, this scope's own 1000-row ring. Ollama has no cache-reuse number and no
+// row-identity map to keep, so its store takes the default accept; the load only reseeds nextId.
+const store = reqstore.createStore({
+  file: REQ_FILE,
+  accept: function (r) { return !isEmptyCall(r); },      // load filter: skip Ollama load/unload calls
+  resortOnAppend: false,                                 // Ollama appends in arrival order (unchanged)
+  onError: function (msg) { lastError = msg; },
+  onLoaded: function (rows) { rows.forEach(function (r) { if (r.id >= nextId) nextId = r.id + 1; }); },
+  // AI_SCOPE-094 slice 2: the saved lines from before the rename carry the old names; map them on read.
+  mapRow: function (r) {
+    if (r.genTokens !== undefined) { r.outputTokens = r.genTokens; delete r.genTokens; }
+    if (r.totalMs !== undefined) { r.durationMs = r.totalMs; delete r.totalMs; }
+    if (r.ttftMs !== undefined) { r.firstTokenMs = r.ttftMs; delete r.ttftMs; }
+    return r;
+  }
+});
+const requests = store.rows();   // newest last — the store mutates this array in place
 const inflight = {};
 let nextId = 1;
 // Ollama used without the relay (AI_SCOPE-018): a model gets loaded, or its unload time moves forward (Ollama resets
@@ -64,28 +80,14 @@ function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
 function nsToMs(v) { return typeof v === 'number' ? v / 1e6 : null; }
 function details(m) { return m.details || {}; }
 
-function loadRequests() {
-  paths.ensure();
-  let text = '';
-  try { text = fs.readFileSync(REQ_FILE, 'utf8'); } catch (e) { return; }
-  text.split(/\r?\n/).forEach(function (l) {
-    if (!l.trim()) return;
-    try { const r = JSON.parse(l); if (!isEmptyCall(r)) requests.push(r); } catch (e) { /* skip bad line */ }
-  });
-  requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests = requests.slice(-MAX_IN_MEMORY);
-  requests.forEach(function (r) { if (r.id >= nextId) nextId = r.id + 1; });
-}
+// ---------- saved requests (the store does the read, parse, sort, trim, append, cap) ----------
+function loadRequests() { store.load(); }
 // Ollama load/unload calls (e.g. the empty /api/generate that `ollama run` sends to load a model)
 // finish OK with no prompt and no output - not a real request, so they are not recorded.
 function isEmptyCall(r) {
-  return r.status === 'ok' && !r.genTokens && !r.promptTokens && !r.thinkTokens;
+  return r.status === 'ok' && !r.outputTokens && !r.promptTokens && !r.thinkTokens;
 }
-function saveRequest(r) {
-  requests.push(r);
-  if (requests.length > MAX_IN_MEMORY) requests.shift();
-  try { fs.appendFileSync(REQ_FILE, JSON.stringify(r) + '\n'); } catch (e) { lastError = 'save failed: ' + e.message; }
-}
+function saveRequest(r) { store.append(r); }
 
 // ---------- polling Ollama's API ----------
 function poll() {
@@ -252,26 +254,31 @@ function finish(rec, aborted) {
   rec.buf += rec.decoder.end();
   if (rec.buf) { handleLine(rec, rec.buf); rec.buf = ''; }
   const end = Date.now(), f = rec.final, u = rec.usage;
+  // AI_SCOPE-094 slice 2: canonical record names — outputTokens / durationMs / firstTokenMs, the
+  // same fields the other scopes carry. Old saved lines are mapped back on read by the store.
   const r = { id: rec.id, start: rec.start, end: end, model: rec.model || 'unknown', endpoint: rec.endpoint,
               status: aborted ? 'aborted' : (rec.status === 200 && !rec.error ? 'ok' : 'error'),
               error: rec.error || (rec.status && rec.status !== 200 ? 'HTTP ' + rec.status : null),
-              genTokens: null, genMs: null, promptTokens: null, promptMs: null, loadMs: null,
-              ttftMs: rec.firstAt ? rec.firstAt - rec.start : null, totalMs: end - rec.start,
+              outputTokens: null, genMs: null, promptTokens: null, promptMs: null, loadMs: null,
+              firstTokenMs: rec.firstAt ? rec.firstAt - rec.start : null, durationMs: end - rec.start,
               thinkTokens: rec.think || null, measured: false };
   if (f) {   // native API: Ollama's own timings (nanoseconds)
-    r.genTokens = num(f.eval_count); r.genMs = nsToMs(f.eval_duration);
+    r.outputTokens = num(f.eval_count); r.genMs = nsToMs(f.eval_duration);
     r.promptTokens = num(f.prompt_eval_count); r.promptMs = nsToMs(f.prompt_eval_duration);
     r.loadMs = nsToMs(f.load_duration);
-    if (num(f.total_duration)) r.totalMs = nsToMs(f.total_duration);
-    if (r.ttftMs == null) r.ttftMs = (r.loadMs || 0) + (r.promptMs || 0);
+    if (num(f.total_duration)) r.durationMs = nsToMs(f.total_duration);
+    if (r.firstTokenMs == null) { r.firstTokenMs = (r.loadMs || 0) + (r.promptMs || 0); r.firstTokenDerived = true; }
   } else {   // OpenAI-compatible API or cut-off stream: timings measured by the proxy
     r.measured = true;
-    r.genTokens = u && num(u.completion_tokens) != null ? u.completion_tokens : (rec.tokens || null);
+    r.outputTokens = u && num(u.completion_tokens) != null ? u.completion_tokens : (rec.tokens || null);
     r.promptTokens = u ? num(u.prompt_tokens) : null;
     if (rec.firstAt && rec.lastAt > rec.firstAt) r.genMs = rec.lastAt - rec.firstAt;
   }
-  r.genTps = r.genTokens && r.genMs ? r.genTokens / (r.genMs / 1000) : null;
+  // genTps / promptTps are always ours (tokens ÷ time), so both carry the derived marker.
+  r.genTps = r.outputTokens && r.genMs ? r.outputTokens / (r.genMs / 1000) : null;
+  if (r.genTps != null) r.genDerived = true;
   r.promptTps = r.promptTokens && r.promptMs ? r.promptTokens / (r.promptMs / 1000) : null;
+  if (r.promptTps != null) r.promptDerived = true;
   r.peak = hwstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
   if ((r.status === 'ok' || rec.tokens || r.error) && !isEmptyCall(r)) saveRequest(r);
   if (r.model !== 'unknown' && !installed.some(function (m) { return m.name === r.model; })) tagsAt = 0;
@@ -380,7 +387,6 @@ function getState(limit, vram, since) {
 
 // settings: { url, proxyPort }
 let timer = null;
-let requestsLoaded = false;
 function start(settings) {
   stop();
   settings = settings || {};
@@ -389,7 +395,7 @@ function start(settings) {
   PROXY_PORT = parseInt(settings.proxyPort, 10) || 11435;
   proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null };
   tagsAt = 0;
-  if (!requestsLoaded) { requestsLoaded = true; loadRequests(); }
+  loadRequests();          // the store ignores a second load (AI_SCOPE-094 slice 1)
   startProxy();
   procstats.watch('ollama', [+(UP.port || (UP.protocol === 'https:' ? 443 : 80))], MODEL_PROCS);
   poll();

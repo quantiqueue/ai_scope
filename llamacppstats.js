@@ -30,7 +30,7 @@ const paths = require('./paths');
 
 const CANDIDATES = ['http://127.0.0.1:9931', 'http://127.0.0.1:8080'];
 const REQ_FILE = paths.file('llamacpp-requests.jsonl');
-const MAX_IN_MEMORY = 1000;
+const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
 const POLL_MS = 500;           // all slots idle (a request's start is known to about ± ¼ s)
 const POLL_BUSY_MS = 250;      // a slot busy: look more often for better speed / timing estimates
 const PROPS_MS = 10000;
@@ -47,8 +47,20 @@ let models = {};            // id -> { id, name, state, path, port, meta, props,
 let order = [];             // model ids in the server's order
 let modelsAt = 0;
 const slotState = {};       // model id + '#' + slot id -> { busy, task, seenAt, rec, model }
-let requests = [];          // saved finished requests, oldest first
-let requestsLoaded = false;
+// One store, one file, this scope's own 1000-row ring (AI_SCOPE-094 slice 1).
+const store = reqstore.createStore({
+  file: REQ_FILE,
+  accept: function (r) { return !!r.end; },        // load filter: rows without an end time are unusable
+  // AI_SCOPE-094 slice 2: rows saved before the explicit flags carried no `exact` at all, and the
+  // old client read "absent" as estimated. Say so on read so those lines keep their ≈.
+  mapRow: function (r) {
+    if (r.exact === undefined) r.exact = false;
+    if (r.genExact === undefined) r.genExact = false;
+    return r;
+  },
+  onError: function (msg) { lastError = msg; }
+});
+const requests = store.rows();   // saved finished requests, oldest first — mutated in place by the store
 let nextKey = 1;
 
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
@@ -84,23 +96,9 @@ function series(items, fn, done) {
 // procstats key for a model's own process (router mode)
 function procKey(id) { return 'llamacpp-' + String(id).replace(/[^\w.-]/g, '_').slice(0, 80); }
 
-// ---------- saved requests ----------
-function loadRequests() {
-  let text = '';
-  try { text = fs.readFileSync(REQ_FILE, 'utf8'); } catch (e) { return; }
-  text.split(/\r?\n/).forEach(function (l) {
-    if (!l.trim()) return;
-    try { const r = JSON.parse(l); if (r && r.end) requests.push(r); } catch (e) { /* skip bad line */ }
-  });
-  requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests = requests.slice(-MAX_IN_MEMORY);
-}
-function saveRequest(r) {
-  requests.push(r);
-  if (requests.length > 1 && (requests[requests.length - 2].end || 0) > (r.end || 0)) requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests.shift();
-  try { paths.ensure(); fs.appendFileSync(REQ_FILE, JSON.stringify(r) + '\n'); } catch (e) { lastError = 'save failed: ' + e.message; }
-}
+// ---------- saved requests (the store does the read, parse, sort, trim, append, cap) ----------
+function loadRequests() { store.load(); }
+function saveRequest(r) { store.append(r); }
 // ---------- requests from the slot looks ----------
 function slotNums(s) {
   const nt = Array.isArray(s.next_token) ? s.next_token[0] || {} : s.next_token || {};
@@ -140,6 +138,10 @@ function finish(rec, idleAt, after) {
     start: Math.round(rec.start), end: Math.round(end), durationMs: Math.round(end - rec.start),
     promptTokens: rec.prompt, cachedTokens: rec.cached || null, outputTokens: out || null, outputEstimated: outEst || undefined,
     genTps: genTps, firstTokenMs: firstAt != null ? Math.round(firstAt - rec.start) : null,
+    // AI_SCOPE-094 slice 2: these rows come from slot arithmetic, so exactness is stated explicitly
+    // (false) rather than left absent — the shared columns read the flag, and settlePeriod() below
+    // overwrites these with true when the server's /metrics counters confirm the request ran alone.
+    exact: false, genExact: false,
   };
   later(row);
   const m = models[rec.model];
@@ -416,7 +418,7 @@ function settlePeriod(m, base, after, period) {
   if (pp > 0 && ps > 0) r.promptTps = pp / ps;
   r.promptMs = Math.round(ps * 1000);
   if (dc >= 0) r.cachedTokens = dc || null;
-  r.firstTokenMs = r.promptMs;
+  r.firstTokenMs = r.promptMs; r.firstTokenDerived = true;   // the metrics give prefill time, not a TTFT
   r.durationMs = Math.round((ps + ds) * 1000);
   r.start = r.end - r.durationMs;
   r.exact = true;
@@ -590,7 +592,7 @@ function start(settings) {
   settings = settings || {};
   configured = String(settings.url || '').trim().replace(/\/+$/, '');
   base = configured || null;
-  if (!requestsLoaded) { requestsLoaded = true; loadRequests(); }
+  loadRequests();          // the store ignores a second load (AI_SCOPE-094 slice 1)
   running = true;
   poll();
 }

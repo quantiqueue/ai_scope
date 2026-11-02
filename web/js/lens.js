@@ -349,6 +349,52 @@ function nowCardMarkup(boxes, title) {
       <div class="countdown" data-k="foot">&nbsp;</div>
     </div>`;
 }
+// ---------- one shared Requests table for the LLM scopes (AI_SCOPE-094 slice 2) ----------
+// The uniform column set the user decided 2026-11-02: same columns, same names, same order in all
+// four scopes; anything a scope has alone is appended after the uniform block. A number the app
+// never reports stays a gap (—) — never a zero, never an average (the 072 rule) — and a number
+// AI_SCOPE computed rather than read is marked as computed.
+const REQ_UNIFORM = ['finished', 'duration', 'model', 'prompt', 'cached', 'generated', 'genTps', 'promptTps', 'firstToken', 'peak'];
+function reqApprox(r) { return r && (r.exact === false || r.genExact === false || r.outputEstimated) ? '≈ ' : ''; }
+// A scope's own tooltip wins; the built-in fallback still applies when it returns nothing, so a
+// scope adding tooltips can never silence the honesty notes (the probe caught that: Bionic's
+// derived first-token reason vanished as soon as the scope supplied a titleOf at all).
+function reqTip(o, key, r, fallback) {
+  const t = o && o.titleOf ? o.titleOf(key, r) : null;
+  return t != null ? t : (typeof fallback === 'function' ? fallback(r) : fallback);
+}
+const REQ_COLS = {
+  finished:   { th: 'Finished',    td: (r, o) => '<td' + tattr(reqTip(o, 'finished', r, null)) + '>' + escH(o.when ? o.when(r) : fmtWhen(r.end)) + '</td>' },
+  duration:   { th: 'Duration',    td: (r, o) => '<td' + tattr(reqTip(o, 'duration', r, null)) + '>' + (r.durationMs != null ? reqApprox(r) + fmtSec(r.durationMs) : (r.quick ? '< 1 s' : ONONE)) + '</td>' },
+  model:      { th: 'Model',       td: (r, o) => '<td class="model"' + tattr(reqTip(o, 'model', r, null)) + '>' + (o.statusOf ? o.statusOf(r) : '') + nameHtml(r.model || ONONE) + (o.tagOf ? o.tagOf(r) : '') + '</td>' },
+  prompt:     { th: 'Prompt',      td: (r, o) => '<td' + tattr(reqTip(o, 'prompt', r, null)) + '>' + fmtNum(r.promptTokens) + '</td>' },
+  cached:     { th: 'Cached',      td: (r, o) => '<td' + tattr(reqTip(o, 'cached', r, 'Prompt tokens reused from the cache (not read again)')) + '>' + fmtNum(r.cachedTokens) + '</td>' },
+  generated:  { th: 'Generated',   td: (r, o) => '<td' + tattr(reqTip(o, 'generated', r, null)) + '>' + (r.outputTokens != null ? (r.outputEstimated ? '≈ ' : '') + fmtNum(r.outputTokens) : ONONE) + '</td>' },
+  genTps:     { th: 'Gen tok/s',   td: (r, o) => '<td class="tps"' + tattr(reqTip(o, 'genTps', r, r.genDerived ? 'Computed here: tokens ÷ generation time' : null)) + '>' + (r.genTps != null ? reqApprox(r) + fmtTps(r.genTps) : ONONE) + '</td>' },
+  promptTps:  { th: 'Prompt tok/s', td: (r, o) => '<td' + tattr(reqTip(o, 'promptTps', r, r.promptDerived ? 'Computed here: tokens ÷ prompt time' : null)) + '>' + (r.promptTps != null ? fmtTps(r.promptTps) : ONONE) + '</td>' },
+  firstToken: { th: 'First token', td: (r, o) => '<td' + tattr(reqTip(o, 'firstToken', r, r.firstTokenDerived ? 'Derived: the app reports no first-token time; this is the prompt-eval duration' : null)) + '>' + (r.firstTokenMs != null ? (r.firstTokenDerived ? '≈ ' : reqApprox(r)) + fmtSec(r.firstTokenMs) : ONONE) + '</td>' },
+  peak:       { th: 'Peak load',   td: (r) => peakCell(r.peak) },
+  // scope-exclusive columns, always after the uniform block
+  hitRate:    { th: 'Hit Rate',    td: (r) => '<td title="Share of needed experts already in VRAM (the rest came from RAM)">' + fmtPct(r.hitRate) + '</td>' },
+  drafts:     { th: 'Drafts',      td: (r) => '<td' + tattr(r.draftsOffered ? 'Speculative decoding: ' + fmtNum(r.draftsAccepted || 0) + ' of ' + fmtNum(r.draftsOffered) + ' drafts accepted' : null) + '>' + (r.draftsOffered ? fmtPct(r.draftsAccepted / r.draftsOffered) : ONONE) + '</td>' },
+  loadMs:     { th: 'Load Time',   td: (r) => '<td title="Model load time, included in Duration">' + (r.loadMs != null ? fmtSec(r.loadMs) : ONONE) + '</td>' },
+  thinking:   { th: 'Thinking',    td: (r) => '<td title="Reasoning tokens, counted inside Generated">' + (r.thinkTokens ? fmtNum(r.thinkTokens) : ONONE) + '</td>' },
+  slot:       { th: 'Slot',        td: (r) => '<td>' + (r.slot != null ? r.slot : ONONE) + '</td>' }
+};
+function tattr(t) { return t ? ' title="' + escH(t) + '"' : ''; }
+// The ordered key list for a scope: the uniform block plus its own exclusives.
+function reqColKeys(o) { return REQ_UNIFORM.concat((o && o.extra) || []); }
+function reqHeadings(o) { return reqColKeys(o).map(k => REQ_COLS[k] ? REQ_COLS[k].th : null).filter(Boolean); }
+function reqTableMarkup(o) {
+  return tableLensMarkup({ title: o.title, pager: true, hint: o.hint, headExtra: o.headExtra, before: o.before, foot: o.foot, cols: reqHeadings(o) });
+}
+// One row: the scope's columns in its declared order. Unknown keys are skipped (fail soft) so a
+// typo costs a column, not the lens.
+function reqRow(L, r, o) {
+  const isNew = isNewRow(L, (o.keyOf ? o.keyOf(r) : r.key));
+  return '<tr' + (isNew ? ' class="new"' : '') + '>' + reqColKeys(o).map(k => REQ_COLS[k] ? REQ_COLS[k].td(r, o || {}) : '').join('') + '</tr>';
+}
+
 // Table lens (full width): heading + card with a table (+ empty-state box) (+ pager).
 //   o = { title, hint (static HTML; '' = none; default an empty data-k="hint"), headExtra (HTML after the hint, e.g. a ? button),
 //         before (HTML at the top of the card, above the table: filter chips, help box), cols ([header HTML]), foot (HTML under the table;

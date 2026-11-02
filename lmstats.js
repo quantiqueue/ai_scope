@@ -61,20 +61,25 @@ function parseText(text, file, rows) {
     else if ((m = RE_LOAD.exec(line))) model = modelNameFromPath(m[1]);
 
     if ((m = RE_PROMPT.exec(line))) {
+      // AI_SCOPE-094 slice 2: Bionic's record now uses the same field names as the other scopes
+      // (outputTokens / durationMs / firstTokenMs) and carries a real end / start / key, so the
+      // shared Requests table can draw it. Bionic's log has no first-token line at all, so
+      // firstTokenMs is the prefill duration - the same convention llamacppstats uses - and it is
+      // marked derived so the table never shows it as a measurement.
+      const endMs = tsToMs(ts);
       cur = {
-        timestamp: ts,
-        model: model || 'unknown',
-        task: +m[1],
-        promptMs: +m[2],
-        promptTokens: +m[3],
-        promptTps: +m[4],
-        genMs: null, genTokens: null, genTps: null, totalMs: null,
+        key: ts + '|' + m[1], timestamp: ts, model: model || 'unknown', task: +m[1],
+        end: endMs, start: null,
+        promptMs: +m[2], promptTokens: +m[3], promptTps: +m[4],
+        genMs: null, outputTokens: null, genTps: null, durationMs: null,
+        firstTokenMs: +m[2], firstTokenDerived: true,
       };
       rows.push(cur);
     } else if (cur && (m = RE_EVAL.exec(line)) && +m[1] === cur.task) {
-      cur.genMs = +m[2]; cur.genTokens = +m[3]; cur.genTps = +m[4];
+      cur.genMs = +m[2]; cur.outputTokens = +m[3]; cur.genTps = +m[4];
     } else if (cur && (m = RE_TOTAL.exec(line)) && +m[1] === cur.task) {
-      cur.totalMs = +m[2];
+      cur.durationMs = +m[2];
+      if (cur.end != null) cur.start = cur.end - cur.durationMs;
       cur = null;
     }
   });
@@ -196,7 +201,7 @@ function getAverage(rows) {
   const model = rows[0].model;
   let tokens = 0, ms = 0, n = 0;
   rows.forEach(function (r) {
-    if (r.model === model && r.genTokens && r.genMs) { tokens += r.genTokens; ms += r.genMs; n++; }
+    if (r.model === model && r.outputTokens && r.genMs) { tokens += r.outputTokens; ms += r.genMs; n++; }
   });
   return ms ? { model: model, genTps: tokens / (ms / 1000), requests: n } : null;
 }

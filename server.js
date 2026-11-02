@@ -64,10 +64,10 @@ function lmPeak(r) {
   const key = r.timestamp + '|' + r.task;
   if (lmPeaks.has(key)) return lmPeaks.get(key);
   const end = lmstats.tsToMs(r.timestamp);
-  if (end == null || r.totalMs == null) return null;
+  if (end == null || r.durationMs == null) return null;
   const oldest = hwstats.oldestSample();
   if (Date.now() - end < 4000) return null;          // let the samples after the end come in first
-  const p = hwstats.peakBetween(end - r.totalMs - 1000, end + 2000);
+  const p = hwstats.peakBetween(end - r.durationMs - 1000, end + 2000);
   if (p || oldest == null || end < oldest) {          // final: found, or too old to ever find
     lmPeaks.set(key, p);
     if (lmPeaks.size > 5000) lmPeaks.delete(lmPeaks.keys().next().value);

@@ -5,7 +5,8 @@
 const fmtK = n => n == null ? '—' : n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
 // Context windows are powers of two: 65,536 -> "64K", like Strata shows them.
 const fmtCtx = n => n == null ? '—' : n % 1024 === 0 ? (n / 1024) + 'K' : fmtK(n);
-const fmtPct = f => f == null ? '—' : Math.round(f * 100) + '%';
+// fmtPct moved to core.js (AI_SCOPE-094 slice 2) — the shared Requests columns need it, and a
+// top-level const declared twice across classic scripts is a runtime SyntaxError, not a shadow.
 
 defineSource('strata', '/api/strata?limit=100', null, null, null, 'processHistory');   // AI_SCOPE-084: the history ring goes out as a delta (?since=)
 
@@ -99,38 +100,42 @@ defineLens({
 });
 
 // ---------- Requests ----------
+// AI_SCOPE-094 slice 2: the shared Requests columns (lens.js) — the uniform set, then Strata's
+// own Hit Rate appended. Strata reports no cache-reuse for other scopes and no slot; its `reused`
+// number now arrives as cachedTokens, drawn by the shared Cached column.
+function strataReqTitle(key, r) {
+  if (key === 'genTps') return [r.genMs != null ? 'generation ' + fmtSec(r.genMs) : null,
+    r.draftsOffered ? 'drafts ' + fmtNum(r.draftsAccepted || 0) + ' of ' + fmtNum(r.draftsOffered) + ' accepted' : null].filter(Boolean).join(' · ');
+  if (key === 'prompt') return [r.promptRead != null ? fmtNum(r.promptRead) + ' tokens read' : null,
+    r.promptMs != null ? 'in ' + fmtSec(r.promptMs) : null].filter(Boolean).join(' ');
+  if (key === 'cached') return 'Prompt tokens reused from the conversation cache (not read again)';
+  if (key === 'duration') return r.promptMs != null ? 'prompt ' + fmtSec(r.promptMs) + (r.genMs != null ? ' + generation ' + fmtSec(r.genMs) : '') : null;
+  if (key === 'firstToken') return r.genMs != null ? 'measured to the first token from the engine' : null;
+  return null;
+}
+// One option object drives BOTH the header and the rows, so the two can never drift apart
+// (the probe caught exactly that class of bug: 11 headers over 10 cells).
+const STRATA_REQ = {
+  title: 'Requests', pager: true, extra: ['hitRate'],
+  keyOf: r => r.key,
+  titleOf: strataReqTitle,
+  statusOf: r => r.finish && r.finish !== 'stop' && r.finish !== 'length'
+    ? '<span class="status interrupted" title="finish: ' + escH(r.finish) + '">' + escH(r.finish) + '</span> ' : ''
+};
 defineLens({
   id: 'strata.requests', scope: 'strata', size: 'full',
   name: 'Requests',
-  description: 'Finished requests: tokens, reused prompt, speeds, first token, hit rate, duration, peak load.',
+  description: 'Finished requests: tokens, cached prompt, speeds, first token, duration, peak load, expert hit rate.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Requests', pager:true,
-    cols:['Finished', 'Model', 'Prompt', 'Reused', 'Output', 'Gen tok/s', 'Prompt tok/s', 'First token', 'Hit rate', 'Duration', 'Peak load'] }),
+  markup: reqTableMarkup(STRATA_REQ),
   render(L, d) {
     const $ = L.$, t = d.totals;
     $('hint').textContent = t && t.requests ? '— since load: ' + fmtNum(t.requests) + ' requests' +
-      (t.promptTokens ? ' · ' + fmtNum(t.reused || 0) + ' of ' + fmtNum(t.promptTokens) + ' prompt tokens reused (' + Math.round(100 * (t.reused || 0) / t.promptTokens) + '%)' : '') +
+      (t.promptTokens ? ' · ' + fmtNum(t.cachedTokens || 0) + ' of ' + fmtNum(t.promptTokens) + ' prompt tokens reused (' + Math.round(100 * (t.cachedTokens || 0) / t.promptTokens) + '%)' : '') +
       (t.draftsOffered ? ' · drafts ' + Math.round(100 * (t.draftsAccepted || 0) / t.draftsOffered) + '% accepted' : '') : '';
     $('empty').hidden = d.rows.length > 0;
     $('empty').textContent = 'No requests yet. Requests from Strata\'s chat and from apps using its API appear here once they finish.';
-    $('rows').innerHTML = paginate(L.key, d.rows.map(r => {
-      const isNew = isNewRow(L, r.key);
-      const genTip = [r.decodeMs != null ? 'decode ' + fmtSec(r.decodeMs) : null,
-        r.draftsOffered ? 'drafts ' + fmtNum(r.draftsAccepted || 0) + ' of ' + fmtNum(r.draftsOffered) + ' accepted' : null].filter(Boolean).join(' · ');
-      const promptTip = [r.promptRead != null ? fmtNum(r.promptRead) + ' tokens read' : null, r.promptMs != null ? 'in ' + fmtSec(r.promptMs) : null].filter(Boolean).join(' ');
-      const status = r.finish && r.finish !== 'stop' && r.finish !== 'length' ? '<span class="status interrupted" title="finish: ' + escH(r.finish) + '">' + escH(r.finish) + '</span> ' : '';
-      return '<tr' + (isNew ? ' class="new"' : '') + '>' +
-        '<td>' + escH(fmtWhen(r.end)) + '</td>' +
-        '<td class="model">' + status + nameHtml(r.model) + '</td>' +
-        '<td>' + fmtNum(r.promptTokens) + '</td>' +
-        '<td title="Prompt tokens reused from the conversation cache (not read again)">' + fmtNum(r.reused) + '</td>' +
-        '<td>' + fmtNum(r.outputTokens) + '</td>' +
-        '<td class="tps" title="' + escH(genTip) + '">' + fmtTps(r.genTps) + '</td>' +
-        '<td title="' + escH(promptTip) + '">' + (r.promptTps != null ? fmtTps(r.promptTps) : ONONE) + '</td>' +
-        '<td>' + (r.firstTokenMs != null ? fmtSec(r.firstTokenMs) : ONONE) + '</td>' +
-        '<td title="Share of needed experts already in VRAM (the rest came from RAM)">' + fmtPct(r.hitRate) + '</td>' +
-        '<td>' + fmtSec(r.durationMs) + '</td>' + peakCell(r.peak) + '</tr>';
-    }), $('pager'), L.settings.perPage).join('');
+    $('rows').innerHTML = paginate(L.key, d.rows.map(r => reqRow(L, r, STRATA_REQ)), $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
 });
