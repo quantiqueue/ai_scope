@@ -8,15 +8,15 @@
 // ---------- Sources: one poll per endpoint, shared by every subscriber ----------
 // A scope usually has one source named like the scope ('strata'); a scope with several endpoints names the
 // others 'scope.part' (e.g. 'bionic.models'). Polling stops while the scope is not installed.
-const SOURCES = {};   // source id -> { id, scope, url, every, visibleOnly, deltaField, since, subs, els, data, error, busy, timer, kick }
+const SOURCES = {};   // source id -> { id, scope, url, every, visibleOnly, deltaField, pollParam, since, subs, els, data, error, busy, timer, kick }
 // visibleOnly: poll only while one of its lenses is on screen (a shown tab, window not minimized) - for endpoints that
 // cost something to keep fresh, e.g. the Processes scope (the server samples all processes only while it's asked).
 // AI_SCOPE-084 (item 7) deltaField: name a field of the payload whose array the client already holds (the mirror
 // family's processHistory ring, ~150 points). With it set, every poll after the first adds &since=<newest t seen>
 // and the server answers with only the newer points - the first poll and any poll that follows a failed one ask
 // for the whole ring, so a gap never has to be re-derived.
-function defineSource(id, url, scope, every, visibleOnly, deltaField) {
-  SOURCES[id] = { id, scope: scope || id, url, every: every || 2000, visibleOnly: !!visibleOnly, deltaField: deltaField || null, since: 0, subs: new Set(), els: new Map(), data: null, error: null };
+function defineSource(id, url, scope, every, visibleOnly, deltaField, pollParam) {
+  SOURCES[id] = { id, scope: scope || id, url, every: every || 2000, visibleOnly: !!visibleOnly, deltaField: deltaField || null, since: 0, subs: new Set(), els: new Map(), data: null, error: null, pollParam: pollParam || null };
 }
 function sourceSeen(src) {
   if (!src.visibleOnly) return true;
@@ -29,6 +29,12 @@ async function pollSource(src) {
   src.busy = true;
   let u = src.url;
   if (src.deltaField && src.since) u += (u.indexOf('?') >= 0 ? '&' : '?') + 'since=' + src.since;   // 084: only what came after
+  // AI_SCOPE-098: a lens setting that the SOURCE needs (e.g. llama.cpp's Models folder for the
+  // Installed lens) rides the poll URL. First mounted lens with a value wins; blanks are skipped.
+  if (src.pollParam) {
+    const pm = src.paramVals && src.paramVals.size ? [...src.paramVals.values()].filter(v => v)[0] : null;
+    if (pm) u += (u.indexOf('?') >= 0 ? '&' : '?') + 'md=' + encodeURIComponent(pm);
+  }
   try {
     const d = await (await fetch(u, { cache: 'no-store' })).json();
     src.data = d; src.error = null;
@@ -304,10 +310,14 @@ function mountLens(id, container, settings) {
   lens.redraw = () => { if (lens.data) def.render(lens, lens.data); };
   pagerReload[lens.key] = lens.redraw;
   if (def.init) def.init(lens);
+  const src = SOURCES[def.source || def.scope];
+  if (src.pollParam) { (src.paramVals = src.paramVals || new Map()).set(lens.key, st[src.pollParam] || ''); }   // 098: the setting rides this source's polls
   lens.unsub = subscribeSource(def.source || def.scope, (d, err) => { if (d && !err) { lens.data = d; def.render(lens, d); } }, el);
   return lens;
 }
 function unmountLens(lens) {
+  const src = SOURCES[lens.def.source || lens.def.scope];
+  if (src && src.pollParam && src.paramVals) src.paramVals.delete(lens.key);   // 098: a removed copy stops voting
   lens.unsub();
   delete pagerReload[lens.key];
   delete pages[lens.key];

@@ -45,8 +45,10 @@ let timer = null, busy = false, running = false;
 let online = false, lastError = null;
 let keyNeeded = null;       // URL of a llama.cpp server that answered 401 (needs --api-key's key)
 let apiKey = '';            // token for --api-key servers (the scope's 'API key' setting), sent as Bearer
-let modelsDir = null;       // AI_SCOPE-098: the router's --models-dir folder (scope setting, local servers only)
-let fileResCache = {};      // id -> resolved GGUF path ('' = looked and not found), cleared when the scope restarts
+let scopeModelsDir = null;    // AI_SCOPE-098: the --models-dir folder from the scope card (settings)
+let lensModelsDir = null;     // AI_SCOPE-098: per-poll override from the Installed lens setting (the ?md= param)
+let modelsDir = null;         // the folder actually used this poll: lens value if set, else the scope's
+let fileResCache = {};      // dir|id -> resolved GGUF path ('' = looked and not found), re-keyed when the dir changes
 let rootProps = null, rootPropsAt = 0;
 let router = null;          // router mode: { maxInstances, autoload } (null = single model)
 let models = {};            // id -> { id, name, state, path, port, meta, props, propsAt, slots, slotsEnabled }
@@ -550,7 +552,8 @@ function fileSize(p) {
 // Split GGUFs (…-00001-of-00002) live in a subfolder named after the stem, like Hugging Face.
 function resolveModelFile(id) {
   if (!modelsDir || !local || !id) return null;
-  if (id in fileResCache) return fileResCache[id] || null;
+  const ck = modelsDir + '|' + id;
+  if (ck in fileResCache) return fileResCache[ck] || null;
   let found = null;
   try {
     const key = String(id).split(':')[0];          // "repo/name:quant" -> the quant is the file's own tag
@@ -564,8 +567,17 @@ function resolveModelFile(id) {
     }
     if (!found) found = scanStem(modelsDir, stem, id);
   } catch (e) { found = null; }
-  fileResCache[id] = found || '';
+  fileResCache[ck] = found || '';
   return found;
+}
+// The Installed lens can set the folder per poll (AI_SCOPE-098); the lens value overrides the
+// scope card's, and an empty poll param means no lens is asking, so the scope setting stands.
+function setModelsDir(v) {
+  const d = String(v || '').trim() || null;
+  modelsDir = d || scopeModelsDir;             // recomputed every call: the scope card may have changed since the last lens param (the bug this line guards)
+  if (d === lensModelsDir) return;
+  lensModelsDir = d;
+  fileResCache = {};
 }
 function pathIsFile(p) { try { return fs.statSync(p).isFile(); } catch (e) { return false; } }
 function dirExists(p) { try { return fs.statSync(p).isDirectory(); } catch (e) { return false; } }
@@ -594,7 +606,14 @@ function scanStem(dir, stem, id) {
   return null;
 }
 // From a GGUF file name / model id: quantization ("Q4_K_M", "IQ3_XXS", "BF16") and parameter count ("35B", "26B")
-function quantFromName(s) { const m = /(?:^|[-_.])((?:I?Q\d+(?:_[A-Z0-9]+)*)|BF16|F16|F32)(?=[-_.]|$)/i.exec(baseName(s) || ''); return m ? m[1].toUpperCase() : null; }
+// Quant tags are their own tokens (UD-?I?Q<digits> with _suffixes, or BF16/F16/F32); the LAST one
+// in the name is the file's own quant. This fixes a live-test catch: the old bounded-prefix version
+// stopped at "_K" boundaries, so the compound tag Q8_0 / Q4_K_M came out truncated ("Q8").
+// Family tokens like "0.6B" never match the pattern, so they cannot confuse it.
+function quantFromName(s) {
+  const all = String(baseName(s) || '').match(/(?:UD-)?I?Q\d+(?:_[A-Za-z0-9]+)*|BF16|F16|F32/gi);
+  return all ? all[all.length - 1].toUpperCase() : null;
+}
 function paramsFromName(s) { const m = /(?:^|[-_.])(\d+(?:\.\d+)?)B(?=[-_.]|$)/i.exec(String(s || '')); return m ? +m[1] * 1e9 : null; }
 // split a huggingface.co repo_url from a GGUF header into { org, repo } (null if it is not HF)
 function hfRepo(hm) {
@@ -631,19 +650,19 @@ function modelInfo(m) {
     // publisher falls out of it; when the id is a plain local name, the GGUF header's repo_url
     // names it instead. Neither: an honest gap.
     publisher: (function () {
-      const s = String(m.id || '').split('/');
+      const s = String(m.id || '').split(':')[0].split('/');   // the ":quant" tag is not part of the HF repo name (live-test catch)
       if (s.length > 1) return s[0];
       const r = hfRepo(hm);
       return r ? r.org : null;
     })(),
     publisherUrl: (function () {
-      const s = String(m.id || '').split('/');
+      const s = String(m.id || '').split(':')[0].split('/');   // the ":quant" tag is not part of the HF repo name (live-test catch)
       if (s.length > 1) return 'https://huggingface.co/' + s[0];
       const r = hfRepo(hm);
       return r ? 'https://huggingface.co/' + r.org : null;
     })(),
     modelUrl: (function () {
-      const s = String(m.id || '').split('/');
+      const s = String(m.id || '').split(':')[0].split('/');   // the ":quant" tag is not part of the HF repo name (live-test catch)
       if (s.length > 1) return 'https://huggingface.co/' + s.join('/');
       const r = hfRepo(hm);
       return r && r.repo ? 'https://huggingface.co/' + r.org + '/' + r.repo : null;
@@ -731,7 +750,9 @@ function start(settings) {
   // AI_SCOPE-098 review: the router's --models-dir folder, set on the scope card when the server
   // runs on this PC. The router never sends a path for UNLOADED models, so folder + file stem is
   // the only way their Size / Fit / header provenance can be honest instead of gaps.
-  modelsDir = String(settings.modelsDir || '').trim() || null;
+  scopeModelsDir = String(settings.modelsDir || '').trim() || null;
+  lensModelsDir = null;
+  modelsDir = scopeModelsDir;
   fileResCache = {};
   base = configured || null;
   loadRequests();          // the store ignores a second load (AI_SCOPE-094 slice 1)
@@ -746,12 +767,12 @@ function stop() {
   procstats.unwatch('llamacpp');
   procstats.unattest('llamacpp');   // AI_SCOPE-082: an uninstalled scope stops claiming history (like 081 / strata / bionic)
   online = false; rootProps = null; router = null; lastError = null; base = null;
-  modelsDir = null; fileResCache = {};
+  scopeModelsDir = null; lensModelsDir = null; modelsDir = null; fileResCache = {};
 }
 
-module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo,
+module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo, setModelsDir: setModelsDir,   // the route passes the lens's ?md= value through this
   // _test exposes the shipped helpers for probes (098); the setters exist because `let` module
   // bindings are not writable from a vm harness script (the 094 peak-attach precedent).
-  _test: { trackSlots: trackSlots, isLlama: isLlama, modelInfo: modelInfo, hfRepo: hfRepo, withFit: withFit, resolveModelFile: resolveModelFile,
-           setLocal: function (v) { local = !!v; }, setModelsDir: function (v) { modelsDir = v || null; fileResCache = {}; },
+  _test: { trackSlots: trackSlots, isLlama: isLlama, modelInfo: modelInfo, hfRepo: hfRepo, withFit: withFit, resolveModelFile: resolveModelFile, setModelsDir: setModelsDir, effectiveDir: function () { return modelsDir; },
+           setLocal: function (v) { local = !!v; },
            clearFileSizes: function () { Object.keys(fileSizes).forEach(function (k) { delete fileSizes[k]; }); } } };

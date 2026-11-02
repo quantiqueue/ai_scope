@@ -260,6 +260,7 @@ http.createServer((req, res) => {
     // AI_SCOPE-082: llama.cpp's mirror lenses ride the 084 delta (see /api/ollama) - &since=<t> sends only newer points.
     const since = parseInt(url.searchParams.get('since'), 10) || 0;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    llamacppstats.setModelsDir(url.searchParams.get('md'));   // 098: the Installed lens sends its Models folder; empty keeps the scope setting
     return res.end(JSON.stringify(llamacppstats.getState(limit, since)));
   }
   if (url.pathname === '/api/bionic/models') {
