@@ -97,48 +97,45 @@ defineLens({
 });
 
 // ---------- shared ----------
-// "GPU 1 4.0 · GPU 2 2.3 GB" for one model's process (Windows); shared (system) memory on hover.
-const lcVram = pr => {
-  const cards = pr && pr.gpus ? pr.gpus.map((g, i) => ({ n: i + 1, g })).filter(x => x.g.vram >= 64 * 1048576) : [];
-  if (!cards.length) return ONONE;
-  const shared = pr.gpus.reduce((a, g) => Math.max(a, g.shared || 0), 0);
-  return '<span title="' + (shared >= 64 * 1048576 ? '+ ' + escH(fmtBytes(shared)) + ' in shared (system) memory' : '') + '">' +
-    cards.map(x => (pr.gpus.length > 1 ? 'GPU ' + x.n + ' ' : '') + fmtBytes(x.g.vram)).join(' · ') + '</span>';
+// lcVram lived here (050) - AI_SCOPE-099 moved the per-card VRAM cell into the shared Loaded
+// engine as vramCell() in lens.js; the hint line uses the shared procVramText() like the others.
+// ---------- Loaded in memory: the running model(s) (AI_SCOPE-099: the shared Loaded lens) ----------
+// The uniform block plus llama.cpp's one exclusive (Since load). Rows carry their own measured
+// process (082's per-model watch in router mode), so the VRAM column is per-model here by nature;
+// lcVram / lcTotals moved into the shared engine (lens.js) and are gone from this file.
+const LC_LOAD = {
+  title: 'Loaded in memory',
+  nameOf: m => m.name,
+  plainCell: true,
+  tipOf: m => m.path || null,
+  tagOf: m => m.sleeping ? '<span class="tag">sleeping</span>' : '',
+  quantField: 'ftype',
+  slotsField: 'slots',
+  sizeTitle: 'Weights on disk (the file size); the running context adds more',
+  slotTitle: 'Parallel slots of this model',
+  unloadWhy: 'llama.cpp keeps the model loaded until the server or router releases it',
+  loadedWhy: 'The server reports no load timestamp',
+  extra: ['since'],
+  titleOf: (key, m) => key === 'context'
+    ? (m.ctxTrain ? 'trained for ' + fmtNum(m.ctxTrain) + ' \u00b7 ' : '') + 'shared by all slots'
+    : null
 };
-// "Since load" cell: the server's own counters (--metrics) since the model was loaded.
-const lcTotals = m => {
-  const x = m.metrics;
-  if (!x) return '<td class="na" title="Start the server with --metrics to see totals since the model was loaded">—</td>';
-  const tip = 'Since the model was loaded (server metrics): ' + fmtNum(x.predTokens) + ' tokens generated' + (x.genTps ? ' at ' + fmtTps(x.genTps) + ' tok/s' : '') +
-    ' · ' + fmtNum(x.promptTokens) + ' prompt tokens read' + (x.promptTps ? ' at ' + fmtTps(x.promptTps) + ' tok/s' : '') + (x.cached ? ' · ' + fmtNum(x.cached) + ' reused from the cache' : '');
-  return '<td title="' + escH(tip) + '">' + lcK(x.predTokens) + ' out' + (x.genTps ? ' · ' + fmtTps(x.genTps) + ' tok/s' : '') + '</td>';
-};
-
-// ---------- Loaded in memory: the running model(s) ----------
 defineLens({
   id: 'llamacpp.loaded', scope: 'llamacpp', size: 'full',
   name: 'Loaded in memory',
-  description: 'Models the llama.cpp server is running (in router mode, every loaded one): quantization, size, context, slots, VRAM per card.',
+  description: 'Models the llama.cpp server is running (in router mode, every loaded one): quantization, size, measured VRAM per card, context, slots, and since-load totals with --metrics.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Loaded in memory', pager:true,
-    cols:['Model', 'Quant', 'Params', 'Size', 'Context', 'Slots', 'VRAM', 'Since load'] }),
+  markup: loadedTableMarkup(LC_LOAD),
   render(L, d) {
     const $ = L.$, list = d.online ? (d.models || []).filter(m => m.state === 'loaded') : [];
-    $('rows').innerHTML = paginate(L.key, list.map(m =>
-      '<tr><td class="model"><span title="' + escH(m.path || m.name) + '">' + escH(cutName(m.name)) + '</span>' +
-        (m.sleeping ? '<span class="tag">sleeping</span>' : '') + '</td>' +
-      '<td>' + escH(m.ftype || ONONE) + '</td>' +
-      '<td>' + (m.params ? (m.params / 1e9).toFixed(m.params >= 1e10 ? 0 : 1) + ' B' : ONONE) + '</td>' +
-      '<td>' + (m.size ? fmtBytes(m.size) : ONONE) + '</td>' +
-      '<td title="' + (m.ctxTrain ? 'trained for ' + fmtNum(m.ctxTrain) + ' · ' : '') + 'shared by all slots">' + (m.context ? fmtNum(m.context) : ONONE) + '</td>' +
-      '<td>' + (m.slots != null ? m.slots : ONONE) + '</td>' +
-      '<td>' + lcVram(m.process) + '</td>' + lcTotals(m) + '</tr>'), $('pager'), L.settings.perPage).join('');
+    const opts = Object.assign({}, LC_LOAD, { count: list.length, solo: list.length === 1, proc: d.process, multi: list.length > 1 });
+    $('rows').innerHTML = paginate(L.key, list.map(m => loadedRow(m, opts)), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = list.length > 0;
     $('empty').textContent = !d.online ? (d.needsKey ? d.error : 'The llama.cpp server is offline. Start it (llama serve -m <model.gguf>, or llama-server) to see its model and requests.')
       : d.router ? 'No model loaded. The router loads one when a request names it' + (d.router.autoload ? '' : ' (autoload is off: load it in the web UI)') + '.' : 'No model information from the server.';
     $('hint').textContent = !d.online ? '' : d.router
       ? '— router · ' + list.length + ' of ' + (d.models || []).length + ' loaded' + (d.router.maxInstances ? ', up to ' + d.router.maxInstances + ' at once' : '') +
-        (list.length > 1 && lcVram(d.process) !== ONONE ? ' · all together ' + lcVram(d.process).replace(/<[^>]*>/g, '') : '')
+        (list.length > 1 && procVramText(d.process) ? ' \u00b7 ' + procVramText(d.process) : '')
       : (procVramText(d.process) ? '— ' + procVramText(d.process) : '');
   },
 });

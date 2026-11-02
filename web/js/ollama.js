@@ -109,26 +109,35 @@ defineLens({
   },
 });
 
-// ---------- Loaded in memory ----------
+// ---------- Loaded in memory (AI_SCOPE-099: the shared Loaded lens) ----------
+// The app's own offload split (size_vram) leaves the columns per D2: it lives in the VRAM cell's
+// tooltip now, and the cell itself shows AI_SCOPE's measured per-card reading (the family
+// aggregate - Ollama does not separate a process per model, so several loaded rows stay gaps).
+// Auto-unload becomes a live countdown; Ollama has no exclusives of its own (D4).
+const OLLAMA_LOAD = {
+  title: 'Loaded in memory',
+  nameOf: m => m.name,
+  ctxTitle: 'The context this model runs with',
+  slotTitle: 'Ollama does not report per-model parallel slots',
+  unloadOf: m => { const u = fmtUntil(m.expiresAt); return /^\d/.test(u) ? 'in ' + u : u; },
+  loadedWhy: 'Ollama\'s API carries no load timestamp',
+  extra: [],
+  titleOf: (key, m) => {
+    if (key !== 'vram') return null;
+    if (m.sizeVram == null) return 'Ollama does not report how much of this model is on the GPU';
+    return 'Ollama\'s own claim: ' + fmtBytes(m.sizeVram) + ' of ' + fmtBytes(m.size) + ' on GPU (green = GPU, amber = CPU)';
+  }
+};
 defineLens({
   id: 'ollama.loaded', scope: 'ollama', size: 'full',
   name: 'Loaded in memory',
-  description: 'Models Ollama has in memory: size, context, how much runs on the GPU, when it unloads.',
-  markup: tableLensMarkup({ title:'Loaded in memory',
-    cols:['Model', 'Params', 'Size', 'Context', 'GPU', 'Auto-unload'] }),
+  description: 'Models Ollama has in memory: quantization, size, measured VRAM per card, context, when it unloads. The app\'s own GPU/CPU split is in the VRAM tooltip.',
+  settings: [PER_PAGE_FIELD],
+  markup: loadedTableMarkup(OLLAMA_LOAD),
   render(L, d) {
     const $ = L.$;
-    $('rows').innerHTML = d.loaded.map(m => {
-      const g = m.gpuPct;
-      const proc = g == null ? ONONE : g >= 100 ? '100% GPU' : g <= 0 ? '100% CPU' : (100 - g) + '% CPU / ' + g + '% GPU';
-      const until = fmtUntil(m.expiresAt);
-      return '<tr><td class="model">' + nameHtml(m.name) + (m.quant ? '<span class="na"> · ' + escH(m.quant) + '</span>' : '') + '</td>' +
-        '<td>' + escH(m.params || ONONE) + '</td>' +
-        '<td title="' + fmtBytes(m.sizeVram) + ' on GPU">' + fmtBytes(m.size) + '</td>' +
-        '<td>' + (m.context ? fmtNum(m.context) + (m.maxContext ? '<span class="na"> / ' + fmtNum(m.maxContext) + '</span>' : '') : ONONE) + '</td>' +
-        '<td><span class="split" title="' + fmtBytes(m.sizeVram) + ' of ' + fmtBytes(m.size) + ' on GPU (green = GPU, amber = CPU)"><span class="bar"><div style="width:' + (g || 0) + '%"></div></span>' + proc + '</span></td>' +
-        '<td>' + (/^\d/.test(until) ? 'in ' + until : until) + '</td></tr>';
-    }).join('');
+    const opts = Object.assign({}, OLLAMA_LOAD, { count: d.loaded.length, solo: d.loaded.length === 1, proc: d.process, multi: d.loaded.length > 1 });
+    $('rows').innerHTML = paginate(L.key, d.loaded.map(m => loadedRow(m, opts)), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = d.loaded.length > 0;
     $('empty').textContent = d.online ? 'No model loaded. Ollama loads a model on the first request and unloads it after it has been idle (5 min by default).' : 'Ollama is offline.';
     const spill = d.loaded.some(m => m.gpuPct != null && m.gpuPct < 100);

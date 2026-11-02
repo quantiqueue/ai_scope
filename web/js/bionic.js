@@ -66,30 +66,40 @@ defineLens({
   },
 });
 
-// ---------- Loaded in memory ----------
+// ---------- Loaded in memory (AI_SCOPE-099: the shared Loaded lens) ----------
+// Quant left the Model cell (uniform column now); Bionic's own gpuRatio claim rides the VRAM
+// tooltip (D2 - the cell itself is only ever AI_SCOPE's measured reading). Flash attention and
+// KV placement stay as Bionic's exclusives (D4). Parallel rides the uniform Slots column.
+const BIONIC_LOAD = {
+  title: 'Loaded in memory',
+  nameOf: m => m.id || m.name,
+  linkOf: m => m.modelUrl || null,
+  slotsField: 'parallel',
+  ctxTitle: 'The context this instance runs with / the model\'s maximum',
+  slotTitle: 'Parallel slots Bionic runs this model in',
+  unloadOf: m => m.ttlMs ? fmtDur(m.ttlMs) + ' idle' : 'off',
+  loadedWhy: 'Bionic\'s API carries no load timestamp',
+  vramWhy: 'No Bionic model process found right now - the API lags behind a load or unload by up to 10 s',
+  extra: ['flash', 'kvWhere'],
+  titleOf: (key, m) => key === 'vram' && m.gpuRatio != null
+    ? 'Bionic\'s own claim: ' + Math.round(m.gpuRatio <= 1 ? m.gpuRatio * 100 : m.gpuRatio) + '% of the model offloaded to GPU'
+    : null
+};
 defineLens({
   id: 'bionic.loaded', scope: 'bionic', source: 'bionic.models', size: 'full',
   name: 'Loaded in memory',
-  description: 'Models Bionic has loaded: size, context, flash attention, KV cache, parallel slots, auto-unload.',
-  markup: tableLensMarkup({ title:'Loaded in memory',
-    cols:['Model', 'Params', 'Size', 'Context', 'Flash attention', 'KV cache', 'Parallel', 'Auto-unload'] }),
+  description: 'Models Bionic has loaded: quantization, size, measured VRAM per card, context, slots, auto-unload, plus Bionic\'s flash attention and KV placement.',
+  settings: [PER_PAGE_FIELD],
+  markup: loadedTableMarkup(BIONIC_LOAD),
   render(L, d) {
     const $ = L.$;
-    const onOff = v => v == null ? ONONE : v ? 'on' : 'off';
-    $('rows').innerHTML = d.loaded.map(m => {
-      return '<tr><td class="model">' + nameLink(m.id, m.modelUrl) + (m.quant ? '<span class="na"> · ' + escH(m.quant) + '</span>' : '') + '</td>' +
-        '<td>' + escH(m.params || ONONE) + '</td>' +
-        '<td>' + fmtBytes(m.size) + '</td>' +
-        '<td>' + (m.context ? fmtNum(m.context) + (m.maxContext ? '<span class="na"> / ' + fmtNum(m.maxContext) + '</span>' : '') : ONONE) + '</td>' +
-        '<td>' + onOff(m.flashAttention) + '</td>' +
-        '<td>' + (m.kvOnGpu == null ? ONONE : m.kvOnGpu ? 'GPU' : 'CPU') + '</td>' +
-        '<td>' + (m.parallel != null ? m.parallel : ONONE) + '</td>' +
-        '<td>' + (m.ttlMs ? fmtDur(m.ttlMs) + ' idle' : 'off') + '</td></tr>';
-    }).join('');
+    const opts = Object.assign({}, BIONIC_LOAD, { count: d.loaded.length, solo: d.loaded.length === 1, proc: d.process, multi: d.loaded.length > 1 });
+    $('rows').innerHTML = paginate(L.key, d.loaded.map(m => loadedRow(m, opts)), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = d.loaded.length > 0;
     $('empty').textContent = d.online ? 'No model loaded. Load one in Bionic, or it loads on the first request (JIT loading).'
       : 'Bionic\'s local server is not reachable' + (d.error ? ' (' + d.error + ')' : '') + '. Start it on Bionic\'s Local Server screen to see models.';
-    // Where the model actually sits: per-card VRAM of Bionic's model process(es) (Windows, AI_SCOPE-049) - Bionic's API doesn't say
+    // The family total stays in the hint (D2) - what the VRAM column shows per row is the same
+    // reading when one model is loaded, and honest gaps when several are.
     const where = d.loaded.length ? procVramText(d.process) : '';
     if (where) { $('hint').textContent = '— ' + where; return; }
     // Windows: no model process (yet) - e.g. a model being unloaded or loaded; the API lags behind by up to 10 s

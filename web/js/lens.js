@@ -480,6 +480,93 @@ function instHint(o, list) {
     (o.fitNote ? ' \u00b7 ' + o.fitNote : '');
 }
 
+// ---------- one shared Loaded-models table for the LLM scopes (AI_SCOPE-099) ----------
+// The uniform column set the user decided 2026-11-02 (D1): Model · Quant · Params · Size ·
+// Context · Slots · Auto-unload · Loaded, plus the measured VRAM column (D2); exclusives after
+// the block (D4). 094's rules carry: a number the app never reports is a gap (—), never a zero;
+// VRAM here is ALWAYS AI_SCOPE's own procstats reading, never the app's offload claim (D2) - the
+// app's own split survives only in a tooltip. The per-row honesty rule: a router gives AI_SCOPE a
+// process per model (082's watch), so those rows carry the real per-model reading; for the other
+// three the scope's process family is ONE aggregate, and an aggregate painted on a row among
+// several would double-count - there the reading lands only when exactly one row is loaded, and
+// the full aggregate stays in the hint line (as 049/050/051 always had it).
+const LOADED_UNIFORM = ['model', 'quant', 'params', 'size', 'context', 'slots', 'vram', 'unload', 'loaded'];
+function loadedTip(o, key, m, fallback) {
+  const t = o && o.titleOf ? o.titleOf(key, m) : null;
+  return t != null ? t : fallback;
+}
+// VRAM per-card cell from one procstats payload (Windows; null elsewhere or with no reading).
+// Moved up from llamacpp.js's lcVram (050) and made shared - the column is family-wide now.
+function vramCell(pr) {
+  const cards = pr && pr.gpus ? pr.gpus.map((g, i) => ({ n: i + 1, g })).filter(x => x.g.vram >= 64 * 1048576) : [];
+  if (!cards.length) return ONONE;
+  // Shared (system) memory: Windows reports the same allocation on every card, so take the largest.
+  const shared = pr.gpus.reduce((a, g) => Math.max(a, g.shared || 0), 0);
+  return '<span title="' + (shared >= 64 * 1048576 ? '+ ' + escH(fmtBytes(shared)) + ' in shared (system) memory' : '') + '">' +
+    cards.map(x => (pr.gpus.length > 1 ? 'GPU ' + x.n + ' ' : '') + fmtBytes(x.g.vram)).join(' \u00b7 ') + '</span>';
+}
+const LOADED_COLS = {
+  model:    { th: 'Model', td: (m, o) => loadedModelCell(m, o) },
+  quant:    { th: 'Quant', td: (m, o) => '<td' + tattr(loadedTip(o, 'quant', m, null)) + '>' + escH(m[o.quantField || 'quant'] || ONONE) + '</td>' },
+  params:   { th: 'Params', td: (m, o) => '<td' + tattr(loadedTip(o, 'params', m, m.paramsGuess ? 'Estimated from the model name; the exact count shows once it has been loaded' : null)) + '>' +
+                (m.paramsGuess ? '\u2248 ' : '') + (m.params != null || m.paramsGuess ? instParamsText(m) : ONONE) + '</td>' },
+  size:     { th: 'Size', td: (m, o) => '<td' + tattr(loadedTip(o, 'size', m, o.sizeTitle || null)) + '>' + (m.size ? fmtBytes(m.size) : ONONE) + '</td>' },
+  vram:     { th: 'VRAM', td: (m, o) => {
+                // D2: always AI_SCOPE's own measured reading - m.process per model when the scope
+                // separates them (llama.cpp's 082 watch), the family aggregate (o.proc) only when
+                // exactly one row is loaded (o.solo; the scope counts and passes it). Never the
+                // app's offload claim in this cell - a scope that has one puts it in titleOf.
+                const pr = m.process || (o.solo ? o.proc : null);
+                const shown = pr ? vramCell(pr) : ONONE;
+                const def = shown !== ONONE
+                  ? 'Per-card memory AI_SCOPE measured on this model\'s process family'
+                  : (o.multi ? 'AI_SCOPE watches this app\'s processes as one family - with ' + o.count + ' models loaded there is no per-model reading to show; the family total is in the line under the title'
+                             : (o.vramWhy || 'No process reading for this model yet'));
+                return '<td' + tattr(loadedTip(o, 'vram', m, def)) + '>' + shown + '</td>';
+              } },
+  context:  { th: 'Context', td: (m, o) => {
+                const v = m[o.contextField || 'context'], mx = m.maxContext;
+                return '<td' + tattr(loadedTip(o, 'context', m, o.ctxTitle || null)) + '>' + (v ? fmtNum(v) + (mx && mx !== v ? '<span class="na"> / ' + fmtNum(mx) + '</span>' : '') : ONONE) + '</td>';
+              } },
+  slots:    { th: 'Slots', td: (m, o) => { const v = m[o.slotsField || 'slots']; return '<td' + tattr(loadedTip(o, 'slots', m, o.slotTitle || null)) + '>' + (v != null ? fmtNum(v) : ONONE) + '</td>'; } },
+  unload:   { th: 'Auto-unload', td: (m, o) => '<td' + tattr(loadedTip(o, 'unload', m, o.unloadWhy || null)) + '>' + (o.unloadOf ? (o.unloadOf(m) || ONONE) : ONONE) + '</td>' },
+  loaded:   { th: 'Loaded', td: (m, o) => '<td' + tattr(loadedTip(o, 'loaded', m, m.loadedAtRaw || o.loadedWhy || null)) + '>' + (o.loadedOf ? (o.loadedOf(m) || ONONE) : ONONE) + '</td>' },
+  // scope-exclusive columns, always after the uniform block (D4)
+  flash:    { th: 'Flash attention', td: (m) => '<td>' + (m.flashAttention == null ? ONONE : m.flashAttention ? 'on' : 'off') + '</td>' },
+  kvWhere:  { th: 'KV location', td: (m) => '<td title="Where Bionic keeps this model\'s KV cache">' + (m.kvOnGpu == null ? ONONE : m.kvOnGpu ? 'GPU' : 'CPU') + '</td>' },
+  kvQuant:  { th: 'KV cache', td: (m) => '<td title="Quantization Strata gives the KV cache itself">' + escH(m.kv ? String(m.kv).toUpperCase() : ONONE) + '</td>' },
+  gpus:     { th: 'GPUs', td: (m) => '<td title="Cards Strata spread this model over; the rest reads from system RAM">' + escH(m.gpus && m.gpus.length ? m.gpus.join(' + ') + ' + RAM' : 'CPU / RAM') + '</td>' },
+  experts:  { th: 'Experts in VRAM', td: (m) => '<td title="Model experts kept in VRAM; the rest are read from RAM while answering">' +
+              (m.expertSlots != null ? fmtNum(m.expertSlots) + (m.expertCacheMib != null ? '<span class="na"> \u00b7 ' + fmtBytes(m.expertCacheMib * 1048576) + '</span>' : '') : ONONE) + '</td>' },
+  vramFree: { th: 'Free VRAM', td: (m) => '<td title="VRAM still free on the card after this load">' + (m.vramFreeMib != null ? fmtBytes(m.vramFreeMib * 1048576) : ONONE) + '</td>' },
+  spec:     { th: 'Speculation', td: (m) => '<td title="Speculative decoding on this model (draft tokens offered to it)">' + (m.speculation == null ? ONONE : m.speculation ? 'on' : 'off') + '</td>' },
+  since:    { th: 'Since load', td: (m) => {
+                const x = m.metrics;
+                if (!x) return '<td class="na" title="Start the server with --metrics to see totals since the model was loaded">' + ONONE + '</td>';
+                const tip = 'Since the model was loaded (server metrics): ' + fmtNum(x.predTokens) + ' tokens generated' + (x.genTps ? ' at ' + fmtTps(x.genTps) + ' tok/s' : '') +
+                  ' \u00b7 ' + fmtNum(x.promptTokens) + ' prompt tokens read' + (x.promptTps ? ' at ' + fmtTps(x.promptTps) + ' tok/s' : '') + (x.cached ? ' \u00b7 ' + fmtNum(x.cached) + ' reused from the cache' : '');
+                return '<td title="' + escH(tip) + '">' + fmtNum(x.predTokens) + ' out' + (x.genTps ? ' \u00b7 ' + fmtTps(x.genTps) + ' tok/s' : '') + '</td>';
+              } }
+};
+function loadedModelCell(m, o) {
+  const label = o.nameOf ? o.nameOf(m) : (m.name != null ? m.name : ONONE);
+  let html;
+  if (o.linkOf && o.linkOf(m)) html = nameLink(label, o.linkOf(m), o.linkTitle ? o.linkTitle(m) : null);
+  else if (o.plainCell) { const tip = escH(o.tipOf ? (o.tipOf(m) || label) : label); html = '<span title="' + tip + '">' + escH(cutName(label)) + '</span>'; }
+  else html = nameHtml(label, o.tipOf ? o.tipOf(m) : null);
+  return '<td class="model">' + html + (o.tagOf ? o.tagOf(m) : '') + '</td>';
+}
+function loadedColKeys(o) { return LOADED_UNIFORM.concat((o && o.extra) || []); }
+function loadedHeadings(o) { return loadedColKeys(o).map(k => LOADED_COLS[k] ? LOADED_COLS[k].th : null).filter(Boolean); }
+function loadedTableMarkup(o) {
+  return tableLensMarkup({ title: o.title, pager: true, hint: o.hint, foot: o.foot, cols: loadedHeadings(o) });
+}
+// One row: the scope's columns in its declared order; unknown keys are skipped (fail soft -
+// the 092 rule: a slipped name costs a column, not the lens).
+function loadedRow(m, o) {
+  return '<tr>' + loadedColKeys(o).map(k => LOADED_COLS[k] ? LOADED_COLS[k].td(m, o || {}) : '').join('') + '</tr>';
+}
+
 // Table lens (full width): heading + card with a table (+ empty-state box) (+ pager).
 //   o = { title, hint (static HTML; '' = none; default an empty data-k="hint"), headExtra (HTML after the hint, e.g. a ? button),
 //         before (HTML at the top of the card, above the table: filter chips, help box), cols ([header HTML]), foot (HTML under the table;

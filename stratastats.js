@@ -410,6 +410,15 @@ function getState(limit, since) {
       gguf: shard || null
     };
   });
+  // AI_SCOPE-099 (user review 2026-11-02): Strata's engine-instances answer carries no quant and no
+  // size, but her installed list does - for this exact variant, matched by the same model key that
+  // sets that row's own loaded flag (:407). Copy HER numbers onto the loaded record: one source, an
+  // identity join the app itself defines, no second measurement and no guessing. Params stays a gap:
+  // her catalog carries no token count (the 098 rule).
+  if (out.loaded && inst) {
+    const row = out.installed.find(function (x) { return x.variant === inst.model; });
+    if (row) { out.loaded.quant = row.quant; out.loaded.size = row.size; }
+  }
   return out;
 }
 

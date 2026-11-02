@@ -73,25 +73,36 @@ defineLens({
   },
 });
 
-// ---------- Loaded model ----------
+// ---------- Loaded model (AI_SCOPE-099: the shared Loaded lens) ----------
+// Variant left the lens by the user's decision (D4). Quant/Size reach the row through Strata's
+// OWN installed list, joined server-side by the same variant key that sets that row's loaded flag
+// (review 2026-11-02 - one source, an identity match the app itself defines). Params stays an
+// honest gap: her catalog carries no token count (098). Slots rides the uniform column via her
+// parallel; Strata's exclusives are appended.
+const STRATA_LOAD = {
+  title: 'Loaded model',
+  nameOf: l => l.label,
+  slotsField: 'parallel',
+  ctxTitle: 'The context window this engine instance is serving',
+  slotTitle: 'Parallel slots this instance serves',
+  unloadWhy: 'Strata reports no auto-unload setting',
+  loadedOf: l => l.loadedAt ? escH(fmtWhen(Date.parse(l.loadedAt))) : null,
+  sizeTitle: 'Strata\'s own figure for this variant, joined from her installed list (AI_SCOPE-099)',
+  titleOf: (key, l) => key === 'loaded' ? (l.loadedAt || null)          // tattr escapes - return the raw stamp
+    : key === 'quant' && l.quant ? 'The quant tag of the variant\'s own name - the same one her Installed lens shows'
+    : null,
+  extra: ['kvQuant', 'gpus', 'experts', 'vramFree', 'spec']
+};
 defineLens({
   id: 'strata.loaded', scope: 'strata', size: 'full',
   name: 'Loaded model',
-  description: 'The model Strata has loaded: variant, context, KV cache, GPUs, experts in VRAM, free VRAM.',
-  markup: tableLensMarkup({ title:'Loaded model',
-    cols:['Model', 'Variant', 'Context', 'KV cache', 'GPUs', 'Experts in VRAM', 'Free VRAM', 'Speculation', 'Loaded'] }),
+  description: 'The model Strata has loaded: quant and size from her own installed list, measured VRAM per card, context, slots, plus Strata\'s KV cache, GPUs, experts in VRAM, free VRAM and speculation.',
+  settings: [PER_PAGE_FIELD],
+  markup: loadedTableMarkup(STRATA_LOAD),
   render(L, d) {
     const $ = L.$, l = d.loaded;
-    $('rows').innerHTML = l ? '<tr><td class="model">' + nameHtml(l.label) + '</td>' +
-      '<td>' + escH(l.variant || ONONE) + '</td>' +
-      '<td>' + (l.context ? fmtNum(l.context) : ONONE) + '</td>' +
-      '<td>' + escH(l.kv ? l.kv.toUpperCase() : ONONE) + '</td>' +
-      '<td>' + escH(l.gpus.length ? l.gpus.join(' + ') + ' + RAM' : 'CPU / RAM') + '</td>' +
-      '<td title="Model experts kept in VRAM; the rest are read from RAM while answering">' +
-        (l.expertSlots != null ? fmtNum(l.expertSlots) + (l.expertCacheMib != null ? '<span class="na"> · ' + fmtBytes(l.expertCacheMib * 1048576) + '</span>' : '') : ONONE) + '</td>' +
-      '<td>' + (l.vramFreeMib != null ? fmtBytes(l.vramFreeMib * 1048576) : ONONE) + '</td>' +
-      '<td>' + (l.speculation == null ? ONONE : l.speculation ? 'on' : 'off') + '</td>' +
-      '<td title="' + escH(l.loadedAt || '') + '">' + (l.loadedAt ? escH(fmtWhen(Date.parse(l.loadedAt))) : ONONE) + '</td></tr>' : '';
+    const opts = Object.assign({}, STRATA_LOAD, { count: l ? 1 : 0, solo: !!l, proc: d.process, multi: false });
+    $('rows').innerHTML = paginate(L.key, l ? [loadedRow(l, opts)] : [], $('pager'), L.settings.perPage).join('');
     $('empty').hidden = !!l;
     $('empty').textContent = d.online ? 'No model loaded. Load one in Strata (Models).' : 'Strata is offline. Start the Strata app to see its model and requests.';
     const where = l ? procVramText(d.process) : '';   // per-card VRAM of the model process (Windows, AI_SCOPE-051)
