@@ -140,27 +140,31 @@ defineLens({
   },
 });
 
-// ---------- Installed models ----------
-// Strata's own fit verdict: it keeps experts in RAM by design, so our VRAM fit doesn't apply.
+// ---------- Installed models (AI_SCOPE-098: the shared Installed lens) ----------
+// Strata's own fit verdict (D2): it keeps experts in RAM by design, so our VRAM fit doesn't apply.
+// Variant / Status / Modified are out of the lens by the user's decision; Memory needed stays as
+// Strata's own number, appended after the uniform block.
+const STRATA_INST = {
+  title: 'Installed models', pager: true, extra: ['memory'],
+  linkOf: m => m.modelUrl || null,
+  linkTitle: m => 'Model on Hugging Face (named by the model file itself)',
+  fitOf: m => m.onThisPc
+    ? '<span class="fit ' + (m.onThisPc === 'fits' ? 'fits' : /does not fit/.test(m.onThisPc) ? 'spills' : 'tight') + '">' + escH(m.onThisPc) + '</span>'
+    : ONONE,
+  titleOf: (k, m) => k === 'fit' ? (m.fitSummary || null) : null,
+  sizeTitle: 'Weights on disk, as Strata reports it; memory Strata needs is the Memory column',
+  fitNote: 'fit as judged by Strata for this PC'
+};
 defineLens({
   id: 'strata.installed', scope: 'strata', size: 'full',
   name: 'Installed models',
-  description: 'Models installed in Strata, with size on disk, memory needed and Strata\'s own fit verdict.',
+  description: 'Models installed in Strata, with size, features and Strata\'s own fit verdict; memory needed as Strata measures it.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Installed models', pager:true,
-    cols:['Model', 'Variant', 'On disk', 'Context', 'Memory needed', 'On this PC (Strata)', 'Status'] }),
+  markup: instTableMarkup(STRATA_INST),
   render(L, d) {
     const $ = L.$;
-    $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' model' + (d.installed.length > 1 ? 's' : '') + ' · ' +
-      fmtNum(Math.round(d.installed.reduce((a, m) => a + (m.diskGb || 0), 0))) + ' GB on disk · fit as judged by Strata for this PC' : '';
-    $('rows').innerHTML = paginate(L.key, d.installed.map(m =>
-      '<tr><td class="model">' + nameHtml(m.name) + (m.loaded ? '<span class="tag">loaded</span>' : '') + (m.images ? '<span class="tag">images</span>' : '') + '</td>' +
-      '<td>' + escH(m.variant) + '</td>' +
-      '<td>' + (m.diskGb != null ? m.diskGb.toFixed(1) + ' GB' : ONONE) + '</td>' +
-      '<td>' + (m.context ? fmtNum(m.context) : ONONE) + '</td>' +
-      '<td>' + (m.memoryGb != null ? m.memoryGb.toFixed(1) + ' GB' : ONONE) + '</td>' +
-      '<td title="' + escH(m.fitSummary || '') + '">' + (m.onThisPc ? '<span class="fit ' + (m.onThisPc === 'fits' ? 'fits' : /does not fit/.test(m.onThisPc) ? 'spills' : 'tight') + '">' + escH(m.onThisPc) + '</span>' : ONONE) + '</td>' +
-      '<td>' + (m.missingParts ? '<span class="status error">' + m.missingParts + ' parts missing</span>' : m.ready ? 'ready' : 'not ready') + '</td></tr>'), $('pager'), L.settings.perPage).join('');
+    $('hint').textContent = instHint(STRATA_INST, d.installed);
+    $('rows').innerHTML = paginate(L.key, d.installed.map(m => instRow(m, STRATA_INST)), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = d.installed.length > 0;
     $('empty').textContent = d.online ? 'No models installed in Strata.' : 'Strata is offline.';
   },

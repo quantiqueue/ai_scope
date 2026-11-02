@@ -397,6 +397,79 @@ function reqRow(L, r, o) {
   return '<tr' + (isNew ? ' class="new"' : '') + '>' + reqColKeys(o).map(k => REQ_COLS[k] ? REQ_COLS[k].td(r, o || {}) : '').join('') + '</tr>';
 }
 
+// ---------- one shared Installed-models table for the LLM scopes (AI_SCOPE-098) ----------
+// The uniform column set the user decided 2026-11-02 (D3): same columns, same names, same order in
+// all four scopes; a scope's own columns are appended after the block. The rules are 094's:
+// a number an app never reports stays a gap, a number AI_SCOPE computed is marked as computed,
+// and each app's own fit verdict stays its own (D2) — the cell names its judge.
+// Params rule added at review: a GGUF header's size_label is a FAMILY label (packager-written), so
+// it is never rendered as a variant's count - an honest gap instead (the user, 2026-11-02).
+const INSTALLED_UNIFORM = ['model', 'publisher', 'params', 'quant', 'size', 'context', 'features', 'fit'];
+// A scope's tooltip wins; the built-in honesty note still applies when it returns nothing
+// (the reqTip rule — a scope supplying one title can never silence the rest).
+function instTip(o, key, m, fallback) {
+  const t = o && o.titleOf ? o.titleOf(key, m) : null;
+  return t != null ? t : fallback;
+}
+function instModelCell(m, o) {
+  const label = o.nameOf ? o.nameOf(m) : (m.name != null ? m.name : ONONE);
+  let html;
+  if (o.linkOf && o.linkOf(m)) {
+    html = nameLink(label, o.linkOf(m), o.linkTitle ? o.linkTitle(m) : null);
+  } else if (o.plainCell) {
+    // llama.cpp: the name is short but the tooltip carries the GGUF path (the pre-098 lens did the same)
+    const tip = escH(o.tipOf ? (o.tipOf(m) || label) : label);
+    html = '<span title="' + tip + '">' + escH(cutName(label)) + '</span>';
+  } else {
+    html = nameHtml(label, o.tipOf ? o.tipOf(m) : null);
+  }
+  const tags = (o.tagOf ? o.tagOf(m) : '') + (m.loaded ? '<span class="tag">loaded</span>' : '');
+  return '<td class="model">' + html + tags + '</td>';
+}
+// Params arrive in three dialects (098 grounding): app strings (Ollama "7B", Bionic params_string),
+// llama.cpp's number with a name-guess, and Strata's none at all. One cell renders all three;
+// a guessed value wears the same ≈ marker 094's provenance uses.
+function instParamsText(m) {
+  const v = m.params != null ? m.params : m.paramsGuess;
+  if (typeof v === 'string') return v;
+  const n = +v;
+  if (!n) return String(v);
+  return n >= 1e10 ? Math.round(n / 1e9) + ' B' : (n / 1e9).toFixed(1) + ' B';
+}
+const INSTALLED_COLS = {
+  model:      { th: 'Model', td: (m, o) => instModelCell(m, o) },
+  publisher:  { th: 'Publisher', td: (m, o) => '<td' + tattr(instTip(o, 'publisher', m, null)) + '>' +
+                  (m.publisher ? (m.publisherUrl ? extLink(m.publisher, m.publisherUrl, 'Publisher on Hugging Face') : escH(m.publisher)) : ONONE) + '</td>' },
+  params:     { th: 'Params', td: (m, o) => '<td' + tattr(instTip(o, 'params', m, m.paramsGuess ? 'Estimated from the model name; the exact count shows once it has been loaded' : null)) + '>' +
+                  (m.paramsGuess ? '\u2248 ' : '') + (m.params != null || m.paramsGuess ? instParamsText(m) : ONONE) + '</td>' },
+  quant:      { th: 'Quant', td: (m, o) => '<td' + tattr(instTip(o, 'quant', m, null)) + '>' + escH(m[o.quantField || 'quant'] || ONONE) + '</td>' },
+  size:       { th: 'Size', td: (m, o) => '<td' + tattr(instTip(o, 'size', m, o.sizeTitle || null)) + '>' + (m.size ? fmtBytes(m.size) : ONONE) + '</td>' },
+  context:    { th: 'Context', td: (m, o) => { const v = m[o.contextField || 'context']; return '<td' + tattr(instTip(o, 'context', m, o.ctxTitle || null)) + '>' + (v ? fmtNum(v) : ONONE) + '</td>'; } },
+  features:   { th: 'Features', td: (m, o) => '<td>' + (o.featOf ? featTags(o.featOf(m)) : featTags(m.features)) + '</td>' },
+  fit:        { th: 'Fit', td: (m, o) => '<td' + tattr(instTip(o, 'fit', m, o.fitTitle || null)) + '>' + (o.fitOf ? o.fitOf(m) : fitPill(m, o.fitText || { fits: 'fits', tight: 'tight', spills: 'spills' })) + '</td>' },
+  // scope-exclusive columns, always after the uniform block (Strata's Memory, as its own app number)
+  memory:     { th: 'Memory needed', td: (m, o) => '<td' + tattr(instTip(o, 'memory', m, 'As Strata measures it - experts live in RAM, so this is lower than the file size')) + '>' +
+                  (m.memoryGb != null ? m.memoryGb.toFixed(1) + ' GB' : ONONE) + '</td>' }
+};
+function instColKeys(o) { return INSTALLED_UNIFORM.concat((o && o.extra) || []); }
+function instHeadings(o) { return instColKeys(o).map(k => INSTALLED_COLS[k] ? INSTALLED_COLS[k].th : null).filter(Boolean); }
+function instTableMarkup(o) {
+  return tableLensMarkup({ title: o.title, pager: true, hint: o.hint, foot: o.foot, cols: instHeadings(o) });
+}
+// One row: the scope's columns in its declared order; unknown keys are skipped (fail soft).
+// No new-row highlight here - installed lists refresh wholesale, unlike request rows.
+function instRow(m, o) {
+  return '<tr>' + instColKeys(o).map(k => INSTALLED_COLS[k] ? INSTALLED_COLS[k].td(m, o || {}) : '').join('') + '</tr>';
+}
+// The hint line, one builder for all four dialects: — N models · X GB on disk · <fit note>.
+function instHint(o, list) {
+  if (!list.length) return '';
+  const total = list.reduce((a, m) => a + (m.size || 0), 0);
+  return '\u2014 ' + list.length + ' model' + (list.length > 1 ? 's' : '') +
+    (total ? ' \u00b7 ' + fmtBytes(total) + ' on disk' : '') +
+    (o.fitNote ? ' \u00b7 ' + o.fitNote : '');
+}
+
 // Table lens (full width): heading + card with a table (+ empty-state box) (+ pager).
 //   o = { title, hint (static HTML; '' = none; default an empty data-k="hint"), headExtra (HTML after the hint, e.g. a ? button),
 //         before (HTML at the top of the card, above the table: filter chips, help box), cols ([header HTML]), foot (HTML under the table;

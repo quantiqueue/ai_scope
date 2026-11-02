@@ -126,32 +126,31 @@ defineLens({
   },
 });
 
-// ---------- Installed models ----------
+// ---------- Installed models (AI_SCOPE-098: the shared Installed lens) ----------
+// Arch and Modified left the lens by the user's decision; the modified date Bionic shows is a
+// catalog/HF lookup date, not a file mtime - one more reason it is not a column.
+const BIONIC_INST = {
+  title: 'Installed models', pager: true, contextField: 'maxContext',
+  linkOf: m => m.modelUrl,
+  linkTitle: m => (m.source ? m.source + ': ' : '') + (m.modelUrl || m.key),
+  featOf: m => [m.vision ? 'vision' : null, m.tools ? 'tools' : null, m.reasoning ? 'reasoning' : null,
+                m.type && m.type.indexOf('embed') === 0 ? 'embedding' : null].filter(Boolean),
+  fitText: { fits: 'fits', tight: 'tight', spills: 'partly CPU' },
+  sizeTitle: 'Weights on disk; AI_SCOPE compares this against VRAM for the Fit column (context adds more)'
+};
 defineLens({
   id: 'bionic.installed', scope: 'bionic', source: 'bionic.models', size: 'full',
   name: 'Installed models',
-  description: 'Models downloaded in Bionic, with size, features, VRAM fit and max context.',
+  description: 'Models downloaded in Bionic, with publisher, size, features, VRAM fit and context.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Installed models', pager:true,
-    cols:['Model', 'Publisher', 'Arch', 'Params', 'Quant', 'Size', 'Features', 'VRAM fit', 'Max context', 'Modified'] }),
+  markup: instTableMarkup(BIONIC_INST),
   render(L, d) {
     const $ = L.$, vt = d.vramTotal;
-    const fitText = { fits:'fits', tight:'tight', spills:'partly CPU' };
-    $('rows').innerHTML = paginate(L.key, d.installed.map(m => {
-      const feats = [m.vision ? 'vision' : null, m.tools ? 'tools' : null, m.reasoning ? 'reasoning' : null,
-                     m.type && m.type.indexOf('embed') === 0 ? 'embedding' : null].filter(Boolean);
-      return '<tr><td class="model">' + nameLink(m.name, m.modelUrl, (m.source ? m.source + ': ' : '') + (m.modelUrl || m.key)) + (m.loaded ? '<span class="tag">loaded</span>' : '') + '</td>' +
-        '<td>' + (m.publisher ? extLink(m.publisher, m.publisherUrl, 'Publisher on Hugging Face') : ONONE) + '</td><td>' + escH(m.arch || ONONE) + '</td><td>' + escH(m.params || ONONE) + '</td>' +
-        '<td>' + escH(m.quant || ONONE) + '</td><td>' + fmtBytes(m.size) + '</td>' +
-        '<td>' + featTags(feats) + '</td>' +
-        '<td>' + fitPill(m, fitText) + '</td>' +
-        '<td>' + (m.maxContext ? fmtNum(m.maxContext) : ONONE) + '</td>' +
-        '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>';
-    }), $('pager'), L.settings.perPage).join('');
+    const opts = Object.assign({}, BIONIC_INST, { fitNote: vt ? 'fit is weights vs ' + vramWord(d) + ' (context adds more)' : null });
+    $('rows').innerHTML = paginate(L.key, d.installed.map(m => instRow(m, opts)), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = d.installed.length > 0;
-    $('empty').textContent = d.online ? 'No models found.' : 'Bionic\'s local server is not reachable.';
-    $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' models · ' + fmtBytes(d.installed.reduce((a, m) => a + (m.size || 0), 0)) + ' on disk' +
-      (vt ? ' · fit is weights vs ' + vramWord(d) + ' (context adds more)' : '') : '';
+    $('empty').textContent = d.online ? 'No models found.' : (d.url ? 'Bionic\'s local server is not reachable.' : 'Bionic is not installed (set its folder on the Scopes page).');
+    $('hint').textContent = instHint(opts, d.installed);
   },
 });
 

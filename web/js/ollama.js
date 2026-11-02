@@ -194,30 +194,31 @@ defineLens({
   },
 });
 
-// ---------- Installed models ----------
+// ---------- Installed models (AI_SCOPE-098: the shared Installed lens) ----------
+// Arch and Modified left the lens by the user's decision; the Ollama library link stays, with the
+// separate HF tag when the model also maps to a Hugging Face repo.
+const OLLAMA_INST = {
+  title: 'Installed models', pager: true, foot: '', contextField: 'maxContext',
+  linkOf: m => m.libraryUrl || m.modelUrl,
+  linkTitle: m => m.libraryUrl ? 'Ollama library page' : 'Hugging Face repo',
+  tagOf: m => m.libraryUrl && m.modelUrl
+    ? '<a class="tag" href="' + escH(m.modelUrl) + '" target="_blank" rel="noopener" title="Original model on Hugging Face' + (m.baseName ? ': ' + escH(m.baseName) : '') + ' (opens in a new tab)">HF' + EXT_ICON + '</a>'
+    : '',
+  fitText: { fits: 'fits', tight: 'tight', spills: 'partly CPU' },
+  sizeTitle: 'Weights on disk; AI_SCOPE compares this against VRAM for the Fit column (context adds more)',
+  fitNote: null   // composed below - it needs d.vramTotal, so the object cannot carry it
+};
 defineLens({
   id: 'ollama.installed', scope: 'ollama', size: 'full',
   name: 'Installed models',
-  description: 'Models installed in Ollama, with size, features, VRAM fit and max context.',
+  description: 'Models installed in Ollama, with publisher, size, features, VRAM fit and context.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Installed models', pager:true, foot:'',
-    cols:['Model', 'Publisher', 'Arch', 'Params', 'Quant', 'Size', 'Features', 'VRAM fit', 'Max context', 'Modified'] }),
+  markup: instTableMarkup(OLLAMA_INST),
   render(L, d) {
     const $ = L.$, vt = d.vramTotal;
-    $('hint').textContent = d.installed.length ? '— ' + d.installed.length + ' models · ' + fmtBytes(d.installed.reduce((a, m) => a + (m.size || 0), 0)) + ' on disk' +
-      (vt ? ' · fit is weights vs ' + vramWord(d) + ' (context adds more)' : '') : '';
-    const fitText = { fits:'fits', tight:'tight', spills:'partly CPU' };
-    $('rows').innerHTML = paginate(L.key, d.installed.map(m =>
-      '<tr><td class="model">' + nameLink(m.name, m.libraryUrl || m.modelUrl, m.libraryUrl ? 'Ollama library page' : 'Hugging Face repo') +
-        (m.libraryUrl && m.modelUrl ? '<a class="tag" href="' + escH(m.modelUrl) + '" target="_blank" rel="noopener" title="Original model on Hugging Face' + (m.baseName ? ': ' + escH(m.baseName) : '') + ' (opens in a new tab)">HF' + EXT_ICON + '</a>' : '') +
-        (m.loaded ? '<span class="tag">loaded</span>' : '') + '</td>' +
-      '<td>' + (m.publisher ? extLink(m.publisher, m.publisherUrl, 'Publisher on Hugging Face') : ONONE) + '</td>' +
-      '<td>' + escH(m.family || ONONE) + '</td><td>' + escH(m.params || ONONE) + '</td><td>' + escH(m.quant || ONONE) + '</td>' +
-      '<td>' + fmtBytes(m.size) + '</td>' +
-      '<td>' + featTags(m.features) + '</td>' +
-      '<td>' + fitPill(m, fitText) + '</td>' +
-      '<td>' + (m.maxContext ? fmtNum(m.maxContext) : ONONE) + '</td>' +
-      '<td>' + (m.modified ? new Date(m.modified).toLocaleDateString() : ONONE) + '</td></tr>'), $('pager'), L.settings.perPage).join('');
+    const opts = Object.assign({}, OLLAMA_INST, { fitNote: vt ? 'fit is weights vs ' + vramWord(d) + ' (context adds more)' : null });
+    $('hint').textContent = instHint(opts, d.installed);
+    $('rows').innerHTML = paginate(L.key, d.installed.map(m => instRow(m, opts)), $('pager'), L.settings.perPage).join('');
   },
 });
 

@@ -49,6 +49,7 @@
     "ollamastats.js",
     "stratastats.js",
     "llamacppstats.js",
+    "ggufmeta.js",
     "procstats.js",
     "procnix.js",
     "proctop.js",

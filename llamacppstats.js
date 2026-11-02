@@ -21,6 +21,7 @@
 const http = require('http');
 const zlib = require('zlib');
 const fs = require('fs');
+const path = require('path');            // AI_SCOPE-098: resolving unloaded router model files under --models-dir
 const hwstats = require('./hwstats');
 const procstats = require('./procstats');   // process stats: VRAM per card, GPU %, CPU, RAM (Windows)
 // `llama serve` runs the model in llama.exe itself; in router mode each model is a child llama.exe. Plain builds:
@@ -32,6 +33,7 @@ const CANDIDATES = ['http://127.0.0.1:9931', 'http://127.0.0.1:8080'];
 const REQ_FILE = paths.file('llamacpp-requests.jsonl');
 const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
 const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
+const ggufmeta = require('./ggufmeta');            // AI_SCOPE-098 review: GGUF header provenance (HF repo, size label)
 const POLL_MS = 500;           // all slots idle (a request's start is known to about ± ¼ s)
 const POLL_BUSY_MS = 250;      // a slot busy: look more often for better speed / timing estimates
 const PROPS_MS = 10000;
@@ -43,6 +45,8 @@ let timer = null, busy = false, running = false;
 let online = false, lastError = null;
 let keyNeeded = null;       // URL of a llama.cpp server that answered 401 (needs --api-key's key)
 let apiKey = '';            // token for --api-key servers (the scope's 'API key' setting), sent as Bearer
+let modelsDir = null;       // AI_SCOPE-098: the router's --models-dir folder (scope setting, local servers only)
+let fileResCache = {};      // id -> resolved GGUF path ('' = looked and not found), cleared when the scope restarts
 let rootProps = null, rootPropsAt = 0;
 let router = null;          // router mode: { maxInstances, autoload } (null = single model)
 let models = {};            // id -> { id, name, state, path, port, meta, props, propsAt, slots, slotsEnabled }
@@ -538,21 +542,112 @@ function fileSize(p) {
   if (!(p in fileSizes)) { try { fileSizes[p] = fs.statSync(p).size; } catch (e) { fileSizes[p] = null; } }
   return fileSizes[p];
 }
+// AI_SCOPE-098 review: resolve an UNLOADED router model to its file under the configured
+// --models-dir folder (the scope's 'Models folder' setting; local servers only). The router's
+// /models id IS the file stem relative to that folder. Exact stems win; a unique prefix match
+// covers quant-tagged files ("qwen2.5-coder-3b" -> Q4_K_M / Q8_0 siblings - each gets its own
+// file, never the same one twice); an ambiguous prefix is left as a gap, never guessed.
+// Split GGUFs (…-00001-of-00002) live in a subfolder named after the stem, like Hugging Face.
+function resolveModelFile(id) {
+  if (!modelsDir || !local || !id) return null;
+  if (id in fileResCache) return fileResCache[id] || null;
+  let found = null;
+  try {
+    const key = String(id).split(':')[0];          // "repo/name:quant" -> the quant is the file's own tag
+    const stem = key.toLowerCase().replace(/[\\/]/g, '\u0000');   // an HF-style id nests folders
+    const direct = pathIsFile(path.join(modelsDir, key)) ? path.join(modelsDir, key) : null;
+    if (direct) found = direct;
+    if (!found) {
+      const q = String(id).split(':')[1];
+      const nest = path.join(modelsDir, key.replace(/[\\/]/g, path.sep));
+      if (q && dirExists(nest)) found = pickSplitOrTagged(nest, q);
+    }
+    if (!found) found = scanStem(modelsDir, stem, id);
+  } catch (e) { found = null; }
+  fileResCache[id] = found || '';
+  return found;
+}
+function pathIsFile(p) { try { return fs.statSync(p).isFile(); } catch (e) { return false; } }
+function dirExists(p) { try { return fs.statSync(p).isDirectory(); } catch (e) { return false; } }
+function pickSplitOrTagged(dir, quant) {
+  let files = [];
+  try { files = fs.readdirSync(dir); } catch (e) { return null; }
+  const first = files.filter(function (f) { return /-00001-of-\d+\.gguf$/i.test(f); })[0];
+  if (first) return path.join(dir, first);
+  const tagged = files.filter(function (f) { return /\.gguf$/i.test(f) && new RegExp('[-_.]' + quant.replace(/[^A-Za-z0-9_]/g, '') + '(?:[-_.]|$)', 'i').test(f); });
+  return tagged.length === 1 ? path.join(dir, tagged[0]) : null;
+}
+function scanStem(dir, stem, id) {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (e) { return null; }
+  const ggufs = names.filter(function (f) { return /\.gguf$/i.test(f); });
+  const exact = ggufs.filter(function (f) { return baseName(f).toLowerCase().replace(/\.gguf$/i, '') === stem; });
+  if (exact.length === 1) return path.join(dir, exact[0]);
+  if (exact.length > 1) return null;                        // several exact stems: no guessing
+  const pref = ggufs.filter(function (f) { return baseName(f).toLowerCase().replace(/\.gguf$/i, '').indexOf(stem) === 0; });
+  if (pref.length === 1) return path.join(dir, pref[0]);
+  if (pref.length > 1) {                                    // quant-tagged siblings: one per quant, never shared
+    const q = String(id).split(':')[1];
+    const t = q ? pref.filter(function (f) { return new RegExp('[-_.]' + q.replace(/[^A-Za-z0-9_]/g, '') + '(?:[-_.]|$)', 'i').test(baseName(f)); }) : [];
+    if (t.length === 1) return path.join(dir, t[0]);
+  }
+  return null;
+}
 // From a GGUF file name / model id: quantization ("Q4_K_M", "IQ3_XXS", "BF16") and parameter count ("35B", "26B")
 function quantFromName(s) { const m = /(?:^|[-_.])((?:I?Q\d+(?:_[A-Z0-9]+)*)|BF16|F16|F32)(?=[-_.]|$)/i.exec(baseName(s) || ''); return m ? m[1].toUpperCase() : null; }
 function paramsFromName(s) { const m = /(?:^|[-_.])(\d+(?:\.\d+)?)B(?=[-_.]|$)/i.exec(String(s || '')); return m ? +m[1] * 1e9 : null; }
+// split a huggingface.co repo_url from a GGUF header into { org, repo } (null if it is not HF)
+function hfRepo(hm) {
+  const u = hm && hm.repoUrl ? String(hm.repoUrl).trim().split(/\s+/)[0] : null;
+  const m = /^https?:\/\/huggingface\.co\/([^/\s]+)(?:\/([^/\s]+))?/i.exec(u || '');
+  if (!m) return null;
+  return { org: decodeURIComponent(m[1]), repo: m[2] ? decodeURIComponent(m[2]) : null };
+}
 function modelInfo(m) {
   const p = m.props || {}, dgs = p.default_generation_settings || {}, meta = m.meta || {};
-  const path = m.path || p.model_path || null;
+  // 098 review: an unloaded router model has no path from /models; resolve it from the scope's
+  // 'Models folder' setting so Size / Fit / header provenance stop being gaps (local servers only).
+  const path = m.path || p.model_path || resolveModelFile(m.id);
+  // AI_SCOPE-098 review: the GGUF's own header names its HF repo when /models did not
+  // (an unloaded model with a local path - same local-file rule as fileSize() above).
+  // The header's size_label is deliberately NOT rendered as Params: it is the packager's
+  // family-wide label (the user's point at review), not this variant's count.
+  let hfile = path;
+  const sm = path ? /(-0000)(\d)(-of-\d+\.gguf)$/i.exec(path) : null;   // metadata lives in shard 1
+  if (sm && sm[2] !== '1') hfile = path.slice(0, sm.index + 6) + '1' + path.slice(sm.index + 7);
+  const hm = local && hfile ? ggufmeta.header(hfile) : null;
   return {
     id: m.id, name: m.id, state: m.state, path: path,
-    ftype: p.model_ftype || meta.ftype || quantFromName(path), size: num(meta.size) || fileSize(path),
+    // an unloaded router model's id IS its file stem ("Qwen2.5-Coder-3B-Q4_K_M"), so the quant
+    // reads from the id when the path is unknown; loaded models answer with props / meta.
+    ftype: p.model_ftype || meta.ftype || quantFromName(m.id) || quantFromName(path), size: num(meta.size) || fileSize(path),
     params: num(meta.n_params), paramsGuess: num(meta.n_params) ? null : paramsFromName(m.id) || paramsFromName(baseName(path)),
     context: num(dgs.n_ctx) || m.contextLength || null, ctxTrain: num(meta.n_ctx_train) || m.contextLength || null,
     slots: num(p.total_slots), sleeping: !!p.is_sleeping, port: m.port || null,
     // what it takes besides text: image / video / audio (router: /models; single: /props modalities)
     inputs: (m.inputs || (p.modalities ? Object.keys(p.modalities).filter(function (k) { return p.modalities[k]; }).map(function (k) { return k === 'vision' ? 'image' : k; }) : []))
       .filter(function (x) { return x !== 'text'; }),
+    // AI_SCOPE-098 (D3): the model id is normally an HF repo path ("Qwen/Qwen3-0.6B-GGUF"), so the
+    // publisher falls out of it; when the id is a plain local name, the GGUF header's repo_url
+    // names it instead. Neither: an honest gap.
+    publisher: (function () {
+      const s = String(m.id || '').split('/');
+      if (s.length > 1) return s[0];
+      const r = hfRepo(hm);
+      return r ? r.org : null;
+    })(),
+    publisherUrl: (function () {
+      const s = String(m.id || '').split('/');
+      if (s.length > 1) return 'https://huggingface.co/' + s[0];
+      const r = hfRepo(hm);
+      return r ? 'https://huggingface.co/' + r.org : null;
+    })(),
+    modelUrl: (function () {
+      const s = String(m.id || '').split('/');
+      if (s.length > 1) return 'https://huggingface.co/' + s.join('/');
+      const r = hfRepo(hm);
+      return r && r.repo ? 'https://huggingface.co/' + r.org + '/' + r.repo : null;
+    })(),
     process: router ? procstats.get(procKey(m.id)) : procstats.get('llamacpp'),
     metrics: m.metricsOn && m.met ? { promptTokens: m.met.promptTokens, cached: m.met.cached, predTokens: m.met.predTokens,
       genTps: m.met.predSec > 0 ? m.met.predTokens / m.met.predSec : null, promptTps: m.met.promptSec > 0 ? m.met.promptTokens / m.met.promptSec : null,
@@ -564,6 +659,12 @@ function modelInfo(m) {
 // the ring on the client (web/js/mirror.js appends what arrives), so the 5-minute ring never rides the whole payload.
 // The two family fields sit in the object BEFORE the offline return: an uninstalled or unreachable server still has
 // to deliver the attested 'off' zeros (ollamastats.js / stratastats.js are the pattern; 077's review batch rule).
+// AI_SCOPE-098 (D2): the fit verdict for the Installed models lens. llama.cpp puts one model on
+// one card (router mode spawns an instance per model), so canSplit=false: never "fits across N GPUs".
+function withFit(x) {
+  if (x) { const f = hwstats.vramFit(x.size, hwstats.vramInfo(), false); x.fit = f ? f.fit : null; }
+  return x;
+}
 function getState(limit, since) {
   const out = { online: online, url: base || keyNeeded || configured || null, error: lastError, needsKey: !!keyNeeded,
                 router: router, build: rootProps && rootProps.build_info || null, slotsEnabled: null,
@@ -576,7 +677,7 @@ function getState(limit, since) {
   if (!online) return out;
   // loaded models first, then the rest in the server's order
   const list = order.map(function (id) { return models[id]; }).filter(Boolean);
-  out.models = list.filter(function (m) { return m.state === 'loaded'; }).concat(list.filter(function (m) { return m.state !== 'loaded'; })).map(modelInfo);
+  out.models = list.filter(function (m) { return m.state === 'loaded'; }).concat(list.filter(function (m) { return m.state !== 'loaded'; })).map(modelInfo).map(withFit);
   out.model = out.models.filter(function (m) { return m.state === 'loaded'; })[0] || null;
   const loaded = list.filter(function (m) { return m.state === 'loaded' && m.slots; });
   out.slotsEnabled = loaded.length ? loaded.some(function (m) { return m.slotsEnabled !== false; }) : null;
@@ -627,6 +728,11 @@ function start(settings) {
   settings = settings || {};
   configured = String(settings.url || '').trim().replace(/\/+$/, '');
   apiKey = String(settings.apiKey || '').trim();   // optional key for a --api-key server
+  // AI_SCOPE-098 review: the router's --models-dir folder, set on the scope card when the server
+  // runs on this PC. The router never sends a path for UNLOADED models, so folder + file stem is
+  // the only way their Size / Fit / header provenance can be honest instead of gaps.
+  modelsDir = String(settings.modelsDir || '').trim() || null;
+  fileResCache = {};
   base = configured || null;
   loadRequests();          // the store ignores a second load (AI_SCOPE-094 slice 1)
   running = true;
@@ -640,6 +746,12 @@ function stop() {
   procstats.unwatch('llamacpp');
   procstats.unattest('llamacpp');   // AI_SCOPE-082: an uninstalled scope stops claiming history (like 081 / strata / bionic)
   online = false; rootProps = null; router = null; lastError = null; base = null;
+  modelsDir = null; fileResCache = {};
 }
 
-module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo, _test: { trackSlots: trackSlots, isLlama: isLlama } };
+module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo,
+  // _test exposes the shipped helpers for probes (098); the setters exist because `let` module
+  // bindings are not writable from a vm harness script (the 094 peak-attach precedent).
+  _test: { trackSlots: trackSlots, isLlama: isLlama, modelInfo: modelInfo, hfRepo: hfRepo, withFit: withFit, resolveModelFile: resolveModelFile,
+           setLocal: function (v) { local = !!v; }, setModelsDir: function (v) { modelsDir = v || null; fileResCache = {}; },
+           clearFileSizes: function () { Object.keys(fileSizes).forEach(function (k) { delete fileSizes[k]; }); } } };

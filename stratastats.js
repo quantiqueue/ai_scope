@@ -11,6 +11,7 @@
 'use strict';
 const http = require('http');
 const fs = require('fs');
+const path = require('path');
 const hwstats = require('./hwstats');
 const procstats = require('./procstats');   // Strata's model process: VRAM per card, GPU %, CPU, RAM (Windows; AI_SCOPE-051)
 // The engine (python, serve/server.py) listens on the instance's private port (e.g. 18500) and runs the model in a child
@@ -27,6 +28,7 @@ const DEFAULT_URL = 'http://127.0.0.1:47831';
 const REQ_FILE = paths.file('strata-requests.jsonl');
 const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
 const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
+const ggufmeta = require('./ggufmeta');            // AI_SCOPE-098 review: GGUF header provenance (HF repo, size label)
 
 let base = DEFAULT_URL;
 let timer = null;
@@ -266,6 +268,46 @@ function catalogEntry(d, variant) {
   }
   return null;
 }
+// AI_SCOPE-098 review: find the model's GGUF shard 1 under Strata's own data folder, so the
+// Installed lens can show the Hugging Face repo the FILE names (general.repo_url). Strata lays
+// models out as <dataFolder>\models\<DIR>\*.gguf; DIR matched to the variant id by suffix run,
+// and a shard 1 is only accepted when a GGUF name confirms the same quant tail - the mmproj
+// sidecar lives in the same folder and carries the ORG's repo_url, never the model's.
+const shardCache = {};
+function modelShard(dataFolder, variant) {
+  if (!dataFolder || !variant) return null;
+  const ck = String(dataFolder).toLowerCase() + '|' + String(variant).toLowerCase();
+  if (ck in shardCache) return shardCache[ck];
+  let found = null;
+  try {
+    const v = String(variant).toLowerCase();
+    const root = path.join(String(dataFolder), 'models');
+    const dirs = fs.readdirSync(root, { withFileTypes: true }).filter(function (e) { return e.isDirectory(); });
+    for (const d0 of dirs) {
+      const dl = d0.name.toLowerCase();
+      const tail = v.slice(Math.max(0, v.lastIndexOf('-') + 1));
+      const head = v.slice(0, Math.max(0, v.lastIndexOf('-')));
+      let okDir = dl === v || dl === tail || dl === head || (tail.length >= 4 && dl.slice(-tail.length) === tail);
+      if (!okDir) continue;
+      let files = [];
+      try { files = fs.readdirSync(path.join(root, d0.name)); } catch (e) { continue; }
+      const ggufs = files.filter(function (f) { return /\.gguf$/i.test(f); });
+      // quant must appear as its own token in the file name (an IQ1_M folder must not accept a mmproj BF16)
+      const qm = /((?:UD-)?(?:I?Q\d+(?:_[A-Z0-9]+)+|I?Q\d+|BF16|F16|F32))$/i.exec(tail);
+      if (qm) {
+        const qre = new RegExp('(?:^|[-_.])' + qm[1] + '(?:[-_.]|$)', 'i');
+        if (!qre.test(ggufs.join(' '))) continue;
+      }
+      const first = ggufs.filter(function (f) { return /-00001-of-\d+\.gguf$/i.test(f); })[0];
+      const whole = first || (dl === v && ggufs.length === 1 ? ggufs[0] : null);   // lone un-split file only on an exact folder match
+      if (!whole) continue;
+      found = path.join(root, d0.name, whole);
+      break;
+    }
+  } catch (e) { found = null; }
+  shardCache[ck] = found;
+  return found;
+}
 function gpuNames(d, indexes) {
   const gpus = d.hardware && Array.isArray(d.hardware.gpus) ? d.hardware.gpus : [];
   return (indexes || []).map(function (ix) {
@@ -343,12 +385,29 @@ function getState(limit, since) {
   out.installed = inst2.map(function (x) {
     const c = catalogEntry(d, x.model);
     const rec = c && c.size.gpu_options ? (c.size.gpu_options.options || []).filter(function (o) { return o.key === c.size.gpu_options.recommended; })[0] : null;
+    // AI_SCOPE-098 (D3): publisher = the catalog family title as the floor; the model file's own
+    // GGUF header (general.repo_url / quantized_by / size_label) overrides it with the real HF
+    // repo and gives an honest params label - Strata's catalog carries none of that itself.
+    const q = /(?:^|[-_.])((?:UD-)?(?:I?Q\d+(?:_[A-Z0-9]+)*|BF16|F16|F32))(?:[-_.]|$)/i.exec(String(x.model || ''));
+    const dispName = c ? c.family.title + ' ' + c.size.model : (x.model_name || x.model);
+    const shard = modelShard(x.dataFolder, x.model);
+    const hm = shard ? ggufmeta.header(shard) : null;
+    const repo = hm && hm.repoUrl ? String(hm.repoUrl).trim().split(/\s+/)[0] : null;   // repo_url can list several space-separated
+    const hf = repo && /huggingface\.co\//i.test(repo) ? repo : null;
+    const pub = hf ? decodeURIComponent(hf.replace(/^https?:\/\/huggingface\.co\//i, '').split('/')[0]) : (c ? (c.family.title || null) : null);
     return {
-      variant: x.model, name: c ? c.family.title + ' ' + c.size.model : (x.model_name || x.model),
-      diskGb: num(x.diskGb), context: num(x.context), ready: !!x.ready, images: x.images === 'yes',
+      variant: x.model, name: dispName,
+      publisher: pub || null,
+      publisherUrl: (function () { const om = hf ? /^https?:\/\/[^/]+\/[^/]+/i.exec(hf) : null; return om ? om[0] : null; })(),
+      modelUrl: hf || null,
+      quant: q ? q[1].replace(/^UD-/, '').toUpperCase() : null,
+      features: x.images === 'yes' ? ['vision'] : [],   // 098: the shared Features cell reads records, not per-scope flags
+      diskGb: num(x.diskGb), size: Math.round((num(x.diskGb) || 0) * 1e9) || null,
+      context: num(x.context), ready: !!x.ready, images: x.images === 'yes',
       loaded: (d.instances || []).some(function (i) { return i.model === x.model && i.status === 'ready'; }),
       memoryGb: c ? num(c.size.memory_gb) : null, onThisPc: c ? c.size.on_this_pc || null : null,
       fitSummary: rec ? rec.summary || null : null, missingParts: num(x.partsMissing),
+      gguf: shard || null
     };
   });
   return out;
@@ -369,4 +428,6 @@ function stop() {
   online = false; native = null; lastError = null;
 }
 
-module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo };
+module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo,
+  // the llama.cpp precedent (098 review): _test exposes the shipped helpers for probes
+  _test: { modelShard: modelShard, catalogEntry: catalogEntry } };

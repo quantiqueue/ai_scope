@@ -136,31 +136,37 @@ defineLens({
   },
 });
 
-// ---------- Installed models: a router's models folder ----------
+// ---------- Installed models: a router's models folder (AI_SCOPE-098: the shared Installed lens) ----------
+// Gains the uniform Publisher (model ids are normally HF repo paths) and Fit (vramFit on the server,
+// canSplit=false - one model per card); the params name-guess now wears the ≈ marker (D4).
+const LC_INST = {
+  title: 'Installed models', pager: true,
+  quantField: 'ftype', contextField: 'ctxTrain',
+  featOf: m => m.inputs,
+  nameOf: m => m.name,
+  plainCell: true,
+  tipOf: m => m.path || null,
+  linkOf: m => m.modelUrl || null,
+  linkTitle: m => 'Model on Hugging Face',
+  tagOf: m => (m.state && m.state !== 'loaded' && m.state !== 'unloaded') ? '<span class="tag">' + escH(m.state) + '</span>' : '',
+  ctxTitle: 'The architecture\'s trained context length',
+  sizeTitle: 'Weights on disk; AI_SCOPE compares this against VRAM for the Fit column (context adds more)',
+  fitTitle: 'AI_SCOPE: weights vs the largest GPU card; a model loads onto one card'
+};
 defineLens({
   id: 'llamacpp.installed', scope: 'llamacpp', size: 'full',
   name: 'Installed models',
-  description: 'In router mode (--models-dir), every model in the router\'s folder: size, parameters, quantization, trained context, features, loaded or not.',
+  description: 'In router mode (--models-dir), every model in the router\'s folder: publisher, size, parameters, quantization, context, features, fit, loaded or not.',
   settings: [PER_PAGE_FIELD],
-  markup: tableLensMarkup({ title:'Installed models', pager:true,
-    cols:['Model', 'Params', 'Quant', 'Size', 'Trained context', 'Features'] }),
+  markup: instTableMarkup(LC_INST),
   render(L, d) {
     const $ = L.$, list = d.online && d.router ? d.models || [] : [];
-    $('rows').innerHTML = paginate(L.key, list.map(m =>
-      '<tr><td class="model"><span title="' + escH(m.path || m.name) + '">' + escH(cutName(m.name)) + '</span>' +
-        (m.state === 'loaded' ? '<span class="tag">loaded</span>' : m.state !== 'unloaded' ? '<span class="tag">' + escH(m.state) + '</span>' : '') + '</td>' +
-      '<td' + (m.paramsGuess ? ' title="From the model name (the exact count shows once it has been loaded)"' : '') + '>' +
-        (m.params || m.paramsGuess ? ((m.params || m.paramsGuess) / 1e9).toFixed((m.params || m.paramsGuess) >= 1e10 ? 0 : 1) + ' B' : ONONE) + '</td>' +
-      '<td>' + escH(m.ftype || ONONE) + '</td>' +
-      '<td>' + (m.size ? fmtBytes(m.size) : ONONE) + '</td>' +
-      '<td>' + (m.ctxTrain ? fmtNum(m.ctxTrain) : ONONE) + '</td>' +
-      '<td>' + ((m.inputs || []).map(x => '<span class="tag">' + escH(x) + '</span>').join('') || ONONE) + '</td></tr>'), $('pager'), L.settings.perPage).join('');
+    $('rows').innerHTML = paginate(L.key, list.map(m => instRow(m, LC_INST)), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = list.length > 0;
     $('empty').textContent = !d.online ? 'The llama.cpp server is offline.'
       : d.router ? 'The router\'s models folder is empty.'
       : 'This server runs a single model (started with -m). Start it with --models-dir <folder> (router mode) to list and load the models in a folder.';
-    const total = list.reduce((a, m) => a + (m.size || 0), 0);
-    $('hint').textContent = list.length ? '— ' + list.length + ' model' + (list.length > 1 ? 's' : '') + (total ? ' · ' + fmtBytes(total) + ' on disk' : '') : '';
+    $('hint').textContent = instHint(LC_INST, list);
   },
 });
 
