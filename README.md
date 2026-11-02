@@ -46,7 +46,7 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 
 | Scope | What it shows |
 |---|---|
-| **Hardware** (built in) | CPU, RAM, a GPU + VRAM + Power + PCIe tile per graphics card and a Disk tile per physical disk (active time, read / write speed), with 5-minute sparklines; GPU temperature, power draw / limit and PCIe bus traffic + link on NVIDIA cards; the RAM tile can also show committed memory against the PC's commit ceiling |
+| **Hardware** (built in) | CPU, RAM, a GPU + VRAM + Power + PCIe tile per graphics card and a Disk tile per physical disk (active time, read / write speed), with 5-minute sparklines; GPU temperature, power draw / limit and PCIe bus traffic + link on NVIDIA cards (temperature and power also on AMD cards on Linux); the RAM tile can also show committed memory against the PC's commit ceiling |
 | **Processes** (built in) | Your AI apps' own VRAM, GPU, CPU and RAM (AI processes), and the top 5 processes by CPU, RAM, I/O (read / write), and per graphics card GPU, VRAM and shared GPU memory, each with a 5-minute line per process |
 | **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit, and its own GPU / VRAM / RAM / CPU / I/O tiles measured on Bionic's processes |
 | **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit |
@@ -62,7 +62,7 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 - **A scope says offline**: start that app (for Bionic, also start its local server on the Local Server screen; for Strata, the Strata desktop app; for llama.cpp, `llama serve -m <model.gguf>` or `llama-server`).
 - **No Ollama requests listed**: the app isn't using the relay on port 11435 (see [Configuring Ollama](manual/CONFIGURING_OLLAMA.md)). In PowerShell, `set` doesn't work; use `$env:OLLAMA_HOST=...`.
 - **A scope stops working after an app update**: compare with the versions AI_SCOPE was last checked with in [Compatibility](manual/COMPATIBILITY.md).
-- **No GPU temperature or power**: only NVIDIA cards report them.
+- **No GPU temperature or power**: NVIDIA cards report them everywhere and AMD cards do on Linux; elsewhere they show as not available.
 - **Fewer lenses on a Mac or Linux PC**: lenses a system can't fill are left out, e.g. per-process GPU numbers on a Mac or on Linux without an NVIDIA card. See [How to scope](manual/HOW_TO_SCOPE.md#processes-scope).
 - **Can't rename or move the AI_SCOPE folder**: stop AI_SCOPE first (`ai_scope --stop`, or close its console window / end *Node.js* in Task Manager).
 

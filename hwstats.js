@@ -7,6 +7,8 @@
 //    the Windows GPU performance counters (same source as Task Manager) give usage per adapter LUID.
 //  - Mixed PCs (NVIDIA + AMD/Intel) use both. If DXGI is unavailable, the old single combined
 //    counter reading is used as a fallback.
+//  - Other cards on Linux (AMD): the amdgpu driver's plain sysfs files under /sys/class/drm —
+//    busy %, VRAM, junction temperature and board power with its cap. No ROCm or root needed.
 'use strict';
 const os = require('os');
 const fs = require('fs');                 // /proc/meminfo on Linux (AI_SCOPE-073)
@@ -21,8 +23,9 @@ const NVIDIA = 0x10de, MICROSOFT = 0x1414;
 
 const history = [];
 let lastCpu = null;
-let gpuMode = null;   // 'nvidia' | 'windows' | 'mixed' | 'none'
+let gpuMode = null;   // 'nvidia' | 'windows' | 'mixed' | 'amd' | 'none'
 let nvCards = [];     // latest nvidia-smi readings: [{ id, name, vendor, source, util, vramUsed, vramTotal }]
+let amdCards = [];    // AMD cards read from amdgpu sysfs (Linux): the nvidia card fields + dev/hm paths
 let winCards = [];    // cards read from Windows counters: [{ id, luid, name, vendor, source, util, vramUsed, vramTotal }]
 let dxgiList = [];    // every DXGI adapter (name, LUID, vendor) - also used to find the LUID of NVIDIA cards (procstats.js)
 let winAggregate = false; // fallback: no DXGI, so all counter adapters are summed into one card
@@ -56,7 +59,7 @@ function run(cmd, args, timeout, cb) {
 }
 function numOrNull(x) { const n = parseFloat(x); return isFinite(n) ? n : null; }
 
-function allCards() { return nvCards.concat(winCards); }
+function allCards() { return nvCards.concat(winCards, amdCards); }
 
 // ---- NVIDIA: one line per card ----
 // Temperature (°C) and power draw / limit (W) are extra fields; very old drivers may not know them, so if the
@@ -303,8 +306,93 @@ function startPcie() {
   pcieProc = ps;
 }
 
+// ---- AMD cards on Linux (amdgpu sysfs): GPU % + VRAM + junction temp + power draw / limit ----
+// The amdgpu driver (ships with the kernel) exposes these cards as plain files under
+// /sys/class/drm/cardN/device, no ROCm and no root needed:
+//   gpu_busy_percent                    -> GPU % (what rocm-smi reports)
+//   mem_info_vram_used / _total         -> dedicated VRAM in bytes
+//   hwmon/hwmonN/temp*_label + _input   -> millidegrees; prefer 'junction' (the throttling sensor), else edge
+//   hwmon/hwmonN/power1_average|_input  -> board power draw in microwatts
+//   hwmon/hwmonN/power1_cap             -> the driver's power limit in microwatts (e.g. a 210 W cap)
+// Cards with under 8 GiB of their own VRAM are skipped: an iGPU/APU 'VRAM' there is a carve-out of
+// system RAM, not dedicated memory (this box's Granite Ridge iGPU reports exactly 2 GiB).
+// Card names come from /usr/share/hwdata/pci.ids when hwdata is installed, else 'AMD GPU <PCI_ID>'.
+function readSysfsNum(p) {
+  try { const v = parseFloat(fs.readFileSync(p, 'utf8')); return isFinite(v) ? v : null; } catch (e) { return null; }
+}
+function amdCardName(devid) {   // '7551' -> 'AMD Radeon AI PRO R9700' via pci.ids, else a generic name
+  try {
+    const ids = fs.readFileSync('/usr/share/hwdata/pci.ids', 'utf8').split('\n');
+    let i = 0;
+    while (i < ids.length && !/^1002\s/.test(ids[i])) i++;   // AMD vendor section start
+    for (i++; i < ids.length; i++) {
+      const l = ids[i];
+      if (/^[0-9a-fA-F]{4}\s/.test(l)) break;                // next vendor - not found
+      const m = /^\t([0-9a-fA-F]{4})\s+(.+)$/.exec(l);      // one tab = a device (two tabs = subsystem)
+      if (m && m[1].toLowerCase() === devid) {
+        const name = m[2].trim();
+        const br = /\[([^\]]+)\]/.exec(name);               // 'Navi 48 [Radeon AI PRO R9700]' -> the marketing name
+        return 'AMD ' + (br ? br[1] : name).trim();
+      }
+    }
+  } catch (e) {}
+  return 'AMD GPU 1002:' + devid;
+}
+function findAmdCards() {
+  let dirs = [];
+  try { dirs = fs.readdirSync('/sys/class/drm'); } catch (e) { return []; }
+  const cards = [];
+  dirs.sort(function (a, b) { return (+a.replace(/\D/g, '')) - (+b.replace(/\D/g, '')); }).forEach(function (d) {
+    if (!/^card\d+$/.test(d)) return;
+    const dev = '/sys/class/drm/' + d + '/device';
+    const total = readSysfsNum(dev + '/mem_info_vram_total');
+    if (readSysfsNum(dev + '/gpu_busy_percent') == null || !(total >= 8 * GIB)) return;   // needs busy % + real dedicated VRAM
+    let devid = '????';
+    try {
+      const m = /PCI_ID=1002:([0-9a-f]{4})/i.exec(fs.readFileSync(dev + '/uevent', 'utf8'));
+      if (m) devid = m[1].toLowerCase();
+    } catch (e) {}
+    let hm = null;   // the hwmon dir holding the power / temp sensors
+    try {
+      fs.readdirSync(dev + '/hwmon').forEach(function (h) {
+        const base = dev + '/hwmon/' + h;
+        if (!hm && (fs.existsSync(base + '/power1_cap') || fs.existsSync(base + '/temp1_label'))) hm = base;
+      });
+    } catch (e) {}
+    cards.push({ id: 'amd' + d.slice(4), dev: dev, hm: hm, name: amdCardName(devid), vendor: 'AMD', source: 'amd',
+                 util: null, vramUsed: null, vramTotal: total, temp: null, power: null, powerLimit: null });
+  });
+  return cards;
+}
+// Refresh one card's live fields. Plain sysfs reads (a dozen small files per card) - cheap enough for the 2 s loop.
+function readAmdCard(c) {
+  c.util = readSysfsNum(c.dev + '/gpu_busy_percent');
+  c.vramUsed = readSysfsNum(c.dev + '/mem_info_vram_used');
+  const t = readSysfsNum(c.dev + '/mem_info_vram_total'); if (t) c.vramTotal = t;
+  if (!c.hm) return;
+  let junction = null, edge = null, hottest = null;
+  try {
+    fs.readdirSync(c.hm).forEach(function (f) {
+      const m = /^temp(\d+)_label$/.exec(f); if (!m) return;
+      let label = '';
+      try { label = fs.readFileSync(c.hm + '/' + f, 'utf8').trim().toLowerCase(); } catch (e) {}
+      const val0 = readSysfsNum(c.hm + '/temp' + m[1] + '_input');
+      if (val0 == null) return;
+      const val = Math.round(val0 / 1000);   // millidegrees -> degC
+      if (label === 'junction') junction = val; else if (label === 'edge') edge = val;
+      if (hottest == null || val > hottest) hottest = val;
+    });
+  } catch (e) {}
+  c.temp = junction != null ? junction : edge != null ? edge : hottest;
+  let pw = readSysfsNum(c.hm + '/power1_average');
+  if (pw == null) pw = readSysfsNum(c.hm + '/power1_input');
+  c.power = pw == null ? null : Math.round(pw / 100000) / 10;   // microwatts -> W, one decimal
+  const cap = readSysfsNum(c.hm + '/power1_cap');
+  c.powerLimit = cap == null ? null : Math.round(cap / 100000) / 10;
+}
+
 function setMode() {
-  gpuMode = nvCards.length && winCards.length ? 'mixed' : nvCards.length ? 'nvidia' : winCards.length ? 'windows' : 'none';
+  gpuMode = nvCards.length && winCards.length ? 'mixed' : nvCards.length ? 'nvidia' : winCards.length ? 'windows' : amdCards.length ? 'amd' : 'none';
 }
 
 function startCounters(cb) {
@@ -321,7 +409,13 @@ function detectGpu(cb) {
   const afterNvidia = function (nv) {
     nvCards = nv || [];
     if (nvCards.length) startPcie();   // PCIe traffic stream (AI_SCOPE-065)
-    if (process.platform !== 'win32') { setMode(); return cb(); }
+    if (process.platform !== 'win32') {
+      if (process.platform === 'linux' && !nvCards.length) {   // AMD cards via amdgpu sysfs
+        amdCards = findAmdCards();
+        amdCards.forEach(readAmdCard);                          // first numbers before the first sample tick
+      }
+      setMode(); return cb();
+    }
     readDxgi(function (adapters) {
       if (adapters) {
         dxgiList = adapters;
@@ -370,6 +464,7 @@ function pollGpu() {
 }
 
 function sample() {
+  if (amdCards.length) amdCards.forEach(readAmdCard);   // refresh amdgpu sysfs values each tick (AMD cards on Linux)
   const total = os.totalmem(), free = os.freemem();
   const cards = allCards();
   const has = function (k) { return cards.some(function (c) { return c[k] != null; }); };

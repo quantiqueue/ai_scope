@@ -6,7 +6,7 @@ Back to the [README](../README.md) · [Manual](README.md)
 
 | Scope | What it shows |
 |---|---|
-| **Hardware** (built in) | CPU, RAM, a GPU + VRAM + Power + PCIe tile per graphics card and a Disk tile per physical disk (active time, read / write speed), with 5-minute sparklines; GPU temperature, power draw / limit and PCIe bus traffic + link on NVIDIA cards |
+| **Hardware** (built in) | CPU, RAM, a GPU + VRAM + Power + PCIe tile per graphics card and a Disk tile per physical disk (active time, read / write speed), with 5-minute sparklines; GPU temperature, power draw / limit and PCIe bus traffic + link on NVIDIA cards (temperature and power also on AMD cards on Linux) |
 | **Processes** (built in) | Your AI apps' own VRAM, GPU, CPU and RAM (AI processes), and the top 5 processes by CPU, RAM, I/O (read / write), and per graphics card GPU, VRAM and shared GPU memory, each with a 5-minute line per process |
 | **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit |
 | **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit |
@@ -53,7 +53,7 @@ The change is saved with the page when you save.
 
 ## Hardware on each system
 
-CPU and RAM tiles work everywhere. GPU and VRAM tiles come from `nvidia-smi` for NVIDIA cards (Windows and Linux) and from Windows' own counters for AMD and Intel cards on Windows; temperature, power draw and PCIe traffic / link are NVIDIA only. A Mac shows no GPU or Disk tiles yet. The **Power** tile per card charts the draw as a share of the card's power limit (watts on hover); cards that don't report power show it as not available. The **PCIe** tile charts bus traffic (RX / TX MB/s — model loads spike it) and names the card's link (current vs what it could use at most; current drops while a card is idle).
+CPU and RAM tiles work everywhere. GPU and VRAM tiles come from `nvidia-smi` for NVIDIA cards (Windows and Linux) and from Windows' own counters for AMD and Intel cards on Windows; on Linux an AMD card reports GPU %, VRAM, junction temperature and board power with its cap through the amdgpu driver's files under /sys/class/drm (Intel cards have no GPU tiles there yet); PCIe traffic / link stays NVIDIA only. A Mac shows no GPU or Disk tiles yet. The **Power** tile per card charts the draw as a share of the card's power limit (watts on hover); cards that don't report power show it as not available. The **PCIe** tile charts bus traffic (RX / TX MB/s — model loads spike it) and names the card's link (current vs what it could use at most; current drops while a card is idle).
 
 ## App Hardware tiles (Hardware Mirror Lenses)
 
@@ -74,7 +74,7 @@ One **Disk** tile per physical disk, named like Task Manager ("Disk 1 (C:)"): **
 Built in. Read every 5 s while a Processes lens is on screen, every 30 s otherwise:
 
 - **Windows**: the same numbers as Task Manager (its process list for CPU, RAM and I/O, its GPU performance counters for VRAM, GPU % and shared GPU memory).
-- **Linux**: `/proc` for CPU, RAM and disk I/O; with an NVIDIA card, `nvidia-smi` for VRAM and GPU % per process. No shared GPU memory lenses; other users' processes show no I/O unless AI_SCOPE runs as root; GPU lenses for AMD / Intel cards aren't there yet.
+- **Linux**: `/proc` for CPU, RAM and disk I/O; with an NVIDIA card, `nvidia-smi` for VRAM and GPU % per process. No shared GPU memory lenses; other users' processes show no I/O unless AI_SCOPE runs as root; AMD cards get their GPU, VRAM, temperature and power tiles from the amdgpu driver's files under /sys/class/drm; Intel cards have no GPU tiles on Linux yet.
 - **macOS**: `ps` for CPU and RAM. macOS gives no per-process GPU numbers or I/O, so those lenses (and the AI processes lens's VRAM / GPU columns) are left out.
 
 Lenses a system can't fill don't appear on the page or in the Add lens dialog. The sampler starts with AI_SCOPE and keeps running, so the lenses show numbers as soon as you open them (a few seconds after AI_SCOPE starts) and their 5-minute lines are already filled.
