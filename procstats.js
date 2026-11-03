@@ -172,7 +172,16 @@ function nixResolve(snap, owners, key, w) {
     for (let p = snap.procs[snap.procs[pid].ppid], n = 0; p && n < 20; p = snap.procs[p.ppid], n++) if (String(p.name).toLowerCase().indexOf(app) >= 0) return true;
     return false;
   };
-  return all.filter(function (pid) { return !GENERIC[String(snap.procs[pid].name).toLowerCase().replace(/\.exe$/, '')] || underApp(pid); });
+  // A process counts as app-specific when EITHER its argv0 name or its kernel comm is not a shared runner: the
+  // Studio launcher execs 'python' but sets comm 'unsloth', and that self-chosen comm is exactly the identity
+  // underApp() looks for in ancestors - it should count for the process itself too.
+  const specific = function (pid) { const p = snap.procs[pid];
+    return !GENERIC[String(p.name).toLowerCase().replace(/\.exe$/, '')] || !GENERIC[String(p.comm || '').toLowerCase().replace(/\.exe$/, '')]; };
+  // AI_SCOPE-080 in tree mode: a process found by name is an ANCHOR - count its whole family too, not just it
+  // (Unsloth Studio's launcher holds the :8888 socket but runs with all caps dropped (CapEff = 0), so /proc/PID/fd
+  // is unreadable even to its owner and the port owner stays invisible; only tree mode asks for this).
+  const sel = all.filter(function (pid) { return specific(pid) || underApp(pid); });
+  return w.tree ? procnix.family(snap, sel) : sel;
 }
 function nixTick() {
   if (nixBusy || !Object.keys(watches).length) return;
@@ -270,7 +279,8 @@ process.on('exit', function () { stopLoop(); try { fs.unlinkSync(WATCH_FILE); } 
 // process is already running (a Strata engine loading / unloading, port not listening yet) - the Windows and
 // nix resolvers then match by exe NAME if the names are app-specific (never for shared runners like
 // llama-server.exe / python.exe, which need a port to attribute them).
-// AI_SCOPE-080 opts.tree (Windows; the nix path ignores it for now): the names stop being a filter and become
+// AI_SCOPE-080 opts.tree (Windows; on nix it makes name-found processes ANCHORS of their family in the name
+// fallback - see nixResolve): the names stop being a filter and become
 // ANCHORS - the app's family is its whole process tree: port owner + descendants, the anchor processes
 // (e.g. Strata's strata.exe / strata-vision.exe) + their descendants, and the anchors' ANCESTRY chains (the
 // engine manager and launcher pythons that do the loading work, found while the port is still unborn).

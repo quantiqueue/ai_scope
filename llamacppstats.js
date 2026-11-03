@@ -25,7 +25,9 @@ const hwstats = require('./hwstats');
 const procstats = require('./procstats');   // process stats: VRAM per card, GPU %, CPU, RAM (Windows)
 // `llama serve` runs the model in llama.exe itself; in router mode each model is a child llama.exe. Plain builds:
 // llama-server.exe. Watched by port, so Bionic's / Ollama's own llama-server.exe children (other ports) are not mixed in.
-const MODEL_PROCS = ['llama.exe', 'llama-server.exe'];
+// 'unsloth': Unsloth Studio's launcher (comm 'unsloth') owns the proxied port and hides its fds; on Linux it is
+// the only process naming the app, and in tree mode (which this scope asks for) it anchors the engine's family.
+const MODEL_PROCS = ['llama.exe', 'llama-server.exe', 'unsloth'];
 const paths = require('./paths');
 
 const CANDIDATES = ['http://127.0.0.1:9931', 'http://127.0.0.1:8080'];
@@ -251,7 +253,7 @@ function goOnline(b, d) {
     try { host = new URL(b).hostname; } catch (e) { /* ignore */ }
     local = /^(127\.|localhost$|\[?::1\]?$)/.test(host);
     // the server's process (+ in router mode every model's child process): the process row / AI processes total
-    if (local) procstats.watch('llamacpp', [+new URL(b).port || 80], MODEL_PROCS); else procstats.unwatch('llamacpp');
+    if (local) procstats.watch('llamacpp', [+new URL(b).port || 80], MODEL_PROCS, { tree: true }); else procstats.unwatch('llamacpp');   // tree: a launcher that hides its fds anchors the engine's family (nix name fallback)
     if ((!logo.light || !logo.dark) && Date.now() - logo.tried > 60000) fetchLogo();
   }
 }
@@ -310,7 +312,7 @@ function readRouterModels(cb) {
       e.inputs = m.architecture && Array.isArray(m.architecture.input_modalities) ? m.architecture.input_modalities : null;
       e.port = state === 'loaded' && port ? port : null;
       if (state !== 'loaded' && old && old.state === 'loaded') { dropSlots(m.id); e.props = null; e.slots = null; }
-      if (local && e.port) procstats.watch(procKey(m.id), [e.port], MODEL_PROCS); else procstats.unwatch(procKey(m.id));
+      if (local && e.port) procstats.watch(procKey(m.id), [e.port], MODEL_PROCS, { tree: true }); else procstats.unwatch(procKey(m.id));   // tree: see goOnline
       models[m.id] = e; seen[m.id] = true; ids.push(m.id);
     });
     order.forEach(function (id) { if (!seen[id]) { dropSlots(id); procstats.unwatch(procKey(id)); delete models[id]; } });
