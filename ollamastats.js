@@ -38,8 +38,9 @@ let loaded = [];
 let installed = [];
 let tagsAt = 0;
 let proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null };
-// One store, one file, this scope's own 1000-row ring. Ollama has no cache-reuse number and no
-// row-identity map to keep, so its store takes the default accept; the load only reseeds nextId.
+// One store, one file, this scope's own 1000-row ring. Ollama reports cached prompt tokens natively
+// since 0.33.3 (prompt_eval_cached_count - AI_SCOPE-102 fills the 094 Cached/Prompt-read fields from it;
+// there is no row-identity map to keep), so its store takes the default accept; the load only reseeds nextId.
 const store = reqstore.createStore({
   file: REQ_FILE,
   accept: function (r) { return !isEmptyCall(r); },      // load filter: skip Ollama load/unload calls
@@ -278,7 +279,7 @@ function finish(rec, aborted) {
   const r = { id: rec.id, start: rec.start, end: end, model: rec.model || 'unknown', endpoint: rec.endpoint,
               status: aborted ? 'aborted' : (rec.status === 200 && !rec.error ? 'ok' : 'error'),
               error: rec.error || (rec.status && rec.status !== 200 ? 'HTTP ' + rec.status : null),
-              outputTokens: null, genMs: null, promptTokens: null, promptMs: null, loadMs: null,
+              outputTokens: null, genMs: null, promptTokens: null, promptMs: null, promptRead: null, loadMs: null,
               firstTokenMs: rec.firstAt ? rec.firstAt - rec.start : null, durationMs: end - rec.start,
               thinkTokens: rec.think || null };
   // AI_SCOPE-094 slice 4: provenance, one rule - Ollama's own API numbers are exact (no entry
@@ -290,6 +291,11 @@ function finish(rec, aborted) {
     r.loadMs = nsToMs(f.load_duration);
     if (num(f.total_duration)) r.durationMs = nsToMs(f.total_duration);
     else reqstats.setProv(r, 'durationMs', P.DERIVED);            // our clock, not Ollama's total
+    // AI_SCOPE-102 (D2): the native done-chunk reports the CACHED share of the prompt since Ollama 0.33.3
+    // (docs.ollama.com/api/usage). Exact where reported; pre-0.33.3 the field simply never arrives, so
+    // Cached / Prompt-read stay honest gaps there (provably unfillable - the 103 terminology rule).
+    const cached = num(f.prompt_eval_cached_count);
+    if (cached != null) r.cachedTokens = cached;
     // No stream first-token stamp: load + prefill answers a DIFFERENT question from the column's,
     // so it is a substitute, not merely a derived figure.
     if (r.firstTokenMs == null) r.firstTokenMs = (r.loadMs || 0) + (r.promptMs || 0);
@@ -297,6 +303,8 @@ function finish(rec, aborted) {
     r.outputTokens = u && num(u.completion_tokens) != null ? u.completion_tokens : (rec.tokens || null);
     if (!(u && num(u.completion_tokens) != null)) reqstats.setProv(r, 'outputTokens', P.DERIVED);
     r.promptTokens = u ? num(u.prompt_tokens) : null;
+    // AI_SCOPE-102: the OpenAI-compat path reports no cached share (rec.usage is kept whole but the
+    // field is not part of the answer), so promptRead / cachedTokens stay null - honest gaps.
     if (rec.firstAt && rec.lastAt > rec.firstAt) r.genMs = rec.lastAt - rec.firstAt;
     reqstats.setProv(r, 'genMs', P.DERIVED);
     reqstats.setProv(r, 'promptMs', P.DERIVED);                   // never reported on this path
@@ -308,7 +316,18 @@ function finish(rec, aborted) {
   // genTps / promptTps are always ours (tokens ÷ time), so both carry the derived marker.
   r.genTps = r.outputTokens && r.genMs ? r.outputTokens / (r.genMs / 1000) : null;
   if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
-  r.promptTps = r.promptTokens && r.promptMs ? r.promptTokens / (r.promptMs / 1000) : null;
+  // AI_SCOPE-102 (D2): promptRead = the tokens actually re-read (whole prompt minus the cached share),
+  // the basis Ollama's prompt_eval_duration covers. max() floors the off-by-a-few slop the way 103's
+  // lmstats did; no cached count reported (pre-0.33.3, or the OpenAI path) ⇒ null, never a fake whole.
+  if (r.promptTokens != null && r.cachedTokens != null) {
+    r.promptRead = Math.max(0, r.promptTokens - r.cachedTokens);
+    reqstats.setProv(r, 'promptRead', P.DERIVED);
+  }
+  // promptTps is a READ rate: Ollama's duration covers the uncached tokens only (since 0.33.3), so
+  // dividing the whole prompt by it inflated every cache-heavy request - the bug the 102 grounding found.
+  // Where no cached share exists the whole prompt WAS read, so the old division stands as its fallback.
+  const pDiv = r.promptRead != null ? r.promptRead : r.promptTokens;
+  r.promptTps = pDiv && r.promptMs ? pDiv / (r.promptMs / 1000) : null;
   if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
   r.peak = hwstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
   if ((r.status === 'ok' || rec.tokens || r.error) && !isEmptyCall(r)) saveRequest(r);
@@ -366,6 +385,55 @@ function startProxy() {
   srv.listen(PROXY_PORT, PROXY_HOST, function () { proxy.listening = true; proxy.error = null; });
 }
 
+// ---------- gen tok/s perf ring (AI_SCOPE-102 D3) ----------
+// The 103 machinery (lmstats.js) with Ollama's facts: the live rate is the RELAY's own chunk-arrival
+// observation (currentRequest's ≤3 s window) - an estimate, so its faces will say so client-side -
+// and there are no slots to separate, so rings key by model only (Bionic's shape). Sampled per
+// /api/ollama call (the page's ~2 s cadence), wall-throttled so a faster poll cannot flood a
+// time-sized ring. Phase gate: only generating/thinking stretches push (D3; the reading phase has
+// no generation rate - stratastats' gate is the precedent, 103's D3 answer to "does reading count
+// as gen tok?" was NO and stands here too). No in-flight relay request ⇒ no points.
+const PERF_WIN = 300000, PERF_CAP = 400, PERF_PUSH_MS = 1750, PERF_EVERY = 2000;
+const perfRings = {};   // model key -> { tps: [], next: 0 }
+function trimPerf(a) {
+  if (a.length < 2) return;
+  const cut = a[a.length - 1].t - PERF_WIN;
+  let i = 0;
+  while (i < a.length - 2 && a[i].t < cut) i++;   // newest - window, plus ONE older sample (092)
+  if (i) a.splice(0, i);
+}
+// cur = currentRequest()'s pick — the SAME object the card shows (one shared pick, card and rings
+// can never disagree: the 093 rule). now injectable for the probe (the 098/103 precedent).
+function samplePerf(cur, now) {
+  if (now == null) now = Date.now();
+  if (!cur || (cur.phase !== 'generating' && cur.phase !== 'thinking') || cur.genTps == null) return;
+  const ring = perfRings[cur.model] || (perfRings[cur.model] = { tps: [], next: 0 });
+  if (now < ring.next) return;
+  ring.next = now + PERF_PUSH_MS;
+  ring.tps.push({ t: now, every: PERF_EVERY, v: cur.genTps, m: cur.model });
+  if (ring.tps.length > 1) trimPerf(ring.tps);
+  if (ring.tps.length > PERF_CAP) ring.tps.splice(0, ring.tps.length - PERF_CAP);   // safety cap only
+}
+// The delta payload (084 item 7): only points newer than `since`, merged across models, oldest first.
+function tpsHistorySince(since) {
+  const out = [];
+  Object.keys(perfRings).forEach(function (k) {
+    const a = perfRings[k].tps;
+    for (let i = 0; i < a.length; i++) if (a[i].t > since) out.push(a[i]);
+  });
+  out.sort(function (x, y) { return x.t - y.t; });
+  return out;
+}
+// AI_SCOPE-102 (D4): the prompt twin of average(), Bionic's getPromptAverage shape (reqstats' builder
+// weighing `promptRead`, the tokens the seconds cover). Rows are the store's own ring, OLDEST last —
+// unlike Bionic's newest-first log rows — so the newest model is taken explicitly (the store's last).
+function getPromptAverage(rows) {
+  if (!rows.length) return null;
+  const model = rows[rows.length - 1].model;
+  const a = reqstats.avgSpeed(rows, model, { tokensField: 'promptRead', timeField: 'promptMs' });
+  return a ? { model: model, promptTps: a.value, requests: a.requests } : null;
+}
+
 // ---------- state for the UI ----------
 function currentRequest() {
   const ids = Object.keys(inflight);
@@ -397,8 +465,9 @@ function average() {
 // vram: hwstats.vramInfo() (card sizes); Ollama can split a model across cards.
 // AI_SCOPE-081: since (AI_SCOPE-084 item 7) sends only processHistory points newer than it - the mirror
 // lenses' client ring asks with &since=, so the 5-min ring never rides the whole payload; stratastats.js
-// (072) is the pattern for the fields.
-function getState(limit, vram, since) {
+// (072) is the pattern for the fields. AI_SCOPE-102: the same since now feeds the gen tpsHistory delta too.
+function getState(limit, vram, since, cur) {
+  if (cur === undefined) cur = currentRequest();   // AI_SCOPE-102: the route passes the pick it just sampled; card and ring share one look
   return {
     online: online, url: OLLAMA_URL, version: version, error: lastError, proxy: proxy, vramTotal: vram ? vram.largest : null, vramCards: vram ? vram.cards.length : 0,
     loaded: loaded.map(function (l) {
@@ -409,7 +478,9 @@ function getState(limit, vram, since) {
       const f = vramFit(m.size, vram, true);
       return Object.assign({ fit: f ? f.fit : null, fitGpus: f ? f.gpus || null : null, loaded: loaded.some(function (l) { return l.name === m.name; }) }, m, sourceOf(m));
     }).sort(function (a, b) { return (b.loaded - a.loaded) || ((b.size || 0) - (a.size || 0)); }),
-    current: currentRequest(), average: average(), directUse: directUse,
+    current: cur, average: average(), directUse: directUse,
+    // AI_SCOPE-102 (D4/D5): the prompt idle face (Bionic/Strata's shape) and the gen ring's delta.
+    promptAverage: getPromptAverage(requests), tpsHistory: tpsHistorySince(since || 0),
     // Ollama's model process(es) (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded
     process: online ? procstats.get('ollama') : null, processSupported: procstats.supported(),
     // AI_SCOPE-081: the Hardware Mirror Lens family (web/js/mirror.js) also needs the 5-minute process history
@@ -438,6 +509,7 @@ function start(settings) {
 }
 function stop() {
   if (timer) { clearInterval(timer); timer = null; }
+  for (const k in perfRings) delete perfRings[k];   // AI_SCOPE-102: an uninstalled scope drops its rings too (103's lmstats lesson)
   procstats.unwatch('ollama');
   procstats.unattest('ollama');   // AI_SCOPE-081: an uninstalled scope stops claiming history (like strata / bionic)
   if (proxySrv) { try { proxySrv.close(); if (proxySrv.closeAllConnections) proxySrv.closeAllConnections(); } catch (e) {} proxySrv = null; }
@@ -445,4 +517,4 @@ function stop() {
   online = false; loaded = []; lastError = null;
 }
 
-module.exports = { start: start, stop: stop, getState: getState };
+module.exports = { start: start, stop: stop, getState: getState, currentRequest: currentRequest, samplePerf: samplePerf, tpsHistorySince: tpsHistorySince, getPromptAverage: getPromptAverage };

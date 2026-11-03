@@ -244,8 +244,12 @@ http.createServer((req, res) => {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
     // AI_SCOPE-081: Ollama's mirror lenses ride the 084 delta (see /api/strata) - &since=<t> sends only newer points.
     const since = parseInt(url.searchParams.get('since'), 10) || 0;
+    // AI_SCOPE-102 (D3/D5): the gen ring samples on this route from the SAME pick the card shows
+    // (one currentRequest() call, then getState reuses it - the 103 lmstats shape).
+    const cur = ollamastats.currentRequest();
+    ollamastats.samplePerf(cur);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(ollamastats.getState(limit, hwstats.vramInfo(), since)));
+    return res.end(JSON.stringify(ollamastats.getState(limit, hwstats.vramInfo(), since, cur)));
   }
   if (url.pathname === '/api/strata') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
