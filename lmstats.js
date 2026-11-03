@@ -15,7 +15,7 @@ function start(settings) {
   const home = (settings && settings.home) || path.join(os.homedir(), '.lmstudio');
   CANDIDATE_DIRS = [path.join(home, 'apps', 'bionic', 'server-logs'), path.join(home, 'server-logs')];
 }
-function stop() { CANDIDATE_DIRS = []; }
+function stop() { CANDIDATE_DIRS = []; for (const k in perfRings) delete perfRings[k]; }   // AI_SCOPE-103: an uninstalled scope drops its rings too (like procstats' unattest)
 
 function findLogDir() {
   for (const d of CANDIDATE_DIRS) {
@@ -47,6 +47,11 @@ const RE_RUN = /^\[[^\]]+\]\[INFO\]\[([^\]]+)\] Running chat completion/;
 const RE_PROMPT = /task\s+(\d+)\s*\|\s*prompt eval time =\s*([\d.]+) ms \/\s*(\d+) tokens.*?([\d.]+) tokens per second/;
 const RE_EVAL = /task\s+(\d+)\s*\|\s*eval time =\s*([\d.]+) ms \/\s*(\d+) tokens.*?([\d.]+) tokens per second/;
 const RE_TOTAL = /task\s+(\d+)\s*\|\s*total time =\s*([\d.]+) ms \/\s*(\d+) tokens/;
+// AI_SCOPE-103 (review): llama.cpp/Bionic closes every request with the slot's OWN token total —
+// "stop processing: n_tokens = 11217" — which is the whole conversation context, not just what this
+// request read. That line is the only honest source of a context number, and it is present on every
+// request in the logs on this box (2026-10-04 .. 11-03: releases >= prompt-eval lines in all files).
+const RE_SLOT_RELEASE = /task\s+(\d+)\s*\|\s*stop processing: n_tokens = (\d+)/;
 
 function modelNameFromPath(p) {
   return path.basename(p.replace(/\\/g, '/')).replace(/\.gguf$/i, '');
@@ -56,6 +61,7 @@ function parseText(text, file, rows) {
   let ts = null;
   let model = null;
   let cur = null;
+  const closed = {};       // task -> finished row, so the slot-release line (which follows the total line) can reach it
   text.split(/\r?\n/).forEach(function (line) {
     let m = RE_TS.exec(line);
     if (m) ts = m[1];
@@ -63,32 +69,58 @@ function parseText(text, file, rows) {
     else if ((m = RE_LOAD.exec(line))) model = modelNameFromPath(m[1]);
 
     if ((m = RE_PROMPT.exec(line))) {
-      // AI_SCOPE-094 slice 2: Bionic's record now uses the same field names as the other scopes
+      // AI_SCOPE-094 slice 2: Bionic's record uses the same field names as the other scopes
       // (outputTokens / durationMs / firstTokenMs) and carries a real end / start / key, so the
       // shared Requests table can draw it. Bionic's log has no first-token line at all, so
       // firstTokenMs is the prefill duration - the same convention llamacppstats uses - and it is
-      // marked derived so the table never shows it as a measurement.
+      // marked as standing in so the table never shows it as a measurement.
+      // AI_SCOPE-103 (review): the prompt-eval line counts the tokens Bionic ACTUALLY READ, not the
+      // prompt - its prompt cache carries the rest of the conversation (verified on this box: each
+      // request's cached count equals the previous one's prompt total, e.g. task 11641 read 25 of a
+      // 7353-token conversation). So that count lands in `promptRead`, exactly like Strata's rows
+      // (stratastats.js:97), and promptTokens is filled from the slot total below. Until the release
+      // line arrives, the read count stands in for Prompt and is MARKED as standing in (never silent).
       const endMs = tsToMs(ts);
       cur = {
         key: ts + '|' + m[1], timestamp: ts, model: model || 'unknown', task: +m[1],
         end: endMs, start: null,
-        promptMs: +m[2], promptTokens: +m[3], promptTps: +m[4],
+        promptMs: +m[2], promptRead: +m[3], promptTokens: +m[3], promptTps: +m[4],
+        cachedTokens: null, contextTokens: null,
         genMs: null, outputTokens: null, genTps: null, durationMs: null,
         firstTokenMs: +m[2],
       };
-      // Bionic's log gives prompt eval / eval / total time and the speeds: all exact except the
-      // first-token column, which the log cannot answer at all (zero TTFT lines in the whole month
-      // of logs - checked on box), so prefill time stands in for it and is marked as standing in.
       reqstats.setProv(cur, 'firstTokenMs', reqstats.PROV.SUBSTITUTE);
+      reqstats.setProv(cur, 'promptTokens', reqstats.PROV.SUBSTITUTE);
       rows.push(cur);
     } else if (cur && (m = RE_EVAL.exec(line)) && +m[1] === cur.task) {
       cur.genMs = +m[2]; cur.outputTokens = +m[3]; cur.genTps = +m[4];
     } else if (cur && (m = RE_TOTAL.exec(line)) && +m[1] === cur.task) {
       cur.durationMs = +m[2];
       if (cur.end != null) cur.start = cur.end - cur.durationMs;
+      closed[cur.task] = cur;
       cur = null;
+    } else if ((m = RE_SLOT_RELEASE.exec(line))) {
+      const r = closed[+m[1]];
+      if (r) { attachSlotTotal(r, +m[2]); delete closed[+m[1]]; }
     }
   });
+}
+
+// AI_SCOPE-103 (review): the engine's own slot total at release = the whole conversation context
+// (cached prefix + what it read + what it generated). From that, and only from it, the family's
+// Prompt / Cached columns can be filled honestly: promptTokens = slot total - generated, and
+// cachedTokens = promptTokens - promptRead. Both are one arithmetic step on two measured counts, so
+// they carry the `derived` provenance (no ≈ - 094's rule marks only estimated/substitute faces).
+// The read count is a floor on the prompt: the two counts differ by BOS-level slop (task 0: read
+// 7329, slot total - generated = 7328), so the total is the larger of the two and cached floors at 0.
+function attachSlotTotal(r, ctx) {
+  r.contextTokens = ctx;                                        // exact: the engine's own number
+  if (r.promptRead == null || r.outputTokens == null) return;   // no generation count: no derivation, leave the gap
+  const total = Math.max(r.promptRead, ctx - r.outputTokens);
+  r.promptTokens = total;
+  r.cachedTokens = total - r.promptRead || 0;
+  reqstats.setProv(r, 'promptTokens', reqstats.PROV.DERIVED);
+  reqstats.setProv(r, 'cachedTokens', reqstats.PROV.DERIVED);
 }
 
 // ---------- Parsed files, cached (AI_SCOPE-057) ----------
@@ -141,8 +173,7 @@ function attachPeak(r) {
 }
 
 // Returns the newest `limit` requests, newest first.
-function getLatestRequests(limit) {
-  limit = limit || 100;
+function getLatestRequests(limit) {  limit = limit || 100;
   const dir = findLogDir();
   if (!dir) return { logDir: null, rows: [], error: 'Bionic server log folder not found. Looked in: ' + CANDIDATE_DIRS.join(', ') };
   const files = listLogFiles(dir);
@@ -234,6 +265,48 @@ function getCurrentRequest() {
   };
 }
 
+// ---------- Perf rings (AI_SCOPE-103) ----------
+// Token-speed boards for Bionic, the D3/D5 shape 101 established for llama.cpp, with Bionic's
+// facts: the numbers are the engine's OWN log rates (the tg/tg_3s line a task prints while it
+// generates), so no estimation machinery is needed, and the log names no slots, so rings key by
+// model only. Sampled per /api/bionic call (the page's ~2 s cadence) but wall-throttled, so a
+// faster poll (or several views) cannot flood a time-sized ring. A reading/starting stretch
+// pushes NO gen point: generation speed during prefill does not exist (stratastats.js:198 is the
+// phase-gate precedent) — the board shows a break + 097 border there, never the average.
+const PERF_WIN = 300000, PERF_CAP = 400, PERF_PUSH_MS = 1750, PERF_EVERY = 2000;
+const perfRings = {};   // model key -> { tps: [], next: 0 }
+function trimPerf(a) {
+  if (a.length < 2) return;
+  const cut = a[a.length - 1].t - PERF_WIN;
+  let i = 0;
+  while (i < a.length - 2 && a[i].t < cut) i++;   // newest - window, plus ONE older sample (092)
+  if (i) a.splice(0, i);
+}
+// cur = the record getCurrentRequest just built (the task the CARD shows: the highest live task
+// id), or null. now is injectable so a probe can test the throttle / trim without real waits
+// (the 098 ggufmeta precedent; the route calls it without the argument). One shared pick for
+// card and rings: the two can never disagree (the 093 rule).
+function samplePerf(cur, now) {
+  if (now == null) now = Date.now();
+  if (!cur || cur.phase !== 'generating' || cur.genTps == null) return;   // reading/starting/idle: no gen point (D3)
+  const ring = perfRings[cur.model] || (perfRings[cur.model] = { tps: [], next: 0 });
+  if (now < ring.next) return;
+  ring.next = now + PERF_PUSH_MS;
+  ring.tps.push({ t: now, every: PERF_EVERY, v: cur.genTps, m: cur.model });
+  if (ring.tps.length > 1) trimPerf(ring.tps);
+  if (ring.tps.length > PERF_CAP) ring.tps.splice(0, ring.tps.length - PERF_CAP);   // safety cap only
+}
+// The delta payload (084 item 7): only points newer than `since`, merged across models, oldest first.
+function tpsHistorySince(since) {
+  const out = [];
+  Object.keys(perfRings).forEach(function (k) {
+    const a = perfRings[k].tps;
+    for (let i = 0; i < a.length; i++) if (a[i].t > since) out.push(a[i]);
+  });
+  out.sort(function (x, y) { return x.t - y.t; });
+  return out;
+}
+
 // Token-weighted average generation speed for the most recently used model.
 // AI_SCOPE-094 slice 3: one shared builder (reqstats); Bionic passes limit: null because its rows
 // are read from the log with no saved ring, and they arrive newest-first.
@@ -244,4 +317,14 @@ function getAverage(rows) {
   return a ? { model: model, genTps: a.value, requests: a.requests } : null;
 }
 
-module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage, tsToMs: tsToMs };
+// AI_SCOPE-103 (D3): the prompt twin of getAverage — stratastats.js:385's promptAverage shape over
+// Bionic's log rows. The tokens weighed are `promptRead` (what the seconds cover), not promptTokens:
+// Strata's builder does the same (stratastats.js:384), and it is why the average is a read rate.
+function getPromptAverage(rows) {
+  if (!rows.length) return null;
+  const model = rows[0].model;
+  const a = reqstats.avgSpeed(rows, model, { tokensField: 'promptRead', timeField: 'promptMs', limit: null });
+  return a ? { model: model, promptTps: a.value, requests: a.requests } : null;
+}
+
+module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage, getPromptAverage: getPromptAverage, samplePerf: samplePerf, tpsHistorySince: tpsHistorySince, tsToMs: tsToMs };

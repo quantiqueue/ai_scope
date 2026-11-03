@@ -294,6 +294,7 @@ http.createServer((req, res) => {
   }
   if (url.pathname === '/api/bionic') {   // Bionic's requests (from its server logs)
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;   // AI_SCOPE-103: the delta cursor now feeds BOTH rings below (was parsed inline)
     let body;
     try {
       body = lmstats.getLatestRequests(limit);
@@ -302,13 +303,18 @@ http.createServer((req, res) => {
       // request would look like it's running until the log has been silent for 2 min. Bionic's API knows better.
       if (body.current && lmapi.loadedCount() === 0) body.current = null;
       body.average = lmstats.getAverage(body.rows);
+      // AI_SCOPE-103 (D3/D5): the gen tok/s ring, sampled from the SAME pick the card shows, and
+      // the prompt twin of the average (stratastats' promptAverage shape) for the idle big value.
+      body.promptAverage = lmstats.getPromptAverage(body.rows);
+      lmstats.samplePerf(body.current);
+      body.tpsHistory = lmstats.tpsHistorySince(since);
       body.process = procstats.get('bionic');   // Bionic's model process (AI_SCOPE-049)
       body.processSupported = procstats.supported();
       // AI_SCOPE-077: the Hardware Mirror Lens family (web/js/mirror.js) also needs the 5-minute process
       // history and the Hardware card names / totals, like stratastats.js sends for Strata (072). The history
       // is kept for every cycle procstats finds Bionic's processes, so the tiles ride through "Inactive".
       // AI_SCOPE-084 (item 7): ?since=<t> narrows it to the new points (see the /api/strata route).
-      body.processHistory = procstats.history('bionic', parseInt(url.searchParams.get('since'), 10) || 0);
+      body.processHistory = procstats.history('bionic', since);
       body.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
     }
     catch (e) { body = { rows: [], error: String(e && e.message || e) }; }
