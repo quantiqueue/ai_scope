@@ -12,58 +12,53 @@ defineSource('bionic.models', '/api/bionic/models', 'bionic');
 // 'b' prefixes (bgp*/ bram_* / bcpu / bio), so each tile hovers over Bionic's own history.
 const BIONIC_MIRROR = defineMirror({ key: 'bionic', name: 'Bionic', letter: 'b' });
 
-// ---------- Current request ----------
+// ---------- Current request (AI_SCOPE-100: the shared card engine) ----------
+// Four boxes: Bionic's log answers speed / generated / prompt-read / elapsed; it reports no live
+// context use, so there is NO Context box on this card (D2 - never a box kept to be empty).
+// The prompt-read % moved out of the Speed box into the Prompt box with its bar (it always
+// belonged to the prompt). The offline state is new (D5): /api/bionic is log-based with no online
+// flag of its own, so the card asks the models source (already read here for the foot) whether
+// Bionic's local server is known down - never claims more than that source honestly knows.
+const BIONIC_CARD = {
+  title: 'Current request',
+  boxes: ['speed', 'gen', 'prompt', 'time'],
+  online: () => { const md = SOURCES['bionic.models'].data; return !(md && md.online === false); },
+  offline: () => {
+    const md = SOURCES['bionic.models'].data;
+    return { title: 'Bionic is not running',
+             foot: md && md.error ? 'Bionic\'s local server is not reachable (' + md.error + '). Start it on Bionic\'s Local Server screen.'
+                                  : 'Bionic\'s local server is not reachable. Start it on Bionic\'s Local Server screen to see models.' };
+  },
+  idle: d => {
+    const avg = d.average, models = SOURCES['bionic.models'].data;
+    return { title: 'Idle \u2014 no request running', model: avg ? avg.model : null,
+      foot: !models || !models.loaded ? ' '
+        : !models.online ? 'Start Bionic\'s local server to see live stats.'
+        : !models.loaded.length ? 'Load a model in Bionic to see live stats.'
+        : 'Send a request to Bionic\'s local server to see live stats.' };
+  },
+  // 'starting' is Bionic's own honest state: the log line that launches a task carries no progress
+  // yet, and its prompt-finish line only arrives with the completed request.
+  doing: c => c.phase === 'generating' ? 'generating' : (c.progress > 0 && c.progress < 1 ? 'reading prompt' : 'starting'),
+  run: (d, c) => ({
+    speed: { text: c.phase === 'generating' && c.genTps != null ? fmtTps(c.genTps) : '…' },
+    gen: c.phase === 'generating' && c.outputTokens ? { text: fmtNum(c.outputTokens) } : null,
+    prompt: c.phase === 'reading'
+      ? { label: 'Prompt read',
+          text: c.progress > 0 ? (c.promptRead != null ? fmtNum(c.promptRead) + ' tokens \u00b7 ' : '') + Math.round(c.progress * 100) + '%' : '…',
+          bar: 100 * c.progress }
+      : null,   // Bionic's log carries no live prompt figure once generating starts - box hides
+    time: { text: fmtSec(c.elapsedMs) },
+  }),
+  name: 'Bionic',
+};
 defineLens({
   id: 'bionic.current', scope: 'bionic', size: 'wide',
   name: 'Current request',
-  description: 'What Bionic\'s local server is answering right now: prompt progress, speed, tokens and the model process\'s GPU, VRAM, CPU and RAM use.',
+  description: 'What Bionic\'s local server is answering right now: speed, tokens, prompt progress and the model process\'s GPU, VRAM, CPU and RAM use.',
   settings: [PROC_STATS_FIELD],
-  markup: nowCardMarkup([
-    { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
-    { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
-    { box:'timeBox', label:'Elapsed', k:'time' },
-  ]),
-  render(L, data) {
-    const $ = L.$, cur = data.current, avg = data.average;
-    $('dot').className = 'dot' + (cur ? ' live' : '');
-    if (cur) {
-      // state line from Bionic's server log: starting -> reading prompt (n%) -> generating (no "thinking" or model loading in the log)
-      const doing = cur.phase === 'gen' ? 'generating' : cur.progress > 0 && cur.progress < 1 ? 'reading prompt' : 'starting';   // the % is in the box below
-      $('title').textContent = 'Running — ' + doing + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
-      setName($('model'), cur.model);
-      if (cur.phase === 'gen' && cur.genTps != null) {
-        $('tpsLabel').textContent = 'Current gen tok/s';
-        $('tps').textContent = fmtTps(cur.genTps);
-      } else {
-        const reading = cur.phase === 'prompt' && cur.progress < 1;
-        $('tpsLabel').textContent = reading ? 'Prompt read' : 'Current gen tok/s';
-        $('tps').textContent = reading ? Math.round(cur.progress * 100) + '%' : '…';   // the state ("starting") is on the state line
-      }
-      $('timeBox').hidden = false;
-      $('time').textContent = fmtSec(cur.elapsedMs);
-      $('tokBox').hidden = !(cur.phase === 'gen' && cur.genTokens);
-      $('tok').textContent = fmtNum(cur.genTokens);
-      $('foot').textContent = '';   // the state is on the top line (an empty foot line is hidden)
-      // Bionic's model process when known (Windows). On Windows without one (the model was unloaded or its llama-server
-      // ended mid-request) the row is hidden rather than showing whole-computer load; other systems show System load.
-      setSysLoad($('load'), L.settings.procStats !== false && (!(data.processSupported && !data.process)), data.process, 'Bionic');
-    } else {
-      $('title').textContent = 'Idle — no request running';
-      setName($('model'), avg ? avg.model : '—');
-      $('tpsLabel').textContent = avg ? 'Avg gen tok/s (last ' + avg.requests + ' requests)' : 'Avg gen tok/s';
-      $('tps').textContent = avg ? fmtTps(avg.genTps) : '—';
-      $('timeBox').hidden = true;
-      $('tokBox').hidden = true;
-      // like Strata's card: a hint while no model is loaded (loaded models come from Bionic's API, the other source)
-      const models = SOURCES['bionic.models'].data;
-      // what to do to see live stats: start the server, load a model, then send a request
-      $('foot').textContent = !models || !models.loaded ? ' '
-        : !models.online ? 'Start Bionic\'s local server to see live stats.'
-        : !models.loaded.length ? 'Load a model in Bionic to see live stats.'
-        : 'Send a request to Bionic\'s local server to see live stats.';
-      setSysLoad($('load'), false);
-    }
-  },
+  markup: nowCardMarkupFor(BIONIC_CARD),
+  render(L, d) { nowCardRender(L, d, BIONIC_CARD); },
 });
 
 // ---------- Loaded in memory (AI_SCOPE-099: the shared Loaded lens) ----------

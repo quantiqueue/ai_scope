@@ -184,10 +184,11 @@ function scanActive(text) {
 
     if ((m = RE_LAUNCH.exec(line))) {
       active[m[1]] = { task: +m[1], model: model || 'unknown', start: ts, last: ts, phase: 'prompt',
-                       progress: 0, promptTps: null, genTokens: 0, genTps: null };
+                       progress: 0, promptTps: null, promptRead: null, genTokens: 0, genTps: null };
     } else if ((m = RE_PROGRESS.exec(line)) && active[m[1]]) {
       const a = active[m[1]];
       a.last = ts; a.phase = 'prompt'; a.progress = +m[3]; a.promptTps = +m[4];
+      a.promptRead = +m[2];   // AI_SCOPE-100: Bionic's own n_tokens on the progress line
     } else if ((m = RE_GEN.exec(line)) && active[m[1]]) {
       const a = active[m[1]];
       a.last = ts; a.phase = 'gen'; a.genTokens = +m[2];
@@ -218,9 +219,16 @@ function getCurrentRequest() {
   if (!running.length) return null;
   const cur = running[0];
   const startMs = tsToMs(cur.start);
+  // AI_SCOPE-100 (D4): the wire words join 094's canonical vocabulary - the log's internal states
+  // stay Bionic's own ('prompt'/'gen' in scanActive), only the record spells them like the family.
+  // promptRead is Bionic's own n_tokens count from the progress line: present only while the log
+  // carries it (never invented into the generating phase).
   return {
-    model: cur.model, task: cur.task, phase: cur.phase, progress: cur.progress,
-    promptTps: cur.promptTps, genTokens: cur.genTokens, genTps: cur.genTps,
+    model: cur.model, task: cur.task,
+    phase: cur.phase === 'gen' ? 'generating' : 'reading',
+    progress: cur.progress,
+    promptTps: cur.promptTps, promptRead: cur.promptRead,
+    outputTokens: cur.genTokens, genTps: cur.genTps,
     elapsedMs: startMs != null ? Math.max(0, now - startMs) : null,
     othersRunning: running.length - 1,
   };

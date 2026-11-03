@@ -353,11 +353,13 @@ function getState(limit, since) {
     };
     if (ACTIVE[inst.phase]) {
       const prompt = num(live.prompt_tokens), gen = num(live.generated);
+      // AI_SCOPE-100 (D4): the live record joins 094's canonical names - generated -> outputTokens,
+      // tok_s -> genTps, prefill mean -> promptTps. phase / phaseText stay Strata's own words (080).
       out.current = {
         model: out.loaded.label, phase: inst.phase, phaseText: live.phase || null, queued: num(live.queued),
         promptTokens: prompt, promptRead: num(live.prompt_read), promptTotal: num(live.prompt_total),
-        generated: gen, maxTokens: num(live.max_tokens), elapsedMs: num(live.elapsed_s) != null ? live.elapsed_s * 1000 : null,
-        tokS: num(live.tok_s), prefillTokS: num(live.prefill_tok_s_mean),
+        outputTokens: gen, maxTokens: num(live.max_tokens), elapsedMs: num(live.elapsed_s) != null ? live.elapsed_s * 1000 : null,
+        genTps: num(live.tok_s), promptTps: num(live.prefill_tok_s_mean),
         contextUsed: prompt != null ? prompt + (gen || 0) : null, contextMax: ctxMax,
       };
     }

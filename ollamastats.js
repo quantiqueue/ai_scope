@@ -371,15 +371,18 @@ function currentRequest() {
   const ids = Object.keys(inflight);
   if (!ids.length) return null;
   const rec = inflight[ids[ids.length - 1]], now = Date.now();
-  let liveTps = null;
+  let genTps = null;
   if (rec.times.length >= 2 && now - rec.lastAt < 3000) {
     const span = (rec.times[rec.times.length - 1] - rec.times[0]) / 1000;
-    if (span > 0) liveTps = (rec.times.length - 1) / span;
+    if (span > 0) genTps = (rec.times.length - 1) / span;
   }
   let phase = rec.firstAt ? rec.phase : 'prompt';
   if (!rec.firstAt && rec.model && online && !loaded.some(function (m) { return m.name === rec.model; })) phase = 'loading';
-  return { model: rec.model || 'unknown', endpoint: rec.endpoint, phase: phase, elapsedMs: now - rec.start,
-           tokens: rec.tokens, thinkTokens: rec.think, liveTps: liveTps, othersRunning: ids.length - 1 };
+  // AI_SCOPE-100 (D4): the relay's internal states (prompt / thinking / gen, set from the stream) map
+  // to the family's live words at the wire edge - outputTokens / genTps are 094's canonical names.
+  const PH = { prompt: 'reading', gen: 'generating', thinking: 'thinking', loading: 'loading' };
+  return { model: rec.model || 'unknown', endpoint: rec.endpoint, phase: PH[phase] || 'reading', elapsedMs: now - rec.start,
+           outputTokens: rec.tokens, thinkTokens: rec.think, genTps: genTps, othersRunning: ids.length - 1 };
 }
 function average() {
   const done = requests.filter(function (r) { return r.genTps; });

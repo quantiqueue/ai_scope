@@ -55,58 +55,36 @@ function ollamaHelpHtml(d) {
     extLink('Configuring Ollama', 'https://github.com/quantiqueue/ai_scope/blob/main/manual/CONFIGURING_OLLAMA.md', 'The relay guide in the AI_SCOPE manual on GitHub') + '</p>');
 }
 
-// ---------- Current request ----------
+// ---------- Current request (AI_SCOPE-100: the shared card engine) ----------
+// Three boxes by design (D2): the relay only sees prompt sizes and context at request END, so no
+// Prompt/Context box is put on the card to be empty. The relay's own endpoint rides the detail line.
+// The direct-use warning foot stays Ollama's words (it names Ollama's behaviour, not a phase).
+const OLLAMA_CARD = {
+  title: 'Current request',
+  boxes: ['speed', 'gen', 'time'],
+  offline: () => ({ title: 'Ollama is not running' }),
+  idle: d => {
+    const a = d.average, u = ollamaDirectUse(d);
+    return { title: 'Idle \u2014 no request running', model: a ? a.model : null,
+      foot: u ? '\u26a0 Ollama answered a request at ' + fmtWhen(u.at) + ' (' + u.model + ') that didn\'t go through the AI_SCOPE relay, so it isn\'t recorded. Point apps at ' + ollamaProxyUrl(d) + ' (see ? in Requests).'
+        : 'Send a request through the AI_SCOPE relay (' + ollamaProxyUrl(d) + ') to see live stats.',
+      warn: !!u };
+  },
+  detail: (d, c) => c.endpoint + ' via AI_SCOPE relay',
+  run: (d, c) => ({
+    speed: { text: (c.phase === 'generating' || c.phase === 'thinking') && c.genTps != null ? fmtTps(c.genTps) : '…' },
+    gen: { text: fmtNum(c.outputTokens) + (c.thinkTokens ? ' (' + fmtNum(c.thinkTokens) + ' thinking)' : '') },
+    time: { text: fmtSec(c.elapsedMs) },
+  }),
+  name: 'Ollama',
+};
 defineLens({
   id: 'ollama.current', scope: 'ollama', size: 'wide',
   name: 'Current request',
   description: 'What Ollama is answering right now (through the AI_SCOPE relay): speed, tokens and the model process\'s GPU, VRAM, CPU and RAM use.',
   settings: [PROC_STATS_FIELD],
-  markup: nowCardMarkup([
-    { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
-    { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
-    { box:'timeBox', label:'Elapsed', k:'time' },
-  ]),
-  render(L, d) {
-    const $ = L.$, cur = d.current, show = (k, on) => { $(k).hidden = !on; };
-    $('dot').className = 'dot' + (cur ? ' live' : d.online ? '' : ' off');
-    if (!d.online) {
-      $('title').textContent = 'Ollama is not running';
-      setName($('model'), ONONE);
-      show('tpsBox', false); show('tokBox', false); show('timeBox', false);
-      $('foot').textContent = d.error || '';
-      $('detail').textContent = '';
-      $('foot').classList.remove('warn');
-      setSysLoad($('load'), false);
-    } else if (cur) {
-      // state line: what the request is doing (the lens title is in the header tab)
-      const doing = { loading:'loading model', prompt:'reading prompt', thinking:'thinking', gen:'generating' }[cur.phase] || 'working';
-      $('title').textContent = 'Running — ' + doing + (cur.othersRunning ? ' (+' + cur.othersRunning + ' more running)' : '');
-      setName($('model'), cur.model);
-      show('tpsBox', true); show('tokBox', true); show('timeBox', true);
-      $('tpsLabel').textContent = 'Current gen tok/s';   // the phase (loading / reading prompt / thinking) is on the state line
-      $('tps').textContent = (cur.phase === 'gen' || cur.phase === 'thinking') && cur.liveTps != null ? fmtTps(cur.liveTps) : '…';
-      $('tok').textContent = fmtNum(cur.tokens) + (cur.thinkTokens ? ' (' + fmtNum(cur.thinkTokens) + ' thinking)' : '');
-      $('time').textContent = fmtSec(cur.elapsedMs);
-      $('detail').textContent = cur.endpoint + ' via AI_SCOPE relay';   // details next to the state on the top line
-      $('foot').textContent = '';
-      $('foot').classList.remove('warn');
-      // Ollama's model process when known (Windows); hidden on Windows without one, whole-computer System load elsewhere
-      setSysLoad($('load'), L.settings.procStats !== false && (!(d.processSupported && !d.process)), d.process, 'Ollama');
-    } else {
-      const a = d.average;
-      $('title').textContent = 'Idle — no request running';
-      setName($('model'), a ? a.model : ONONE);
-      show('tpsBox', !!a); show('tokBox', false); show('timeBox', false);
-      $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
-      $('tps').textContent = a ? fmtTps(a.genTps) : ONONE;
-      const u = ollamaDirectUse(d);
-      $('foot').textContent = u ? '⚠ Ollama answered a request at ' + fmtWhen(u.at) + ' (' + u.model + ') that didn\'t go through the AI_SCOPE relay, so it isn\'t recorded. Point apps at ' + ollamaProxyUrl(d) + ' (see ? in Requests).'
-        : 'Send a request through the AI_SCOPE relay (' + ollamaProxyUrl(d) + ') to see live stats.';
-      $('foot').classList.toggle('warn', !!u);
-      $('detail').textContent = '';
-      setSysLoad($('load'), false);
-    }
-  },
+  markup: nowCardMarkupFor(OLLAMA_CARD),
+  render(L, d) { nowCardRender(L, d, OLLAMA_CARD); },
 });
 
 // ---------- Loaded in memory (AI_SCOPE-099: the shared Loaded lens) ----------

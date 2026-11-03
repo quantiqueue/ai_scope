@@ -712,20 +712,22 @@ function getState(limit, since) {
     const rec = slotState[k].rec;
     if (!rec) return;
     const s = rec.samples, n = s.length;
-    let tokS = null;
+    let genTps = null;
     // speed over the last few looks (about 2.5 s), so one slow look doesn't jump it around
     for (let i = n - 2; i >= 0; i--) {
       if (s[n - 1].t - s[i].t >= 2500 || i === 0) {
-        if (s[n - 1].t > s[i].t && s[n - 1].decoded > s[i].decoded && s[i].decoded > 0) tokS = (s[n - 1].decoded - s[i].decoded) / ((s[n - 1].t - s[i].t) / 1000);
+        if (s[n - 1].t > s[i].t && s[n - 1].decoded > s[i].decoded && s[i].decoded > 0) genTps = (s[n - 1].decoded - s[i].decoded) / ((s[n - 1].t - s[i].t) / 1000);
         break;
       }
     }
     const gen = rec.decoded || 0, mi = models[rec.model];
+    // AI_SCOPE-100 (D4): canonical live names (cached -> cachedTokens, generated -> outputTokens,
+    // tokS -> genTps); the phase words here have been the family's since 082.
     out.current.push({
       model: rec.model, slot: rec.slot, task: rec.task, phase: gen > 0 ? 'generating' : 'reading',
-      promptTokens: rec.prompt, cached: rec.cached, generated: gen,
+      promptTokens: rec.prompt, cachedTokens: rec.cached, outputTokens: gen,
       maxTokens: rec.remain != null && rec.remain >= 0 ? gen + rec.remain : null,
-      tokS: tokS, elapsedMs: now - rec.start,
+      genTps: genTps, elapsedMs: now - rec.start,
       contextUsed: rec.prompt != null ? rec.prompt + gen : null,
       contextMax: rec.nCtx || (mi && mi.props && mi.props.default_generation_settings ? num(mi.props.default_generation_settings.n_ctx) : null),
       process: router ? procstats.get(procKey(rec.model)) : null,

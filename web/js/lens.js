@@ -567,6 +567,104 @@ function loadedRow(m, o) {
   return '<tr>' + loadedColKeys(o).map(k => LOADED_COLS[k] ? LOADED_COLS[k].td(m, o || {}) : '').join('') + '</tr>';
 }
 
+// ---------- one shared Current-request card for the LLM scopes (AI_SCOPE-100) ----------
+// All five cards were the same offline / running / idle state machine written over the shared
+// nowCardMarkup five different ways; the state machine itself goes here. One options object per
+// scope drives BOTH markup and render (the 094/098/099 anti-drift rule); ComfyUI keeps calling
+// nowCardMarkup directly for now (D1 - its run/steps card waits for the ComfyUI pass).
+// D2, with the user's kickoff caveat: the uniform ORDER is Speed · Generated · Prompt · Context ·
+// Elapsed, but a scope declares only the boxes its app genuinely reports live. The engine NEVER
+// supplies a number to fill the set - a declared box with no fresh content for this state is
+// hidden, and a value the app hasn't answered yet shows '…', never 0 and never a permanent gap.
+// D3: 'Running — <doing>' from the canonical phase map, the app's own prose winning where it has
+// it (the 080 rule), plus normal tails (+N more running / M waiting for a free slot). Offline /
+// idle / blocked titles and feet are app knowledge - each scope writes its own words.
+const NOW_BOXES = {
+  speed:   { box: 'tpsBox',   label: 'Current gen tok/s', labelK: 'tpsLabel',   k: 'tps' },
+  gen:     { box: 'tokBox',   label: 'Generated so far',  k: 'tok', small: true },
+  prompt:  { box: 'promptBox', label: 'Prompt', labelK: 'promptLabel', k: 'prompt', small: true, bar: 'promptBar' },
+  context: { box: 'ctxBox',   label: 'Context', k: 'ctx', small: true, bar: 'ctxBar' },
+  time:    { box: 'timeBox',  label: 'Elapsed', k: 'time' },
+};
+const NOW_ORDER = ['speed', 'gen', 'prompt', 'context', 'time'];
+function nowBoxKeys(o) { const set = (o && o.boxes) || NOW_ORDER; return NOW_ORDER.filter(k => set.indexOf(k) >= 0); }
+function nowCardMarkupFor(o, title) { return nowCardMarkup(nowBoxKeys(o).map(k => NOW_BOXES[k]), title || o.title || 'Current request'); }
+// The family's live phase words (D4 records already send these four; llama.cpp has sent them since
+// 082, Ollama/Bionic/Strata gained them at the payload edge). App prose wins where the app has it.
+const NOW_PHASE_WORDS = { loading: 'loading model', reading: 'reading prompt', thinking: 'thinking', generating: 'generating' };
+function nowTails(cur) {
+  const t = [];
+  if (cur.othersRunning > 0) t.push(' (+' + cur.othersRunning + ' more running)');
+  if (cur.queued) t.push(' \u00b7 ' + cur.queued + ' waiting for a free slot');
+  return t.join('');
+}
+function nowCardRender(L, d, o) {
+  const $ = L.$, keys = nowBoxKeys(o);
+  const show = (k, on) => { const b = NOW_BOXES[k]; if (b.box) $(b.box).hidden = !on; };
+  const hideAll = () => keys.forEach(k => show(k, false));
+  const online = o.online ? o.online(d) : d.online;
+  const cur = online ? (o.cur ? o.cur(d) : d.current) : null;
+  $('dot').className = 'dot' + (cur ? ' live' : online ? '' : ' off');
+  $('foot').classList.remove('warn');
+  $('detail').textContent = '';
+  if (!online) {
+    const s = o.offline(d);
+    $('title').textContent = s.title;
+    setName($('model'), ONONE);
+    hideAll();
+    $('foot').textContent = s.foot || d.error || '';
+    setSysLoad($('load'), false);
+    return;
+  }
+  const bl = o.blocked ? o.blocked(d) : null;
+  if (bl) {
+    $('title').textContent = bl.title;
+    setName($('model'), bl.model != null ? bl.model : ONONE);
+    hideAll();
+    $('foot').textContent = bl.foot || '';
+    setSysLoad($('load'), false);
+    return;
+  }
+  if (cur) {
+    const doing = o.doing ? o.doing(cur)
+      : cur.phaseText ? String(cur.phaseText).charAt(0).toLowerCase() + String(cur.phaseText).slice(1)
+      : (NOW_PHASE_WORDS[cur.phase] || 'working');
+    $('title').textContent = 'Running \u2014 ' + doing + nowTails(cur);
+    setName($('model'), cur.model);
+    if (o.detail) $('detail').textContent = o.detail(d, cur) || '';
+    const c = o.run ? (o.run(d, cur) || {}) : {};
+    keys.forEach(k => {
+      const b = NOW_BOXES[k], v = c[k];
+      if (!v || v.text == null) { show(k, false); return; }   // nothing fresh for this state - hide, never invent
+      show(k, true);
+      // a shown box ALWAYS gets its label rewritten (the hook's or the box default) - leaving one
+      // untouched keeps the previous render's words in a live DOM (the probe caught this class).
+      if (b.labelK) $(b.labelK).textContent = v.label != null ? v.label : b.label;
+      $(b.k).textContent = v.text;
+      $(b.k).title = v.title || '';
+      if (b.bar) $(b.bar).style.width = (typeof v.bar === 'number' ? Math.max(0, Math.min(100, v.bar)) : 0) + '%';
+    });
+    $('foot').textContent = '';
+    const pr = o.proc ? o.proc(d, cur) : d.process;
+    setSysLoad($('load'), L.settings.procStats !== false && (!(d.processSupported && !pr)), pr, o.name);
+    return;
+  }
+  // idle: the family's answer is the average-speed box (094 slice 3's d.average) + the scope's hint
+  const s = o.idle(d), a = d.average;
+  $('title').textContent = s.title;
+  setName($('model'), s.model != null ? s.model : ONONE);
+  keys.forEach(k => show(k, k === 'speed' && !!a));
+  if (a) {
+    const b = NOW_BOXES.speed;
+    $(b.labelK).textContent = 'Avg gen tok/s (last ' + a.requests + ' requests)';
+    $(b.k).textContent = (s.avgMark ? '\u2248 ' : '') + fmtTps(a.genTps);
+    $(b.k).title = s.avgTitle || '';
+  }
+  $('foot').textContent = s.foot || '';
+  if (s.warn) $('foot').classList.add('warn');
+  setSysLoad($('load'), false);
+}
+
 // Table lens (full width): heading + card with a table (+ empty-state box) (+ pager).
 //   o = { title, hint (static HTML; '' = none; default an empty data-k="hint"), headExtra (HTML after the hint, e.g. a ? button),
 //         before (HTML at the top of the card, above the table: filter chips, help box), cols ([header HTML]), foot (HTML under the table;

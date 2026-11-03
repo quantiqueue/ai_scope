@@ -27,73 +27,54 @@ defineSource('llamacpp', '/api/llamacpp?limit=100', 'llamacpp', 1000, null, 'pro
 // (Bionic) and 'o' (Ollama) so saved layouts resolve.
 const LLAMACPP_MIRROR = defineMirror({ key: 'llamacpp', name: 'llama.cpp', letter: 'l' });
 
-// ---------- Current request ----------
+// ---------- Current request (AI_SCOPE-100: the shared card engine) ----------
+// The one scope whose current is a LIST (one per busy slot): o.cur picks the youngest starter and
+// hands the rest to the normal tail as othersRunning, and slot K rides the detail line. --no-slots
+// is a blocked state (o.blocked): no requests are visible at all, so no box pretends otherwise.
+// Estimated numbers keep their ≈ + the LC_EST tooltip - the honesty rule, not decoration.
+const LC_CARD = {
+  title: 'Current request',
+  boxes: ['speed', 'gen', 'prompt', 'context', 'time'],
+  cur: d => {
+    const list = d.current || [];
+    const c = list.slice().sort((a, b) => a.elapsedMs - b.elapsedMs)[0];
+    return c ? Object.assign({}, c, { othersRunning: list.length - 1 }) : null;
+  },
+  blocked: d => d.slotsEnabled === false
+    ? { title: 'Slots endpoint is off', model: d.model ? d.model.name : null,
+        foot: 'The server was started with --no-slots, so AI_SCOPE can\'t see its requests. Start it without that option.' }
+    : null,
+  offline: d => ({ title: d.needsKey ? 'llama.cpp server needs an API key' : 'llama.cpp server is not running' }),
+  idle: d => {
+    const a = d.average, m = d.model;
+    const nLoaded = (d.models || []).filter(x => x.state === 'loaded').length;
+    return { title: !d.router && m && m.sleeping ? 'Sleeping \u2014 model unloaded until the next request' : 'Idle \u2014 no request running',
+             model: d.router ? (nLoaded ? nLoaded + ' model' + (nLoaded > 1 ? 's' : '') + ' loaded' : 'no model loaded') : (m ? m.name : null),
+             foot: 'Send a message in the server\'s web chat (' + d.url + ') or a request to its API to see live stats.',
+             avgMark: true, avgTitle: LC_EST };
+  },
+  doing: c => c.phase === 'generating' ? 'generating' : 'reading prompt',
+  detail: (d, c) => 'slot ' + c.slot,
+  run: (d, c) => ({
+    speed: { label: c.phase === 'generating' ? 'Current gen tok/s' : 'Reading prompt',
+             text: c.phase === 'generating' && c.genTps != null ? '\u2248 ' + fmtTps(c.genTps) : '…',
+             title: c.phase === 'generating' && c.genTps != null ? LC_EST : '' },
+    gen: { text: fmtNum(c.outputTokens) + (c.maxTokens ? ' / ' + lcK(c.maxTokens) : '') },
+    prompt: { text: lcK(c.promptTokens) + (c.cachedTokens ? ' (' + lcK(c.cachedTokens) + ' cached)' : '') },
+    context: { text: c.contextUsed != null ? lcK(c.contextUsed) + (c.contextMax ? ' / ' + lcCtx(c.contextMax) : '') : '…',
+               bar: c.contextUsed != null && c.contextMax ? 100 * c.contextUsed / c.contextMax : 0 },
+    time: { text: fmtSec(c.elapsedMs) },
+  }),
+  proc: (d, c) => c.process || d.process,   // router mode: the busy model's own family (082's watch)
+  name: 'llama.cpp',
+};
 defineLens({
   id: 'llamacpp.current', scope: 'llamacpp', size: 'wide',
   name: 'Current request',
   description: 'What the llama.cpp server is answering right now: speed, tokens, prompt, context and the server process\'s GPU, VRAM, CPU and RAM use.',
   settings: [PROC_STATS_FIELD],
-  markup: nowCardMarkup([
-    { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
-    { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
-    { box:'promptBox', label:'Prompt', k:'prompt', small:true },
-    { box:'ctxBox', label:'Context', k:'ctx', small:true, bar:'ctxBar' },
-    { box:'timeBox', label:'Elapsed', k:'time' },
-  ]),
-  render(L, d) {
-    const $ = L.$, list = d.current || [], show = (k, on) => { $(k).hidden = !on; };
-    const boxes = ['tpsBox', 'tokBox', 'promptBox', 'ctxBox', 'timeBox'];
-    // several slots can run at once: show the one that started last, count the others
-    const cur = list.slice().sort((a, b) => a.elapsedMs - b.elapsedMs)[0] || null;
-    $('dot').className = 'dot' + (cur ? ' live' : d.online ? '' : ' off');
-    $('detail').textContent = '';
-    if (!d.online) {
-      $('title').textContent = d.needsKey ? 'llama.cpp server needs an API key' : 'llama.cpp server is not running';
-      setName($('model'), ONONE);
-      boxes.forEach(b => show(b, false));
-      $('foot').textContent = d.error || '';
-      setSysLoad($('load'), false);
-    } else if (d.slotsEnabled === false) {
-      $('title').textContent = 'Slots endpoint is off';
-      setName($('model'), d.model ? d.model.name : ONONE);
-      boxes.forEach(b => show(b, false));
-      $('foot').textContent = 'The server was started with --no-slots, so AI_SCOPE can\'t see its requests. Start it without that option.';
-      setSysLoad($('load'), false);
-    } else if (cur) {
-      const others = list.length - 1;
-      $('title').textContent = 'Running — ' + (cur.phase === 'generating' ? 'generating' : 'reading prompt') +
-        (others > 0 ? ' (+' + others + ' more slot' + (others > 1 ? 's' : '') + ' busy)' : '') +
-        (cur.queued ? ' · ' + cur.queued + ' waiting for a free slot' : '');
-      $('detail').textContent = 'slot ' + cur.slot;
-      setName($('model'), cur.model);
-      boxes.forEach(b => show(b, true));
-      $('tpsLabel').textContent = cur.phase === 'generating' ? 'Current gen tok/s' : 'Reading prompt';
-      $('tps').textContent = cur.phase === 'generating' ? (cur.tokS != null ? '≈ ' + fmtTps(cur.tokS) : '…') : '…';
-      $('tps').title = cur.phase === 'generating' ? LC_EST : '';
-      $('tok').textContent = fmtNum(cur.generated) + (cur.maxTokens ? ' / ' + lcK(cur.maxTokens) : '');
-      $('prompt').textContent = lcK(cur.promptTokens) + (cur.cached ? ' (' + lcK(cur.cached) + ' cached)' : '');
-      $('ctx').textContent = cur.contextUsed != null ? lcK(cur.contextUsed) + (cur.contextMax ? ' / ' + lcCtx(cur.contextMax) : '') : ONONE;
-      $('ctxBar').style.width = cur.contextUsed != null && cur.contextMax ? Math.min(100, 100 * cur.contextUsed / cur.contextMax) + '%' : '0';
-      $('time').textContent = fmtSec(cur.elapsedMs);
-      $('foot').textContent = '';
-      // the server's own process (llama.exe / llama-server.exe) when known (Windows); hidden on Windows without one
-      // in router mode the busy model's own process, else the server's
-      const pr = cur.process || d.process;
-      setSysLoad($('load'), L.settings.procStats !== false && (!(d.processSupported && !pr)), pr, 'llama.cpp');
-    } else {
-      const a = d.average, m = d.model;
-      $('title').textContent = !d.router && m && m.sleeping ? 'Sleeping — model unloaded until the next request' : 'Idle — no request running';
-      const nLoaded = (d.models || []).filter(x => x.state === 'loaded').length;
-      setName($('model'), d.router ? (nLoaded ? nLoaded + ' model' + (nLoaded > 1 ? 's' : '') + ' loaded' : 'no model loaded') : m ? m.name : ONONE);
-      boxes.forEach(b => show(b, false));
-      show('tpsBox', !!a);
-      $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
-      $('tps').textContent = a ? '≈ ' + fmtTps(a.genTps) : ONONE;
-      $('tps').title = a ? LC_EST : '';
-      $('foot').textContent = 'Send a message in the server\'s web chat (' + d.url + ') or a request to its API to see live stats.';
-      setSysLoad($('load'), false);
-    }
-  },
+  markup: nowCardMarkupFor(LC_CARD),
+  render(L, d) { nowCardRender(L, d, LC_CARD); },
 });
 
 // ---------- shared ----------

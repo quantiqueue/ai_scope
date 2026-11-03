@@ -10,67 +10,47 @@ const fmtCtx = n => n == null ? '—' : n % 1024 === 0 ? (n / 1024) + 'K' : fmtK
 
 defineSource('strata', '/api/strata?limit=100', null, null, null, 'processHistory');   // AI_SCOPE-084: the history ring goes out as a delta (?since=)
 
-// ---------- Current request ----------
+// ---------- Current request (AI_SCOPE-100: the shared card engine) ----------
+// All five boxes - Strata's engine reports every one of them live. phase/phaseText are Strata's own
+// words (080): the engine lets her prose win the state line, and queued rides the normal tail.
+const STRATA_CARD = {
+  title: 'Current request',
+  boxes: ['speed', 'gen', 'prompt', 'context', 'time'],
+  offline: () => ({ title: 'Strata is not running' }),
+  idle: d => {
+    const l = d.loaded, a = d.average;
+    return { title: l && l.phase === 'unavailable' ? 'Engine not answering' : l ? 'Idle \u2014 no request running' : 'No model loaded',
+             model: l ? l.label : a ? a.model : null,
+             foot: !l ? 'Load a model in Strata to see live stats.'
+               : l.phase === 'unavailable' ? 'Strata\'s engine isn\'t answering. Check the Strata app.'
+               : 'Send a message in Strata (or a request to its API) to see live stats.' };
+  },
+  run: (d, c) => {
+    const pr = c.promptRead, pt = c.promptTotal;
+    return {
+      speed: { label: c.phase === 'loading' ? 'Loading model' : c.phase === 'reading' ? 'Prompt tok/s'
+                   : c.phase === 'thinking' ? 'Thinking \u00b7 tok/s' : 'Current gen tok/s',
+               text: c.phase === 'loading' ? '…'
+                   : c.phase === 'reading' ? (c.promptTps ? fmtTps(c.promptTps) : '…')
+                   : (c.genTps != null ? fmtTps(c.genTps) : '…') },
+      gen: { text: fmtNum(c.outputTokens) + (c.maxTokens ? ' / ' + fmtK(c.maxTokens) : '') },
+      prompt: { label: pt ? 'Prompt read' : 'Prompt',
+                text: pt ? fmtK(pr || 0) + ' / ' + fmtK(pt) : fmtK(c.promptTokens),
+                bar: pt ? 100 * (pr || 0) / pt : (c.promptTokens ? 100 : 0) },
+      context: { text: c.contextUsed != null ? fmtK(c.contextUsed) + (c.contextMax ? ' / ' + fmtCtx(c.contextMax) : '') : '…',
+                 bar: c.contextUsed != null && c.contextMax ? 100 * c.contextUsed / c.contextMax : 0 },
+      time: { text: fmtSec(c.elapsedMs) },
+    };
+  },
+  name: 'Strata',
+};
 defineLens({
   id: 'strata.current', scope: 'strata', size: 'wide',
   name: 'Current request',
   description: 'What Strata is answering right now: speed, tokens, prompt, context and the model process\'s GPU, VRAM, CPU and RAM use.',
   settings: [PROC_STATS_FIELD],
-  markup: nowCardMarkup([
-    { box:'tpsBox', label:'Current gen tok/s', labelK:'tpsLabel', k:'tps' },
-    { box:'tokBox', label:'Tokens so far', k:'tok', small:true },
-    { box:'promptBox', label:'Prompt', labelK:'promptLabel', k:'prompt', small:true, bar:'promptBar' },
-    { box:'ctxBox', label:'Context', k:'ctx', small:true, bar:'ctxBar' },
-    { box:'timeBox', label:'Elapsed', k:'time' },
-  ]),
-  render(L, d) {
-    const $ = L.$, cur = d.current, show = (k, on) => { $(k).hidden = !on; };
-    const boxes = ['tpsBox', 'tokBox', 'promptBox', 'ctxBox', 'timeBox'];
-    $('dot').className = 'dot' + (cur ? ' live' : d.online ? '' : ' off');
-    if (!d.online) {
-      $('title').textContent = 'Strata is not running';
-      setName($('model'), ONONE);
-      boxes.forEach(b => show(b, false));
-      $('foot').textContent = d.error || '';
-      setSysLoad($('load'), false);
-    } else if (cur) {
-      // state line: what the request is doing (the lens title is in the header tab)
-      // Strata's own wording when it has one ("reading the prompt", "writing a tool call: glob"), else from the phase
-      const doing = cur.phaseText ? cur.phaseText.charAt(0).toLowerCase() + cur.phaseText.slice(1)
-        : { loading:'loading model', reading:'reading prompt', thinking:'thinking', generating:'generating' }[cur.phase] || 'working';
-      $('title').textContent = 'Running — ' + doing + (cur.queued ? ' (+' + cur.queued + ' queued)' : '');
-      setName($('model'), cur.model);
-      boxes.forEach(b => show(b, true));
-      const reading = cur.phase === 'reading' || cur.phase === 'loading';
-      $('tpsLabel').textContent = cur.phase === 'loading' ? 'Loading model' : reading ? 'Prompt tok/s' : cur.phase === 'thinking' ? 'Thinking · tok/s' : 'Current gen tok/s';
-      $('tps').textContent = reading ? (cur.prefillTokS ? fmtTps(cur.prefillTokS) : '…') : (cur.tokS != null ? fmtTps(cur.tokS) : '…');
-      $('tok').textContent = fmtNum(cur.generated) + (cur.maxTokens ? ' / ' + fmtK(cur.maxTokens) : '');
-      // Prompt: read / total while reading; otherwise its size.
-      const pr = cur.promptRead, pt = cur.promptTotal;
-      $('promptLabel').textContent = pt ? 'Prompt read' : 'Prompt';
-      $('prompt').textContent = pt ? fmtK(pr || 0) + ' / ' + fmtK(pt) : fmtK(cur.promptTokens);
-      $('promptBar').style.width = pt ? Math.min(100, 100 * (pr || 0) / pt) + '%' : (cur.promptTokens ? '100%' : '0');
-      $('ctx').textContent = cur.contextUsed != null ? fmtK(cur.contextUsed) + (cur.contextMax ? ' / ' + fmtCtx(cur.contextMax) : '') : ONONE;
-      $('ctxBar').style.width = cur.contextUsed != null && cur.contextMax ? Math.min(100, 100 * cur.contextUsed / cur.contextMax) + '%' : '0';
-      $('time').textContent = fmtSec(cur.elapsedMs);
-      $('foot').textContent = '';   // the state is on the top line (an empty foot line is hidden)
-      // Strata's model process (strata.exe) when known (Windows); hidden on Windows without one, whole-computer System load elsewhere
-      setSysLoad($('load'), L.settings.procStats !== false && (!(d.processSupported && !d.process)), d.process, 'Strata');
-    } else {
-      const a = d.average, l = d.loaded;
-      $('title').textContent = l && l.phase === 'unavailable' ? 'Engine not answering' : l ? 'Idle — no request running' : 'No model loaded';
-      setName($('model'), l ? l.label : a ? a.model : ONONE);
-      boxes.forEach(b => show(b, false));
-      show('tpsBox', !!a);
-      $('tpsLabel').textContent = a ? 'Avg gen tok/s (last ' + a.requests + ' requests)' : 'Avg gen tok/s';
-      $('tps').textContent = a ? fmtTps(a.genTps) : ONONE;
-      // what to do to see live stats: load a model, then send a message
-      $('foot').textContent = !l ? 'Load a model in Strata to see live stats.'
-        : l.phase === 'unavailable' ? 'Strata\'s engine isn\'t answering. Check the Strata app.'
-        : 'Send a message in Strata (or a request to its API) to see live stats.';
-      setSysLoad($('load'), false);
-    }
-  },
+  markup: nowCardMarkupFor(STRATA_CARD),
+  render(L, d) { nowCardRender(L, d, STRATA_CARD); },
 });
 
 // ---------- Loaded model (AI_SCOPE-099: the shared Loaded lens) ----------
@@ -219,7 +199,7 @@ defineLens({
     const pts = sparkFresh(TPS_HIST);
     const maxT = Math.max(10, 1.25 * pts.reduce(function (a, x) { return Math.max(a, x.v || 0); }, 0));   // on-board only: "top of the chart" is what you SEE
     const clk = sparkClockSegs(TPS_HIST, now, h => h.v == null ? null : Math.min(100, 100 * h.v / maxT));
-    const run = d.current && d.current.tokS != null ? d.current.tokS : null;
+    const run = d.current && d.current.genTps != null ? d.current.genTps : null;   // AI_SCOPE-100 (D4): tokS -> genTps
     const avg = d.average && d.average.genTps != null ? d.average.genTps : null;
     const v = run != null ? run : avg;   // an N/A refresh shows the last-20 average (user spec 2026-11-01 17:50) - D2's "active-but-unreported = n/a" superseded
     const meter = v == null ? null : Math.min(100, 100 * v / maxT);
@@ -273,7 +253,7 @@ defineLens({
     const maxT = Math.max(100, 1.25 * pts.reduce(function (a, x) { return Math.max(a, x.v || 0); }, 0));   // on-board only; floor is a prompt-scale 100 tok/s
     const clk = sparkClockSegs(PTPS_HIST, now, h => h.v == null ? null : Math.min(100, 100 * h.v / maxT));
     const read = d.current && READ_PHASES[d.current.phase];
-    const live = read && d.current.prefillTokS != null ? d.current.prefillTokS : null;
+    const live = read && d.current.promptTps != null ? d.current.promptTps : null;   // AI_SCOPE-100 (D4): prefillTokS -> promptTps
     const avg = d.promptAverage && d.promptAverage.promptTps != null ? d.promptAverage.promptTps : null;
     const v = live != null ? live : avg;   // an N/A refresh (reading without a reported mean, or not reading) shows the last-20 average - 17:50 spec
     const meter = v == null ? null : Math.min(100, 100 * v / maxT);
