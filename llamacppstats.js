@@ -239,6 +239,52 @@ function dropSlots(model) {
   });
 }
 
+// ---------- token-performance rings (AI_SCOPE-101: the llamacpp.tps / llamacpp.ctx lenses) ----------
+// The 093 Strata shape: points { t, every, v, m, s } (s = the slot's id), a time-sized 5-minute ring
+// (trim by time keeping one older sample; the count cap is a safety net only), and the constant 2000
+// PACE stamp - a poll that found nothing is a visible N/A hole on the clock board, never a bridged
+// guess (072/077; the 093 17:50 revision rule). llama.cpp is looked at every 500 ms (250 ms busy) for
+// the request tracker, so the RINGS are wall-throttled to ~one push per 2 s per model: the fast look
+// keeps feeding finish(), the board ticks at the family's pace.
+// windowGenTps() is factored out of the current-row builder so the card and the ring compute the same
+// number from the same samples - the rule 093 slice 3 set for Strata's ctx.
+const PERF_WIN = 300000, PERF_CAP = 400, PERF_PUSH_MS = 1750;
+let tpsHist = [], ctxHist = [];
+const perfLast = {};   // model id -> wall time of its last ring push
+function windowGenTps(samples) {
+  const n = samples.length;
+  // speed over the last few looks (about 2.5 s), so one slow look doesn't jump it around
+  for (let i = n - 2; i >= 0; i--) {
+    if (samples[n - 1].t - samples[i].t >= 2500 || i === 0) {
+      if (samples[n - 1].t > samples[i].t && samples[n - 1].decoded > samples[i].decoded && samples[i].decoded > 0)
+        return (samples[n - 1].decoded - samples[i].decoded) / ((samples[n - 1].t - samples[i].t) / 1000);
+      break;
+    }
+  }
+  return null;
+}
+function trimPerf(a) {
+  const last = a[a.length - 1].t;
+  while (a.length > 1 && a[1].t < last - PERF_WIN) a.shift();
+  if (a.length > PERF_CAP) a.splice(0, a.length - PERF_CAP);
+}
+function samplePerf(modelId, now) {
+  const last = perfLast[modelId] || 0;
+  if (now - last < PERF_PUSH_MS) return;
+  Object.keys(slotState).forEach(function (k) {
+    const st = slotState[k];
+    if (st.model !== modelId || !st.rec) return;
+    const rec = st.rec, g = windowGenTps(rec.samples);
+    if (g != null) tpsHist.push({ t: now, every: 2000, v: g, m: modelId, s: rec.slot });
+    // the same contextUsed the current row reports (prompt + generated so far) - one formula, both faces
+    const used = rec.prompt != null ? rec.prompt + (rec.decoded || 0) : null;
+    if (used != null) ctxHist.push({ t: now, every: 2000, v: used, m: modelId, s: rec.slot });
+  });
+  if (tpsHist.length > 1) trimPerf(tpsHist);
+  if (ctxHist.length > 1) trimPerf(ctxHist);
+  perfLast[modelId] = now;
+}
+
 // ---------- logo ----------
 // llama.cpp has no install folder to read a logo from, so take the icon of the server's own web UI (favicon.svg,
 // a near-black mark). Its web UI files are only served gzip-compressed (415 without Accept-Encoding: gzip).
@@ -391,7 +437,9 @@ function readModel(m, now, cb) {
         dropSlots(m.id); m.slots = null; return cb();   // a model going away: /models will say so next look
       }
       m.slotsEnabled = true; m.slots = d;
-      trackSlots(d, Date.now(), m.id);
+      const tnow = Date.now();
+      trackSlots(d, tnow, m.id);
+      samplePerf(m.id, tnow);   // AI_SCOPE-101: the ~2 s wall-throttled feed of the tps / ctx display rings
       afterSlots();
     });
   };
@@ -687,11 +735,13 @@ function withFit(x) {
 function getState(limit, since) {
   const out = { online: online, url: base || keyNeeded || configured || null, error: lastError, needsKey: !!keyNeeded,
                 router: router, build: rootProps && rootProps.build_info || null, slotsEnabled: null,
-                model: null, models: [], slots: [], current: [], average: null,
+                model: null, models: [], slots: [], current: [], average: null, contextStates: [],
                 totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),
                 process: procstats.get('llamacpp'), processSupported: procstats.supported(),
                 // the Hardware Mirror Lens family: the 5-minute per-process ring and the Hardware card names / totals
                 processHistory: procstats.history('llamacpp', since || 0),
+                // AI_SCOPE-101: the token-performance rings ride every answer, offline included (082/093 rule)
+                tpsHistory: tpsHist, contextHistory: ctxHist,
                 processCards: hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; }) };
   if (!online) return out;
   // loaded models first, then the rest in the server's order
@@ -702,24 +752,21 @@ function getState(limit, since) {
   out.slotsEnabled = loaded.length ? loaded.some(function (m) { return m.slotsEnabled !== false; }) : null;
   const now = Date.now();
   loaded.forEach(function (m) {
+    const sleeping = m.props && m.props.is_sleeping;   // 101: a sleeping model's held fill is void - the claim goes
     (m.slots || []).forEach(function (s) {
       const n = slotNums(s), st = slotState[m.id + '#' + s.id], rec = st && st.rec;
       out.slots.push({ model: m.id, id: s.id, busy: !!s.is_processing, task: n.task, nCtx: n.nCtx, promptTokens: n.prompt, cached: n.cached,
                        decoded: s.is_processing ? n.decoded : null, used: n.total, since: rec ? Math.round(rec.start) : null });
+      // AI_SCOPE-101 (D3): per-slot fill state for the Context lens - live while processing, held while idle,
+      // the whole slot token count straight off the app (n_prompt_tokens counts prompt + output so far).
+      if (!sleeping && n.total != null)
+        out.contextStates.push({ slot: s.id, model: m.id, used: n.total, max: n.nCtx, live: !!s.is_processing, at: now });
     });
   });
   Object.keys(slotState).forEach(function (k) {
     const rec = slotState[k].rec;
     if (!rec) return;
-    const s = rec.samples, n = s.length;
-    let genTps = null;
-    // speed over the last few looks (about 2.5 s), so one slow look doesn't jump it around
-    for (let i = n - 2; i >= 0; i--) {
-      if (s[n - 1].t - s[i].t >= 2500 || i === 0) {
-        if (s[n - 1].t > s[i].t && s[n - 1].decoded > s[i].decoded && s[i].decoded > 0) genTps = (s[n - 1].decoded - s[i].decoded) / ((s[n - 1].t - s[i].t) / 1000);
-        break;
-      }
-    }
+    const genTps = windowGenTps(rec.samples);   // AI_SCOPE-101: shared with samplePerf - card and ring compute the same number
     const gen = rec.decoded || 0, mi = models[rec.model];
     // AI_SCOPE-100 (D4): canonical live names (cached -> cachedTokens, generated -> outputTokens,
     // tokS -> genTps); the phase words here have been the family's since 082.

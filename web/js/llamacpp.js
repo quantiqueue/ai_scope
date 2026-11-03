@@ -36,9 +36,8 @@ const LC_CARD = {
   title: 'Current request',
   boxes: ['speed', 'gen', 'prompt', 'context', 'time'],
   cur: d => {
-    const list = d.current || [];
-    const c = list.slice().sort((a, b) => a.elapsedMs - b.elapsedMs)[0];
-    return c ? Object.assign({}, c, { othersRunning: list.length - 1 }) : null;
+    const c = lcCurrentPick(d);
+    return c ? Object.assign({}, c, { othersRunning: (d.current || []).length - 1 }) : null;
   },
   blocked: d => d.slotsEnabled === false
     ? { title: 'Slots endpoint is off', model: d.model ? d.model.name : null,
@@ -218,5 +217,164 @@ defineLens({
   },
 });
 
+// ---------- token-performance lenses (AI_SCOPE-101) ----------
+// The 093 pattern for llama.cpp, with the user's kickoff decisions:
+//  - Gen tok/s + Context ride the SERVER rings (tpsHistory / contextHistory): clock boards,
+//    constant 2 s pace stamps (an N/A refresh = a visible bordered hole - 077/097), and the
+//    rings ride offline answers. windowGenTps in llamacppstats.js is shared by the card rows and
+//    the ring points, so the two can never disagree (the 093 slice-3 rule).
+//  - Prompt tok/s is a PER-REQUEST lens in the shape strata.hit finally took: the rows are the
+//    series, up to the last 100 that carry a promptTps (llama.cpp reports one only for requests
+//    the /metrics counters settled), one connected line, rateless requests carry NO point and the
+//    line joins across them (never a zero - 072). No live face, no invented average.
+//  - NO Hit rate lens: llama.cpp reports no VRAM/expert hit, and cache-hit % is another family
+//    the user kept out of this ticket.
+// Slot picker (D2): every lens here follows ONE slot. Auto (default) = the card's pick
+// (youngest-started busy slot); fixed 0..7 pins a physical slot. Slot ids are the server's 0-based
+// indices - slot 0 always exists, but with --parallel a request lands on any idle slot, which is
+// why Auto is the default: a pinned slot honestly shows nothing while the work runs elsewhere.
+// Hover parity (the 093 18:16 lesson): each hover reads the SAME drawn set + board time the line
+// was built with (module vars), never a fresh pick.
+function lcCurrentPick(d) {
+  const list = d.current || [];
+  return list.slice().sort((a, b) => a.elapsedMs - b.elapsedMs)[0] || null;
+}
+const LC_SLOT_FIELD = { id: 'slot', label: 'Slot', type: 'choice', default: '', options:
+  [['', 'Auto (the running slot)'], ['0', 'Slot 0'], ['1', 'Slot 1'], ['2', 'Slot 2'], ['3', 'Slot 3'],
+   ['4', 'Slot 4'], ['5', 'Slot 5'], ['6', 'Slot 6'], ['7', 'Slot 7']],
+  help: 'Slot ids are the server\u2019s 0-based slot indexes - slot 0 always exists, but with --parallel a request runs on any idle slot. Auto follows the same slot the Current-request card shows.' };
+function lcSlotSetting(L) { const v = L.settings.slot; return v === '' || v == null || isNaN(+v) ? null : +v; }
+function lcRingPts(ring, want, follow) { return ring.filter(p => (want != null ? p.s === want : p.s === follow)); }
+
+// ---------- Gen tok/s ----------
+const LC_TPS_HIST = [];
+let LTPS_T1 = Date.now(), LTPS_FOLLOW = null, LTPS_PTS = [];   // drawn-board parity for the hover
+subscribeSource('llamacpp', d => {
+  const add = (d && d.tpsHistory) || [];
+  if (add.length) {
+    const last = LC_TPS_HIST.length ? LC_TPS_HIST[LC_TPS_HIST.length - 1].t : 0;
+    for (const p of add) if (p && p.t > last) LC_TPS_HIST.push(p);
+    sparkPrune(LC_TPS_HIST);                                                       // time-sized, one older sample
+    if (LC_TPS_HIST.length > 400) LC_TPS_HIST.splice(0, LC_TPS_HIST.length - 400);  // safety cap only
+  }
+});
+const LC_TPS_TIP = 'Generation speed of the llama.cpp request this lens follows - estimated from AI_SCOPE\u2019s looks at the server\u2019s slots (every \u00bd s, \u00bc s while busy; llama.cpp keeps no per-request timings). While nothing runs, the big number is AI_SCOPE\u2019s average of recent saved requests (also estimated). The line covers only time actually spent generating; the gaps between requests are breaks, not zeros.';
+defineLens({
+  id: 'llamacpp.tps', scope: 'llamacpp', size: 'tile',
+  name: 'Gen tok/s',
+  description: 'llama.cpp generation speed with a 5-minute history: the followed slot\u2019s estimated tok/s while a request runs, the average of recent requests when not. A Slot setting follows one server slot.',
+  settings: [LC_SLOT_FIELD],
+  markup: () => tileHtml({ id: 'ltps', label: 'llama.cpp Gen tok/s' }),
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="ltps"]'); if (!box) return;
+    box.querySelector('.ltitle').title = LC_TPS_TIP;
+    const now = Date.now(); LTPS_T1 = now;
+    const want = lcSlotSetting(L), pick = lcCurrentPick(d);
+    if (want == null && pick) LTPS_FOLLOW = pick.slot;      // Auto follows the card's slot
+    LTPS_PTS = lcRingPts(LC_TPS_HIST, want, LTPS_FOLLOW);
+    const fresh = sparkFresh(LTPS_PTS);
+    const maxT = Math.max(10, 1.25 * fresh.reduce((a, x) => Math.max(a, x.v || 0), 0));   // on-board only: "top" is what you SEE
+    const clk = sparkClockSegs(LTPS_PTS, now, h => h.v == null ? null : Math.min(100, 100 * h.v / maxT));
+    const live = want != null ? (d.current || []).find(r => r.slot === want) : pick;
+    const run = live && live.genTps != null ? live.genTps : null;
+    const avg = d.average && d.average.genTps != null ? d.average.genTps : null;
+    const v = run != null ? run : avg;
+    sparkTile(box, v == null ? null : Math.min(100, 100 * v / maxT), v == null ? NA_HTML : '\u2248 ' + fmtTps(v),
+      run != null ? 'live \u00b7 ' + cutName(live.model) + ' \u00b7 slot ' + live.slot
+        : avg != null ? 'avg last ' + d.average.requests + ' \u00b7 ' + (d.average.model ? cutName(d.average.model) : 'any model')
+        : d.online ? (d.router ? 'no model loaded' : 'no request has run yet') : 'llama.cpp Offline',
+      clk.segs, clk.caps);
+    const vEl = box.querySelector('.v'); if (vEl) vEl.title = LC_EST;   // the estimate is the number's own nature
+    box.querySelector('.spark').title = 'Top of the chart = ' + fmtTps(maxT) + ' tok/s (5-minute board max) \u00b7 slot-estimated';
+  },
+});
+MIRROR_HOVER.push({ prefix: 'ltps', fn: (spark, f, guide, tip) => {   // nearest sample on the DRAWN board (parity vars), its own time printed
+  sparkClockHover(spark, f, guide, tip, LTPS_PTS, hs => (hs.v != null ? '\u2248 ' + fmtTps(hs.v) + ' tok/s \u00b7 ' + new Date(hs.t).toLocaleTimeString() + ' \u00b7 ' + cutName(hs.m) + ' \u00b7 slot ' + hs.s : 'n/a'), LTPS_T1);
+} });
+
+// ---------- Prompt tok/s (per-request; --metrics-settled rows only) ----------
+let LPTPS_PTS = [];
+const LC_PTPS_TIP = 'llama.cpp prompt-processing speed, one point per finished request. The server reports a prompt speed only when run with --metrics (counter deltas), so requests settled without it carry no point - the line joins across them, never a zero. Big number = the latest request that has one. Each point: prompt tokens read \u00f7 the server\u2019s prompt seconds.';
+defineLens({
+  id: 'llamacpp.ptps', scope: 'llamacpp', size: 'tile',
+  name: 'Prompt tok/s',
+  description: 'llama.cpp prompt speed per finished request (the ones --metrics could settle): up to the last 100 as one connected line, the latest settled request as the big value.',
+  settings: [LC_SLOT_FIELD],
+  markup: () => tileHtml({ id: 'lptps', label: 'llama.cpp Prompt tok/s' }),
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="lptps"]'); if (!box) return;
+    box.querySelector('.ltitle').title = LC_PTPS_TIP;
+    const want = lcSlotSetting(L);
+    const rows = Array.isArray(d.rows) ? d.rows : [];
+    const rated = rows.filter(r => r && r.promptTps != null && r.end != null && (want == null || r.slot === want));
+    LPTPS_PTS = rated.slice(0, 100).reverse().map((r, i) => ({ t: i, every: 1, v: r.promptTps, m: r.model, s: r.slot, end: r.end }));
+    const maxT = Math.max(100, 1.25 * LPTPS_PTS.reduce((a, x) => Math.max(a, x.v || 0), 0));   // prompt-scale floor like sptps
+    const segs = sparkSegs(LPTPS_PTS, h => h.v == null ? null : Math.min(100, 100 * h.v / maxT));
+    const last = rated[0];
+    sparkTile(box, last ? Math.min(100, 100 * last.promptTps / maxT) : null, last ? fmtTps(last.promptTps) : NA_HTML,
+      last ? 'last req \u00b7 ' + fmtWhen(last.end) + ' \u00b7 ' + cutName(last.model) + ' \u00b7 slot ' + last.slot
+        : d.online ? 'no --metrics-settled request yet (start the server with --metrics)' : 'llama.cpp Offline',
+      segs);   // fully joined: the 097 interior rule draws no caps
+    box.querySelector('.spark').title = 'Top of the chart = ' + fmtTps(maxT) + ' tok/s \u00b7 one step per request with a number, in order, up to the last 100';
+  },
+});
+MIRROR_HOVER.push({ prefix: 'lptps', fn: (spark, f, guide, tip) => {   // nearest REQUEST by index (the shrate form); its own end time, not the cursor's
+  const n = LPTPS_PTS.length; if (!n) return;
+  const ix = Math.max(0, Math.min(n - 1, Math.round(f * (n - 1))));
+  const p = LPTPS_PTS[ix], x = n > 1 ? 100 * ix / (n - 1) : 100;
+  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
+  tip.hidden = false; tip.style.left = x + '%';
+  tip.textContent = (p.v != null ? fmtTps(p.v) + ' tok/s \u00b7 ended ' + fmtWhen(p.end) + ' \u00b7 slot ' + p.s : 'n/a') + (p.m ? ' \u00b7 ' + cutName(p.m) : '');
+} });
+
+// ---------- Context (followed slot; live + held fill, per-slot states from the server) ----------
+const LC_CTX_HIST = [];
+let LCTX_T1 = Date.now(), LCTX_FOLLOW = null, LCTX_PTS = [];
+subscribeSource('llamacpp', d => {
+  const add = (d && d.contextHistory) || [];
+  if (add.length) {
+    const last = LC_CTX_HIST.length ? LC_CTX_HIST[LC_CTX_HIST.length - 1].t : 0;
+    for (const p of add) if (p && p.t > last) LC_CTX_HIST.push(p);
+    sparkPrune(LC_CTX_HIST);
+    if (LC_CTX_HIST.length > 400) LC_CTX_HIST.splice(0, LC_CTX_HIST.length - 400);
+  }
+});
+const LC_CTX_TIP = 'How full the followed slot\u2019s context window is - the server\u2019s own slot token count (prompt + generated so far, exact from the slot view). While a request runs this is the live fill; while idle it is the fill the slot still holds (llama.cpp keeps the conversation in its slot). An unload or a sleeping model voids the claim, and the lens says so.';
+defineLens({
+  id: 'llamacpp.ctx', scope: 'llamacpp', size: 'tile',
+  name: 'Context',
+  description: 'llama.cpp context fill for the followed slot on a 5-minute board: live prompt + generated while a request runs, the fill the slot is holding when idle (same loaded model only).',
+  settings: [LC_SLOT_FIELD],
+  markup: () => tileHtml({ id: 'lctx', label: 'llama.cpp Context' }),
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="lctx"]'); if (!box) return;
+    box.querySelector('.ltitle').title = LC_CTX_TIP;
+    const now = Date.now(); LCTX_T1 = now;
+    const want = lcSlotSetting(L), pick = lcCurrentPick(d);
+    if (want == null && pick) LCTX_FOLLOW = pick.slot;
+    LCTX_PTS = lcRingPts(LC_CTX_HIST, want, LCTX_FOLLOW);
+    const follow = want != null ? want : LCTX_FOLLOW;
+    const st = (d.contextStates || []).find(x => x.slot === follow && (x.live || x.used > 0)) || null;   // an empty slot's 0 is not a conversation claim
+    const ceil = (st && st.max) || Math.max(1, sparkFresh(LCTX_PTS).reduce((a, x) => Math.max(a, x.v || 0), 0));
+    const clk = sparkClockSegs(LCTX_PTS, now, h => h.v == null ? null : Math.min(100, 100 * h.v / ceil));
+    const big = st && st.used != null ? lcK(st.used) + (st.max ? '<small> / ' + lcCtx(st.max) + '</small>' : '') : NA_HTML;
+    const meter = st && st.used != null && st.max ? Math.min(100, 100 * st.used / st.max) : null;
+    sparkTile(box, meter, big,
+      st ? (st.live ? 'live \u00b7 ' + cutName(st.model) + ' \u00b7 slot ' + st.slot
+                    : 'held \u00b7 ' + cutName(st.model) + ' \u00b7 slot ' + st.slot + ' \u00b7 since ' + fmtWhen(st.at))
+        : !d.online ? 'llama.cpp Offline'
+        : d.slotsEnabled === false ? 'Slots endpoint is off'
+        : (d.models || []).some(m => m.state === 'loaded') ? 'no request has run yet on that slot'
+        : 'no model loaded (or it is sleeping - then the held fill is void)',
+      clk.segs, clk.caps);
+    box.querySelector('.spark').title = 'Top of the chart = ' + lcCtx(ceil) + ' \u00b7 last 5 minutes';
+  },
+});
+MIRROR_HOVER.push({ prefix: 'lctx', fn: (spark, f, guide, tip) => {   // nearest sample on the DRAWN board (parity vars), its own time printed
+  sparkClockHover(spark, f, guide, tip, LCTX_PTS, hs => (hs.v != null ? lcK(hs.v) + ' tok \u00b7 ' + new Date(hs.t).toLocaleTimeString() + ' \u00b7 ' + cutName(hs.m) + ' \u00b7 slot ' + hs.s : 'n/a'), LCTX_T1);
+} });
+
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
-defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, 'llamacpp.loaded', 'llamacpp.requests', 'llamacpp.installed', 'llamacpp.slots']).concat(LLAMACPP_MIRROR.layout()));   // AI_SCOPE-082: mirror family tail
+// AI_SCOPE-101: the Gen tok/s + Prompt tok/s + Context row leads right after the current-request card
+// (093 D5 placement pattern; loaded / requests / installed / slots are the full-width cards).
+defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, 'llamacpp.tps', 'llamacpp.ptps', 'llamacpp.ctx', 'llamacpp.loaded', 'llamacpp.requests', 'llamacpp.installed', 'llamacpp.slots']).concat(LLAMACPP_MIRROR.layout()));   // AI_SCOPE-082: mirror family tail
