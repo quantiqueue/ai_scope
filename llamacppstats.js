@@ -27,7 +27,9 @@ const procstats = require('./procstats');   // process stats: VRAM per card, GPU
 // `llama serve` runs the model in llama.exe itself; in router mode each model is a child llama.exe. Plain builds:
 // llama-server.exe. Watched by port, so Bionic's / Ollama's own llama-server.exe children (other ports) are not mixed in.
 // 'unsloth': Unsloth Studio's launcher (comm 'unsloth') owns the proxied port and hides its fds; on Linux it is
-// the only process naming the app, and in tree mode (which this scope asks for) it anchors the engine's family.
+// the only process naming the app, and in tree mode it anchors the engine's family. Tree mode is asked for on
+// Linux / macOS ONLY (AI_SCOPE-105): on Windows every llama.exe becomes an anchor regardless of its port, plus
+// its descendants and ancestry chain, which breaks router-mode per-model attribution.
 const MODEL_PROCS = ['llama.exe', 'llama-server.exe', 'unsloth'];
 const paths = require('./paths');
 
@@ -335,7 +337,7 @@ function goOnline(b, d) {
     try { host = new URL(b).hostname; } catch (e) { /* ignore */ }
     local = /^(127\.|localhost$|\[?::1\]?$)/.test(host);
     // the server's process (+ in router mode every model's child process): the process row / AI processes total
-    if (local) procstats.watch('llamacpp', [+new URL(b).port || 80], MODEL_PROCS, { tree: true }); else procstats.unwatch('llamacpp');   // tree: a launcher that hides its fds anchors the engine's family (nix name fallback)
+    if (local) procstats.watch('llamacpp', [+new URL(b).port || 80], MODEL_PROCS, { tree: process.platform !== 'win32' }); else procstats.unwatch('llamacpp');   // tree: nix only - a launcher that hides its fds anchors the engine's family there (name fallback); on Windows it would anchor every llama.exe and break router attribution (105)
     if ((!logo.light || !logo.dark) && Date.now() - logo.tried > 60000) fetchLogo();
   }
 }
@@ -394,7 +396,7 @@ function readRouterModels(cb) {
       e.inputs = m.architecture && Array.isArray(m.architecture.input_modalities) ? m.architecture.input_modalities : null;
       e.port = state === 'loaded' && port ? port : null;
       if (state !== 'loaded' && old && old.state === 'loaded') { dropSlots(m.id); e.props = null; e.slots = null; }
-      if (local && e.port) procstats.watch(procKey(m.id), [e.port], MODEL_PROCS, { tree: true }); else procstats.unwatch(procKey(m.id));   // tree: see goOnline
+      if (local && e.port) procstats.watch(procKey(m.id), [e.port], MODEL_PROCS, { tree: process.platform !== 'win32' }); else procstats.unwatch(procKey(m.id));   // tree: nix only, see goOnline - on Windows this per-model key needs its own port tree (105)
       models[m.id] = e; seen[m.id] = true; ids.push(m.id);
     });
     order.forEach(function (id) { if (!seen[id]) { dropSlots(id); procstats.unwatch(procKey(id)); delete models[id]; } });
