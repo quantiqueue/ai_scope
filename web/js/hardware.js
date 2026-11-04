@@ -331,11 +331,11 @@ function setSysLoad(id, on, proc, app) {   // id or element (lenses pass their o
   if (mine) {
     const noAccess = 'The system did not allow reading this process\'s CPU and RAM';
     top.push(mine.cpu != null ? item('CPU', mine.cpu, mine.cpu.toFixed(0) + '%', 'Share of the whole CPU (all cores)') : mine.ram == null ? item('CPU', null, '—', noAccess) : blank);
-    mem.push(mine.ram != null ? item('MEM', pct(mine.ram, s.ramTotal), GB(mine.ram) + ' / ' + GB(s.ramTotal) + ' GB', (SERVER_OS === 'win32' ? 'RAM in use (working set); committed: ' : SERVER_OS === 'linux' ? 'RAM in use (resident); private: ' : 'RAM in use (resident): ') + GB(mine.ramPrivate) + ' GB')
-      : item('MEM', null, '—', noAccess));
+    mem.push(mine.ram != null ? item('RAM', pct(mine.ram, s.ramTotal), GB(mine.ram) + ' / ' + GB(s.ramTotal) + ' GB', (SERVER_OS === 'win32' ? 'RAM in use (working set); committed: ' : SERVER_OS === 'linux' ? 'RAM in use (resident); private: ' : 'RAM in use (resident): ') + GB(mine.ramPrivate) + ' GB')
+      : item('RAM', null, '—', noAccess));
   } else {
     top.push(s.cpu != null ? item('CPU', s.cpu, s.cpu.toFixed(0) + '%') : blank);
-    mem.push(item('MEM', pct(s.ramUsed, s.ramTotal), GB(s.ramUsed) + ' / ' + GB(s.ramTotal) + ' GB'));
+    mem.push(item('RAM', pct(s.ramUsed, s.ramTotal), GB(s.ramUsed) + ' / ' + GB(s.ramTotal) + ' GB'));
   }
   const label = el.querySelector('.sl-label');
   const ltext = mine ? app + ' process' : 'System load';
