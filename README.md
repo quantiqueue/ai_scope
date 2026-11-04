@@ -18,7 +18,8 @@
 AI_SCOPE is a dashboard for the AI apps on your own PC. It shows what your local AI engines are doing right now: tokens per second, image steps, which model is loaded, and how much of your GPU and VRAM it takes. It also keeps a history of every request and run. It runs in your browser, and your data stays on your PC.
 
 - **Live and after the fact.** While something runs you see its speed, tokens and progress. Afterwards, every request and run is in a table with its speed and peak load.
-- **Each app's own hardware use.** GPU %, VRAM per graphics card, CPU and RAM for the app's own process, next to whole-PC **Hardware** and **Processes** scopes.
+- **Each app's own hardware use.** GPU %, VRAM per graphics card, CPU and RAM for the app's own process, as tiles on every app page next to whole-PC **Hardware** and **Processes** scopes.
+- **Token speed and context, per app.** Gen / prompt tok/s and context tiles on the LLM scopes (Strata also a prompt-cache hit rate), beside each app's current-request card and request table.
 - **Your own views.** Custom scopes put lenses from any app side by side, and every page can be rearranged.
 - **Light and private.** One install line, no admin rights, no account, no cloud, no telemetry. Settings and history are plain JSON files in `~/.ai_scope` ([where the data comes from](manual/DATA_SOURCE.md)).
 
@@ -48,11 +49,11 @@ Every tab is a **scope**. Each card or table on a scope is a **lens** (e.g. Stra
 |---|---|
 | **Hardware** (built in) | CPU, RAM, a GPU + VRAM + Power + PCIe tile per graphics card and a Disk tile per physical disk (active time, read / write speed), with 5-minute sparklines; GPU temperature, power draw / limit and PCIe bus traffic + link on NVIDIA cards (temperature and power also on AMD cards on Linux); the RAM tile can also show committed memory against the PC's commit ceiling |
 | **Processes** (built in) | Your AI apps' own VRAM, GPU, CPU and RAM (AI processes), and the top 5 processes by CPU, RAM, I/O (read / write), and per graphics card GPU, VRAM and shared GPU memory, each with a 5-minute line per process |
-| **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit, and its own GPU / VRAM / RAM / CPU / I/O tiles measured on Bionic's processes |
-| **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit |
-| **ComfyUI** | Current run (step progress, speed, time left), run history with thumbnails, installed models (filter by type) |
-| **Strata** | Current request (reading / thinking / answering, tok/s, prompt and context fill), loaded model (experts in VRAM, speculation), request history (reused prompt tokens, hit rate), installed models with Strata's own fit verdict, and its own GPU / VRAM / RAM / CPU / I/O tiles measured on Strata's processes |
-| **llama.cpp** | A llama.cpp server (`llama serve` or `llama-server`): current request (tok/s, tokens, prompt, context), loaded models (quantization, size, context, slots, VRAM per card), installed models (a router's models folder), slots (busy / idle, context used), request history (estimated from the server's slots) |
+| **Bionic** | LM Studio's Bionic: current request (live state, tok/s), loaded models, request history, installed models with VRAM fit, token tiles (gen / prompt tok/s, context), and its own GPU / VRAM / RAM / CPU / I/O tiles measured on Bionic's processes |
+| **Ollama** | Current request (live state, tok/s, thinking tokens), loaded models (GPU/CPU split), request history, installed models with VRAM fit, token tiles (gen / prompt tok/s, context), and its own GPU / VRAM / RAM / CPU / I/O tiles measured on Ollama's model runners |
+| **ComfyUI** | Current run (step progress, speed, time left), run history with thumbnails, installed models (filter by type), and its own GPU / VRAM / RAM / CPU / I/O tiles measured on ComfyUI's process |
+| **Strata** | Current request (reading / thinking / answering, tok/s, prompt and context fill), loaded model (experts in VRAM, speculation), request history (reused prompt tokens, hit rate), installed models with Strata's own fit verdict, token tiles (gen / prompt tok/s, context, hit rate), and its own GPU / VRAM / RAM / CPU / I/O tiles measured on Strata's processes |
+| **llama.cpp** | A llama.cpp server (`llama serve` or `llama-server`): current request (tok/s, tokens, prompt, context), loaded models (quantization, size, context, slots, VRAM per card), installed models (a router's models folder, with size, fit and Hugging Face link for models not loaded yet), slots (busy / idle, context used), request history (estimated from the server's slots), token tiles (gen / prompt tok/s, context), and its own GPU / VRAM / RAM / CPU / I/O tiles measured on the server and its model processes |
 | **Custom** | A custom scope is your own page made of lenses from any installed scope, e.g. ComfyUI's current run next to Strata's current request and your GPU tiles. |
 
 ## Troubleshooting
