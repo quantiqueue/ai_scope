@@ -21,18 +21,23 @@
 const http = require('http');
 const zlib = require('zlib');
 const fs = require('fs');
+const path = require('path');            // AI_SCOPE-098: resolving unloaded router model files under --models-dir
 const hwstats = require('./hwstats');
 const procstats = require('./procstats');   // process stats: VRAM per card, GPU %, CPU, RAM (Windows)
 // `llama serve` runs the model in llama.exe itself; in router mode each model is a child llama.exe. Plain builds:
 // llama-server.exe. Watched by port, so Bionic's / Ollama's own llama-server.exe children (other ports) are not mixed in.
 // 'unsloth': Unsloth Studio's launcher (comm 'unsloth') owns the proxied port and hides its fds; on Linux it is
-// the only process naming the app, and in tree mode (which this scope asks for) it anchors the engine's family.
+// the only process naming the app, and in tree mode it anchors the engine's family. Tree mode is asked for on
+// Linux / macOS ONLY (AI_SCOPE-105): on Windows every llama.exe becomes an anchor regardless of its port, plus
+// its descendants and ancestry chain, which breaks router-mode per-model attribution.
 const MODEL_PROCS = ['llama.exe', 'llama-server.exe', 'unsloth'];
 const paths = require('./paths');
 
 const CANDIDATES = ['http://127.0.0.1:9931', 'http://127.0.0.1:8080'];
 const REQ_FILE = paths.file('llamacpp-requests.jsonl');
-const MAX_IN_MEMORY = 1000;
+const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
+const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
+const ggufmeta = require('./ggufmeta');            // AI_SCOPE-098 review: GGUF header provenance (HF repo, size label)
 const POLL_MS = 500;           // all slots idle (a request's start is known to about ± ¼ s)
 const POLL_BUSY_MS = 250;      // a slot busy: look more often for better speed / timing estimates
 const PROPS_MS = 10000;
@@ -44,14 +49,51 @@ let timer = null, busy = false, running = false;
 let online = false, lastError = null;
 let keyNeeded = null;       // URL of a llama.cpp server that answered 401 (needs --api-key's key)
 let apiKey = '';            // token for --api-key servers (the scope's 'API key' setting), sent as Bearer
+let scopeModelsDir = null;    // AI_SCOPE-098: the --models-dir folder from the scope card (settings)
+let modelsDir = null;         // the folder used: the scope setting only (106 item 4 - a request cannot change it)
+let fileResCache = {};      // dir|id -> resolved GGUF path ('' = looked and not found), re-keyed when the dir changes
 let rootProps = null, rootPropsAt = 0;
 let router = null;          // router mode: { maxInstances, autoload } (null = single model)
 let models = {};            // id -> { id, name, state, path, port, meta, props, propsAt, slots, slotsEnabled }
 let order = [];             // model ids in the server's order
 let modelsAt = 0;
 const slotState = {};       // model id + '#' + slot id -> { busy, task, seenAt, rec, model }
-let requests = [];          // saved finished requests, oldest first
-let requestsLoaded = false;
+// One store, one file, this scope's own 1000-row ring (AI_SCOPE-094 slice 1).
+const store = reqstore.createStore({
+  file: REQ_FILE,
+  accept: function (r) { return !!r.end; },        // load filter: rows without an end time are unusable
+  // AI_SCOPE-094 slice 2: rows saved before the explicit flags carried no `exact` at all, and the
+  // old client read "absent" as estimated. Say so on read so those lines keep their ≈.
+  mapRow: function (r) {
+    // slice 4: the 59 lines saved before this change carry the old boolean dialect. Read them as
+    // provenance instead, so the ≈ on an estimated line and the plain counter numbers on a settled
+    // line both survive - the files themselves are never rewritten.
+    const P = reqstats.PROV;
+    if (r.exact === undefined && r.genExact === undefined && r.src === undefined) r.exact = false;
+    if (r.src === undefined) {
+      const settled = r.exact === true;
+      if (settled) {
+        reqstats.setProv(r, 'outputTokens', P.EXACT);
+        if (r.genMs != null) reqstats.setProv(r, 'genMs', P.EXACT);
+        if (r.promptMs != null) reqstats.setProv(r, 'promptMs', P.EXACT);
+        if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
+        if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
+        if (r.durationMs != null) reqstats.setProv(r, 'durationMs', P.DERIVED);
+        if (r.cachedTokens != null) reqstats.setProv(r, 'cachedTokens', P.EXACT);
+      } else {
+        if (r.genTps != null) reqstats.setProv(r, 'genTps', P.ESTIMATED);
+        if (r.firstTokenMs != null) reqstats.setProv(r, 'firstTokenMs', P.ESTIMATED);
+        if (r.durationMs != null) reqstats.setProv(r, 'durationMs', P.ESTIMATED);
+      }
+      if (r.outputEstimated) reqstats.setProv(r, 'outputTokens', P.ESTIMATED);
+      if (r.firstTokenDerived) reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
+    }
+    ['exact', 'genExact', 'outputEstimated', 'firstTokenDerived'].forEach(k => { delete r[k]; });
+    return r;
+  },
+  onError: function (msg) { lastError = msg; }
+});
+const requests = store.rows();   // saved finished requests, oldest first — mutated in place by the store
 let nextKey = 1;
 
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
@@ -89,23 +131,9 @@ function series(items, fn, done) {
 // procstats key for a model's own process (router mode)
 function procKey(id) { return 'llamacpp-' + String(id).replace(/[^\w.-]/g, '_').slice(0, 80); }
 
-// ---------- saved requests ----------
-function loadRequests() {
-  let text = '';
-  try { text = fs.readFileSync(REQ_FILE, 'utf8'); } catch (e) { return; }
-  text.split(/\r?\n/).forEach(function (l) {
-    if (!l.trim()) return;
-    try { const r = JSON.parse(l); if (r && r.end) requests.push(r); } catch (e) { /* skip bad line */ }
-  });
-  requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests = requests.slice(-MAX_IN_MEMORY);
-}
-function saveRequest(r) {
-  requests.push(r);
-  if (requests.length > 1 && (requests[requests.length - 2].end || 0) > (r.end || 0)) requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests.shift();
-  try { paths.ensure(); fs.appendFileSync(REQ_FILE, JSON.stringify(r) + '\n'); } catch (e) { lastError = 'save failed: ' + e.message; }
-}
+// ---------- saved requests (the store does the read, parse, sort, trim, append, cap) ----------
+function loadRequests() { store.load(); }
+function saveRequest(r) { store.append(r); }
 // ---------- requests from the slot looks ----------
 function slotNums(s) {
   const nt = Array.isArray(s.next_token) ? s.next_token[0] || {} : s.next_token || {};
@@ -143,9 +171,18 @@ function finish(rec, idleAt, after) {
   const row = {
     key: Date.now().toString(36) + '-' + (nextKey++), slot: rec.slot, task: rec.task, model: rec.model,
     start: Math.round(rec.start), end: Math.round(end), durationMs: Math.round(end - rec.start),
-    promptTokens: rec.prompt, cachedTokens: rec.cached || null, outputTokens: out || null, outputEstimated: outEst || undefined,
+    promptTokens: rec.prompt, cachedTokens: rec.cached || null, outputTokens: out || null,
     genTps: genTps, firstTokenMs: firstAt != null ? Math.round(firstAt - rec.start) : null,
+    // AI_SCOPE-094 slice 4: these rows are reconstructed from ½ s (¼ s busy) looks at the slot
+    // counters, so the speed, the end, the duration and the first token are ESTIMATED, not measured.
+    // The token counts come straight off the slot, so they stay exact. settlePeriod() below promotes
+    // a row to exact when the server's /metrics counters show it ran alone.
   };
+  const P = reqstats.PROV;
+  if (outEst) reqstats.setProv(row, 'outputTokens', P.ESTIMATED);
+  if (row.genTps != null) reqstats.setProv(row, 'genTps', P.ESTIMATED);
+  if (row.firstTokenMs != null) reqstats.setProv(row, 'firstTokenMs', P.ESTIMATED);
+  reqstats.setProv(row, 'durationMs', P.ESTIMATED);
   later(row);
   const m = models[rec.model];
   if (m && m.period) m.period.rows.push(row);
@@ -205,6 +242,52 @@ function dropSlots(model) {
   });
 }
 
+// ---------- token-performance rings (AI_SCOPE-101: the llamacpp.tps / llamacpp.ctx lenses) ----------
+// The 093 Strata shape: points { t, every, v, m, s } (s = the slot's id), a time-sized 5-minute ring
+// (trim by time keeping one older sample; the count cap is a safety net only), and the constant 2000
+// PACE stamp - a poll that found nothing is a visible N/A hole on the clock board, never a bridged
+// guess (072/077; the 093 17:50 revision rule). llama.cpp is looked at every 500 ms (250 ms busy) for
+// the request tracker, so the RINGS are wall-throttled to ~one push per 2 s per model: the fast look
+// keeps feeding finish(), the board ticks at the family's pace.
+// windowGenTps() is factored out of the current-row builder so the card and the ring compute the same
+// number from the same samples - the rule 093 slice 3 set for Strata's ctx.
+const PERF_WIN = 300000, PERF_CAP = 400, PERF_PUSH_MS = 1750;
+let tpsHist = [], ctxHist = [];
+const perfLast = {};   // model id -> wall time of its last ring push
+function windowGenTps(samples) {
+  const n = samples.length;
+  // speed over the last few looks (about 2.5 s), so one slow look doesn't jump it around
+  for (let i = n - 2; i >= 0; i--) {
+    if (samples[n - 1].t - samples[i].t >= 2500 || i === 0) {
+      if (samples[n - 1].t > samples[i].t && samples[n - 1].decoded > samples[i].decoded && samples[i].decoded > 0)
+        return (samples[n - 1].decoded - samples[i].decoded) / ((samples[n - 1].t - samples[i].t) / 1000);
+      break;
+    }
+  }
+  return null;
+}
+function trimPerf(a) {
+  const last = a[a.length - 1].t;
+  while (a.length > 1 && a[1].t < last - PERF_WIN) a.shift();
+  if (a.length > PERF_CAP) a.splice(0, a.length - PERF_CAP);
+}
+function samplePerf(modelId, now) {
+  const last = perfLast[modelId] || 0;
+  if (now - last < PERF_PUSH_MS) return;
+  Object.keys(slotState).forEach(function (k) {
+    const st = slotState[k];
+    if (st.model !== modelId || !st.rec) return;
+    const rec = st.rec, g = windowGenTps(rec.samples);
+    if (g != null) tpsHist.push({ t: now, every: 2000, v: g, m: modelId, s: rec.slot });
+    // the same contextUsed the current row reports (prompt + generated so far) - one formula, both faces
+    const used = rec.prompt != null ? rec.prompt + (rec.decoded || 0) : null;
+    if (used != null) ctxHist.push({ t: now, every: 2000, v: used, m: modelId, s: rec.slot });
+  });
+  if (tpsHist.length > 1) trimPerf(tpsHist);
+  if (ctxHist.length > 1) trimPerf(ctxHist);
+  perfLast[modelId] = now;
+}
+
 // ---------- logo ----------
 // llama.cpp has no install folder to read a logo from, so take the icon of the server's own web UI (favicon.svg,
 // a near-black mark). Its web UI files are only served gzip-compressed (415 without Accept-Encoding: gzip).
@@ -253,7 +336,7 @@ function goOnline(b, d) {
     try { host = new URL(b).hostname; } catch (e) { /* ignore */ }
     local = /^(127\.|localhost$|\[?::1\]?$)/.test(host);
     // the server's process (+ in router mode every model's child process): the process row / AI processes total
-    if (local) procstats.watch('llamacpp', [+new URL(b).port || 80], MODEL_PROCS, { tree: true }); else procstats.unwatch('llamacpp');   // tree: a launcher that hides its fds anchors the engine's family (nix name fallback)
+    if (local) procstats.watch('llamacpp', [+new URL(b).port || 80], MODEL_PROCS, { tree: process.platform !== 'win32' }); else procstats.unwatch('llamacpp');   // tree: nix only - a launcher that hides its fds anchors the engine's family there (name fallback); on Windows it would anchor every llama.exe and break router attribution (105)
     if ((!logo.light || !logo.dark) && Date.now() - logo.tried > 60000) fetchLogo();
   }
 }
@@ -312,7 +395,7 @@ function readRouterModels(cb) {
       e.inputs = m.architecture && Array.isArray(m.architecture.input_modalities) ? m.architecture.input_modalities : null;
       e.port = state === 'loaded' && port ? port : null;
       if (state !== 'loaded' && old && old.state === 'loaded') { dropSlots(m.id); e.props = null; e.slots = null; }
-      if (local && e.port) procstats.watch(procKey(m.id), [e.port], MODEL_PROCS, { tree: true }); else procstats.unwatch(procKey(m.id));   // tree: see goOnline
+      if (local && e.port) procstats.watch(procKey(m.id), [e.port], MODEL_PROCS, { tree: process.platform !== 'win32' }); else procstats.unwatch(procKey(m.id));   // tree: nix only, see goOnline - on Windows this per-model key needs its own port tree (105)
       models[m.id] = e; seen[m.id] = true; ids.push(m.id);
     });
     order.forEach(function (id) { if (!seen[id]) { dropSlots(id); procstats.unwatch(procKey(id)); delete models[id]; } });
@@ -357,7 +440,9 @@ function readModel(m, now, cb) {
         dropSlots(m.id); m.slots = null; return cb();   // a model going away: /models will say so next look
       }
       m.slotsEnabled = true; m.slots = d;
-      trackSlots(d, Date.now(), m.id);
+      const tnow = Date.now();
+      trackSlots(d, tnow, m.id);
+      samplePerf(m.id, tnow);   // AI_SCOPE-101: the ~2 s wall-throttled feed of the tps / ctx display rings
       afterSlots();
     });
   };
@@ -413,19 +498,23 @@ function settlePeriod(m, base, after, period) {
   const pp = after.promptTokens - base.promptTokens, ps = after.promptSec - base.promptSec;
   const dc = after.cached - base.cached;
   if (!(dp > 0 && ds > 0) || (r.outputTokens && Math.abs(dp - r.outputTokens) > 2)) return;   // not this request's numbers
-  // generation: exact. llama counts its speed over the gaps between tokens (n - 1), as in its own timings.
-  r.outputTokens = dp; delete r.outputEstimated;
-  r.genTps = (dp > 1 ? dp - 1 : dp) / ds; r.genMs = Math.round(ds * 1000); r.genExact = true;
+  // generation: the counters measured it, so the counts and the two durations are exact.
+  const P = reqstats.PROV;
+  r.outputTokens = dp; reqstats.setProv(r, 'outputTokens', P.EXACT);
+  r.genTps = (dp > 1 ? dp - 1 : dp) / ds; r.genMs = Math.round(ds * 1000);
+  reqstats.setProv(r, 'genMs', P.EXACT);
+  reqstats.setProv(r, 'genTps', P.DERIVED);      // one step of arithmetic on two measured counters
   // prompt: only when the counters show its work (seen 0 for a request that was already running when AI_SCOPE
   // restarted) - else the first-token / duration estimates stay
   if (!(pp > 0 && ps > 0) && !(dc > 0)) return;
-  if (pp > 0 && ps > 0) r.promptTps = pp / ps;
-  r.promptMs = Math.round(ps * 1000);
-  if (dc >= 0) r.cachedTokens = dc || null;
-  r.firstTokenMs = r.promptMs;
-  r.durationMs = Math.round((ps + ds) * 1000);
+  if (pp > 0 && ps > 0) { r.promptTps = pp / ps; reqstats.setProv(r, 'promptTps', P.DERIVED); }
+  r.promptMs = Math.round(ps * 1000); reqstats.setProv(r, 'promptMs', P.EXACT);
+  if (dc >= 0) { r.cachedTokens = dc || null; reqstats.setProv(r, 'cachedTokens', P.EXACT); }
+  // llama's metrics give the prefill duration, never a first-token time: the column is answered by a
+  // SUBSTITUTE, which is exactly why it carries a marker (the same convention Bionic's log forces).
+  r.firstTokenMs = r.promptMs; reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
+  r.durationMs = Math.round((ps + ds) * 1000); reqstats.setProv(r, 'durationMs', P.DERIVED);
   r.start = r.end - r.durationMs;
-  r.exact = true;
 }
 function anyBusy() { return Object.keys(slotState).some(function (k) { return slotState[k].busy; }); }
 function schedule() {
@@ -436,7 +525,7 @@ function poll() {
   if (busy) return;
   busy = true;
   timer = null;
-  const done = function () { busy = false; schedule(); };
+  const done = function () { busy = false; procstats.attest('llamacpp', mirrorState()); schedule(); };   // AI_SCOPE-082: attest each cycle
   if (!base) {
     const list = configured ? [configured] : CANDIDATES;
     return detect(list, 0, function (b, d, locked) {
@@ -475,6 +564,29 @@ function poll() {
   });
 }
 
+// ---------- Hardware Mirror Lens attestation (AI_SCOPE-082; family rules: ~/ai-scope-terminology.md) ----------
+// Kickoff decision 2A: three states, each read straight from llama.cpp's own answers - nothing invented.
+//  live - reachable and a model is loaded (router: /models calls one loaded; single: /props names a model and it
+//         is not sleeping). procstats' real samples are then the only writer of the history; a missed process
+//         lookup stays a gap + n/a, never a false zero.
+//  idle - reachable, nothing loaded. In router mode the router's own process stays alive (44 MB on snow), but the
+//         mirror counts the model-holding family, so zeros are honest, "No Model Loaded" is the wording (077),
+//         and 084's arming gate releases the shared 2 s demand for an idle app (the cost 091 raised).
+//         A single-model server started with --sleep-after-idle is idle too: the model is out of memory even
+//         though the process lives (is_sleeping, already read for the model row at modelInfo()).
+//  off  - unreachable (goOffline): zeros, sub "llama.cpp Offline".
+// 'loading' is deliberately NOT attested: llama.cpp has no status AI_SCOPE can read that says a load is running
+// without asking a router about an unloaded model - which LOADS it (006's gotcha). 'unloading' / 'failed' are
+// recorded as absent from llama.cpp's API rather than invented (the 081 precedent for states the API lacks).
+// Kickoff 2B stays open as a test: if a router's /models is ever seen to carry a loading status string, that is
+// the honest moment to attest it - the router on snow has an empty models folder, so no load can be observed.
+function mirrorState() {
+  if (!online) return 'off';
+  if (router) return order.some(function (id) { return models[id] && models[id].state === 'loaded'; }) ? 'live' : 'idle';
+  const m = models[order[0]];
+  return m && m.state === 'loaded' && !(m.props && m.props.is_sleeping) ? 'live' : 'idle';
+}
+
 // ---------- state for the page ----------
 // Size on disk of a model file (router models that aren't loaded have no meta), read once per path.
 const fileSizes = {};
@@ -483,21 +595,129 @@ function fileSize(p) {
   if (!(p in fileSizes)) { try { fileSizes[p] = fs.statSync(p).size; } catch (e) { fileSizes[p] = null; } }
   return fileSizes[p];
 }
+// AI_SCOPE-098 review: resolve an UNLOADED router model to its file under the configured
+// --models-dir folder (the scope's 'Models folder' setting; local servers only). The router's
+// /models id IS the file stem relative to that folder. Exact stems win; a unique prefix match
+// covers quant-tagged files ("qwen2.5-coder-3b" -> Q4_K_M / Q8_0 siblings - each gets its own
+// file, never the same one twice); an ambiguous prefix is left as a gap, never guessed.
+// Split GGUFs (…-00001-of-00002) live in a subfolder named after the stem, like Hugging Face.
+function resolveModelFile(id) {
+  if (!modelsDir || !local || !id) return null;
+  const ck = modelsDir + '|' + id;
+  if (ck in fileResCache) return fileResCache[ck] || null;
+  let found = null;
+  try {
+    const key = String(id).split(':')[0];          // "repo/name:quant" -> the quant is the file's own tag
+    const stem = key.toLowerCase().replace(/[\\/]/g, '\u0000');   // an HF-style id nests folders
+    const direct = pathIsFile(path.join(modelsDir, key)) ? path.join(modelsDir, key) : null;
+    if (direct) found = direct;
+    if (!found) {
+      const q = String(id).split(':')[1];
+      const nest = path.join(modelsDir, key.replace(/[\\/]/g, path.sep));
+      if (q && dirExists(nest)) found = pickSplitOrTagged(nest, q);
+    }
+    if (!found) found = scanStem(modelsDir, stem, id);
+  } catch (e) { found = null; }
+  fileResCache[ck] = found || '';
+  return found;
+}
+// 106 item 4: the per-poll lens override (setModelsDir, fed by ?md=) is gone. modelsDir is set only
+// from the scope card at start(), so no request can retarget the folder the server reads files from.
+function pathIsFile(p) { try { return fs.statSync(p).isFile(); } catch (e) { return false; } }
+function dirExists(p) { try { return fs.statSync(p).isDirectory(); } catch (e) { return false; } }
+function pickSplitOrTagged(dir, quant) {
+  let files = [];
+  try { files = fs.readdirSync(dir); } catch (e) { return null; }
+  const first = files.filter(function (f) { return /-00001-of-\d+\.gguf$/i.test(f); })[0];
+  if (first) return path.join(dir, first);
+  const tagged = files.filter(function (f) { return /\.gguf$/i.test(f) && new RegExp('[-_.]' + quant.replace(/[^A-Za-z0-9_]/g, '') + '(?:[-_.]|$)', 'i').test(f); });
+  return tagged.length === 1 ? path.join(dir, tagged[0]) : null;
+}
+function scanStem(dir, stem, id) {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (e) { return null; }
+  const ggufs = names.filter(function (f) { return /\.gguf$/i.test(f); });
+  const exact = ggufs.filter(function (f) { return baseName(f).toLowerCase().replace(/\.gguf$/i, '') === stem; });
+  if (exact.length === 1) return path.join(dir, exact[0]);
+  if (exact.length > 1) return null;                        // several exact stems: no guessing
+  const pref = ggufs.filter(function (f) { return baseName(f).toLowerCase().replace(/\.gguf$/i, '').indexOf(stem) === 0; });
+  if (pref.length === 1) return path.join(dir, pref[0]);
+  if (pref.length > 1) {                                    // quant-tagged siblings: one per quant, never shared
+    const q = String(id).split(':')[1];
+    const t = q ? pref.filter(function (f) { return new RegExp('[-_.]' + q.replace(/[^A-Za-z0-9_]/g, '') + '(?:[-_.]|$)', 'i').test(baseName(f)); }) : [];
+    if (t.length === 1) return path.join(dir, t[0]);
+  }
+  return null;
+}
 // From a GGUF file name / model id: quantization ("Q4_K_M", "IQ3_XXS", "BF16") and parameter count ("35B", "26B")
-function quantFromName(s) { const m = /(?:^|[-_.])((?:I?Q\d+(?:_[A-Z0-9]+)*)|BF16|F16|F32)(?=[-_.]|$)/i.exec(baseName(s) || ''); return m ? m[1].toUpperCase() : null; }
+// Quant tags are their own tokens (UD-?I?Q<digits> with _suffixes, or BF16/F16/F32); the LAST one
+// in the name is the file's own quant. This fixes a live-test catch: the old bounded-prefix version
+// stopped at "_K" boundaries, so the compound tag Q8_0 / Q4_K_M came out truncated ("Q8").
+// Family tokens like "0.6B" never match the pattern, so they cannot confuse it.
+function quantFromName(s) {
+  const all = String(baseName(s) || '').match(/(?:UD-)?I?Q\d+(?:_[A-Za-z0-9]+)*|BF16|F16|F32/gi);
+  return all ? all[all.length - 1].toUpperCase() : null;
+}
 function paramsFromName(s) { const m = /(?:^|[-_.])(\d+(?:\.\d+)?)B(?=[-_.]|$)/i.exec(String(s || '')); return m ? +m[1] * 1e9 : null; }
+// split a huggingface.co repo_url from a GGUF header into { org, repo } (null if it is not HF)
+function hfRepo(hm) {
+  const u = hm && hm.repoUrl ? String(hm.repoUrl).trim().split(/\s+/)[0] : null;
+  const m = /^https?:\/\/huggingface\.co\/([^/\s]+)(?:\/([^/\s]+))?/i.exec(u || '');
+  if (!m) return null;
+  return { org: decodeURIComponent(m[1]), repo: m[2] ? decodeURIComponent(m[2]) : null };
+}
 function modelInfo(m) {
   const p = m.props || {}, dgs = p.default_generation_settings || {}, meta = m.meta || {};
-  const path = m.path || p.model_path || null;
+  // 098 review: an unloaded router model has no path from /models; resolve it from the scope's
+  // 'Models folder' setting so Size / Fit / header provenance stop being gaps (local servers only).
+  const path = m.path || p.model_path || resolveModelFile(m.id);
+  // AI_SCOPE-098 review: the GGUF's own header names its HF repo when /models did not
+  // (an unloaded model with a local path - same local-file rule as fileSize() above).
+  // The header's size_label is deliberately NOT rendered as Params: it is the packager's
+  // family-wide label (the user's point at review), not this variant's count.
+  let hfile = path;
+  // 106 item 2: rewrite the part number to shard 1. The old code was /(-0000)(\d)/ + an off-by-one
+  // slice, so x-00002-of-00003 became x-000021of-00003 (the header then fails quietly), and a 10th
+  // shard did not match the pattern at all, so the high shard's headerless tail got read instead.
+  // The dash sits outside the captured digits, and the digits are replaced whole, zero-padded to the
+  // file's own width: -00002 -> -00001, -00010 -> -00001, -000123 -> -000001.
+  const sm = path ? /-(\d{5,})(-of-\d+\.gguf$)/i.exec(path) : null;   // metadata lives in shard 1
+  if (sm && sm[1] !== '1'.padStart(sm[1].length, '0')) {
+    hfile = path.slice(0, sm.index) + '-' + '1'.padStart(sm[1].length, '0') + path.slice(sm.index + 1 + sm[1].length);
+  }
+  const hm = local && hfile ? ggufmeta.header(hfile) : null;
   return {
     id: m.id, name: m.id, state: m.state, path: path,
-    ftype: p.model_ftype || meta.ftype || quantFromName(path), size: num(meta.size) || fileSize(path),
+    // an unloaded router model's id IS its file stem ("Qwen2.5-Coder-3B-Q4_K_M"), so the quant
+    // reads from the id when the path is unknown; loaded models answer with props / meta.
+    ftype: p.model_ftype || meta.ftype || quantFromName(m.id) || quantFromName(path), size: num(meta.size) || fileSize(path),
     params: num(meta.n_params), paramsGuess: num(meta.n_params) ? null : paramsFromName(m.id) || paramsFromName(baseName(path)),
     context: num(dgs.n_ctx) || m.contextLength || null, ctxTrain: num(meta.n_ctx_train) || m.contextLength || null,
     slots: num(p.total_slots), sleeping: !!p.is_sleeping, port: m.port || null,
     // what it takes besides text: image / video / audio (router: /models; single: /props modalities)
     inputs: (m.inputs || (p.modalities ? Object.keys(p.modalities).filter(function (k) { return p.modalities[k]; }).map(function (k) { return k === 'vision' ? 'image' : k; }) : []))
       .filter(function (x) { return x !== 'text'; }),
+    // AI_SCOPE-098 (D3): the model id is normally an HF repo path ("Qwen/Qwen3-0.6B-GGUF"), so the
+    // publisher falls out of it; when the id is a plain local name, the GGUF header's repo_url
+    // names it instead. Neither: an honest gap.
+    publisher: (function () {
+      const s = String(m.id || '').split(':')[0].split('/');   // the ":quant" tag is not part of the HF repo name (live-test catch)
+      if (s.length > 1) return s[0];
+      const r = hfRepo(hm);
+      return r ? r.org : null;
+    })(),
+    publisherUrl: (function () {
+      const s = String(m.id || '').split(':')[0].split('/');   // the ":quant" tag is not part of the HF repo name (live-test catch)
+      if (s.length > 1) return 'https://huggingface.co/' + s[0];
+      const r = hfRepo(hm);
+      return r ? 'https://huggingface.co/' + r.org : null;
+    })(),
+    modelUrl: (function () {
+      const s = String(m.id || '').split(':')[0].split('/');   // the ":quant" tag is not part of the HF repo name (live-test catch)
+      if (s.length > 1) return 'https://huggingface.co/' + s.join('/');
+      const r = hfRepo(hm);
+      return r && r.repo ? 'https://huggingface.co/' + r.org + '/' + r.repo : null;
+    })(),
     process: router ? procstats.get(procKey(m.id)) : procstats.get('llamacpp'),
     metrics: m.metricsOn && m.met ? { promptTokens: m.met.promptTokens, cached: m.met.cached, predTokens: m.met.predTokens,
       genTps: m.met.predSec > 0 ? m.met.predTokens / m.met.predSec : null, promptTps: m.met.promptSec > 0 ? m.met.promptTokens / m.met.promptSec : null,
@@ -505,45 +725,59 @@ function modelInfo(m) {
     metricsOn: m.metricsOn === true,
   };
 }
-function getState(limit) {
+// AI_SCOPE-082: since (AI_SCOPE-084 item 7) sends only processHistory points newer than it - the mirror lenses keep
+// the ring on the client (web/js/mirror.js appends what arrives), so the 5-minute ring never rides the whole payload.
+// The two family fields sit in the object BEFORE the offline return: an uninstalled or unreachable server still has
+// to deliver the attested 'off' zeros (ollamastats.js / stratastats.js are the pattern; 077's review batch rule).
+// AI_SCOPE-098 (D2): the fit verdict for the Installed models lens. llama.cpp puts one model on
+// one card (router mode spawns an instance per model), so canSplit=false: never "fits across N GPUs".
+function withFit(x) {
+  if (x) { const f = hwstats.vramFit(x.size, hwstats.vramInfo(), false); x.fit = f ? f.fit : null; }
+  return x;
+}
+function getState(limit, since) {
   const out = { online: online, url: base || keyNeeded || configured || null, error: lastError, needsKey: !!keyNeeded,
                 router: router, build: rootProps && rootProps.build_info || null, slotsEnabled: null,
-                model: null, models: [], slots: [], current: [], average: null,
+                model: null, models: [], slots: [], current: [], average: null, contextStates: [],
                 totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),
-                process: procstats.get('llamacpp'), processSupported: procstats.supported() };
+                process: procstats.get('llamacpp'), processSupported: procstats.supported(),
+                // the Hardware Mirror Lens family: the 5-minute per-process ring and the Hardware card names / totals
+                processHistory: procstats.history('llamacpp', since || 0),
+                // AI_SCOPE-101: the token-performance rings ride every answer, offline included (082/093 rule)
+                tpsHistory: tpsHist, contextHistory: ctxHist,
+                processCards: hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; }) };
   if (!online) return out;
   // loaded models first, then the rest in the server's order
   const list = order.map(function (id) { return models[id]; }).filter(Boolean);
-  out.models = list.filter(function (m) { return m.state === 'loaded'; }).concat(list.filter(function (m) { return m.state !== 'loaded'; })).map(modelInfo);
+  out.models = list.filter(function (m) { return m.state === 'loaded'; }).concat(list.filter(function (m) { return m.state !== 'loaded'; })).map(modelInfo).map(withFit);
   out.model = out.models.filter(function (m) { return m.state === 'loaded'; })[0] || null;
   const loaded = list.filter(function (m) { return m.state === 'loaded' && m.slots; });
   out.slotsEnabled = loaded.length ? loaded.some(function (m) { return m.slotsEnabled !== false; }) : null;
   const now = Date.now();
   loaded.forEach(function (m) {
+    const sleeping = m.props && m.props.is_sleeping;   // 101: a sleeping model's held fill is void - the claim goes
     (m.slots || []).forEach(function (s) {
       const n = slotNums(s), st = slotState[m.id + '#' + s.id], rec = st && st.rec;
       out.slots.push({ model: m.id, id: s.id, busy: !!s.is_processing, task: n.task, nCtx: n.nCtx, promptTokens: n.prompt, cached: n.cached,
                        decoded: s.is_processing ? n.decoded : null, used: n.total, since: rec ? Math.round(rec.start) : null });
+      // AI_SCOPE-101 (D3): per-slot fill state for the Context lens - live while processing, held while idle,
+      // the whole slot token count straight off the app (n_prompt_tokens counts prompt + output so far).
+      if (!sleeping && n.total != null)
+        out.contextStates.push({ slot: s.id, model: m.id, used: n.total, max: n.nCtx, live: !!s.is_processing, at: now });
     });
   });
   Object.keys(slotState).forEach(function (k) {
     const rec = slotState[k].rec;
     if (!rec) return;
-    const s = rec.samples, n = s.length;
-    let tokS = null;
-    // speed over the last few looks (about 2.5 s), so one slow look doesn't jump it around
-    for (let i = n - 2; i >= 0; i--) {
-      if (s[n - 1].t - s[i].t >= 2500 || i === 0) {
-        if (s[n - 1].t > s[i].t && s[n - 1].decoded > s[i].decoded && s[i].decoded > 0) tokS = (s[n - 1].decoded - s[i].decoded) / ((s[n - 1].t - s[i].t) / 1000);
-        break;
-      }
-    }
+    const genTps = windowGenTps(rec.samples);   // AI_SCOPE-101: shared with samplePerf - card and ring compute the same number
     const gen = rec.decoded || 0, mi = models[rec.model];
+    // AI_SCOPE-100 (D4): canonical live names (cached -> cachedTokens, generated -> outputTokens,
+    // tokS -> genTps); the phase words here have been the family's since 082.
     out.current.push({
       model: rec.model, slot: rec.slot, task: rec.task, phase: gen > 0 ? 'generating' : 'reading',
-      promptTokens: rec.prompt, cached: rec.cached, generated: gen,
+      promptTokens: rec.prompt, cachedTokens: rec.cached, outputTokens: gen,
       maxTokens: rec.remain != null && rec.remain >= 0 ? gen + rec.remain : null,
-      tokS: tokS, elapsedMs: now - rec.start,
+      genTps: genTps, elapsedMs: now - rec.start,
       contextUsed: rec.prompt != null ? rec.prompt + gen : null,
       contextMax: rec.nCtx || (mi && mi.props && mi.props.default_generation_settings ? num(mi.props.default_generation_settings.n_ctx) : null),
       process: router ? procstats.get(procKey(rec.model)) : null,
@@ -552,12 +786,11 @@ function getState(limit) {
   });
   out.current.sort(function (a, b) { return a.elapsedMs - b.elapsedMs; });
   // token-weighted average generation speed of the recent requests (the loaded model's, or any in router mode)
-  const recent = requests.filter(function (r) { return r.genTps && r.outputTokens && (router || !out.model || r.model === out.model.name); }).slice(-20);
-  if (recent.length) {
-    let tok = 0, sec = 0;
-    recent.forEach(function (r) { tok += r.outputTokens; sec += r.outputTokens / r.genTps; });
-    if (sec > 0) out.average = { model: router ? null : out.model && out.model.name, genTps: tok / sec, requests: recent.length };
-  }
+  // AI_SCOPE-094 slice 3: the shared builder, with the rate-implied seconds this scope needs
+  // (llama.cpp gives per-request speed from the slot counters, never a duration to sum).
+  const anyModel = !!(router || !out.model);
+  const a = reqstats.avgSpeed(requests, anyModel ? null : out.model.name, { anyModel: anyModel, rateField: 'genTps' });
+  if (a) out.average = { model: router ? null : out.model && out.model.name, genTps: a.value, requests: a.requests };
   return out;
 }
 
@@ -566,8 +799,14 @@ function start(settings) {
   settings = settings || {};
   configured = String(settings.url || '').trim().replace(/\/+$/, '');
   apiKey = String(settings.apiKey || '').trim();   // optional key for a --api-key server
+  // AI_SCOPE-098 review: the router's --models-dir folder, set on the scope card when the server
+  // runs on this PC. The router never sends a path for UNLOADED models, so folder + file stem is
+  // the only way their Size / Fit / header provenance can be honest instead of gaps.
+  scopeModelsDir = String(settings.modelsDir || '').trim() || null;
+  modelsDir = scopeModelsDir;   // 106 item 4: the scope setting is the only source of this value
+  fileResCache = {};
   base = configured || null;
-  if (!requestsLoaded) { requestsLoaded = true; loadRequests(); }
+  loadRequests();          // the store ignores a second load (AI_SCOPE-094 slice 1)
   running = true;
   poll();
 }
@@ -577,7 +816,17 @@ function stop() {
   if (online) dropSlots();
   forgetModels();
   procstats.unwatch('llamacpp');
+  procstats.unattest('llamacpp');   // AI_SCOPE-082: an uninstalled scope stops claiming history (like 081 / strata / bionic)
   online = false; rootProps = null; router = null; lastError = null; base = null;
+  scopeModelsDir = null; modelsDir = null; fileResCache = {};
 }
 
-module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo, _test: { trackSlots: trackSlots, isLlama: isLlama } };
+module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo,
+  // _test exposes the shipped helpers for probes (098); the setters exist because `let` module
+  // bindings are not writable from a vm harness script (the 094 peak-attach precedent).
+  // 106 item 4: no setModelsDir on the public API - the route must not be able to retarget the folder.
+  // The _test setter stays so the shipped 098 probe can still drive resolveModelFile deterministically.
+  _test: { trackSlots: trackSlots, isLlama: isLlama, modelInfo: modelInfo, hfRepo: hfRepo, withFit: withFit, resolveModelFile: resolveModelFile,
+    setModelsDir: function (v) { modelsDir = String(v || '').trim() || null; }, effectiveDir: function () { return modelsDir; },
+           setLocal: function (v) { local = !!v; },
+           clearFileSizes: function () { Object.keys(fileSizes).forEach(function (k) { delete fileSizes[k]; }); } } };

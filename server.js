@@ -57,23 +57,8 @@ function sendWebFile(res, name, type) {
 }
 
 // Which scope each data endpoint belongs to: endpoints of scopes that aren't installed answer 404.
-// Peak whole-PC load per Bionic request. Its log rows are re-read on every poll, so peaks are cached
-// in memory by row. The log timestamp is written when the request finishes (1 s resolution).
-const lmPeaks = new Map();
-function lmPeak(r) {
-  const key = r.timestamp + '|' + r.task;
-  if (lmPeaks.has(key)) return lmPeaks.get(key);
-  const end = lmstats.tsToMs(r.timestamp);
-  if (end == null || r.totalMs == null) return null;
-  const oldest = hwstats.oldestSample();
-  if (Date.now() - end < 4000) return null;          // let the samples after the end come in first
-  const p = hwstats.peakBetween(end - r.totalMs - 1000, end + 2000);
-  if (p || oldest == null || end < oldest) {          // final: found, or too old to ever find
-    lmPeaks.set(key, p);
-    if (lmPeaks.size > 5000) lmPeaks.delete(lmPeaks.keys().next().value);
-  }
-  return p;
-}
+// AI_SCOPE-094 slice 4: the per-request whole-PC peak used to be computed here for Bionic, with its
+// own cache and an inferred window start. It lives in lmstats.js now, like every other scope.
 const SCOPE_ROUTES = [['/api/bionic', 'bionic'], ['/api/comfy', 'comfyui'], ['/api/ollama', 'ollama'], ['/api/strata', 'strata'], ['/api/llamacpp', 'llamacpp']];
 const PKG_VERSION = require('./package.json').version;
 // App scopes whose processes procstats watches (key = scope id), for the Processes scope's AI processes lens.
@@ -243,8 +228,10 @@ http.createServer((req, res) => {
   if (owner && !scopes.isInstalled(owner[1])) return sendJson(res, 404, { error: 'Scope not installed: ' + owner[1] });
   if (url.pathname === '/api/comfy') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    // AI_SCOPE-083: ComfyUI's mirror lenses ride the 084 delta (see /api/ollama) - &since=<t> sends only newer points.
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(comfystats.getState(limit)));
+    return res.end(JSON.stringify(comfystats.getState(limit, since)));
   }
   if (url.pathname === '/api/comfy/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -255,18 +242,32 @@ http.createServer((req, res) => {
   }
   if (url.pathname === '/api/ollama') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    // AI_SCOPE-081: Ollama's mirror lenses ride the 084 delta (see /api/strata) - &since=<t> sends only newer points.
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;
+    // AI_SCOPE-102 (D3/D5): the gen ring samples on this route from the SAME pick the card shows
+    // (one currentRequest() call, then getState reuses it - the 103 lmstats shape).
+    const cur = ollamastats.currentRequest();
+    ollamastats.samplePerf(cur);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(ollamastats.getState(limit, hwstats.vramInfo())));
+    return res.end(JSON.stringify(ollamastats.getState(limit, hwstats.vramInfo(), since, cur)));
   }
   if (url.pathname === '/api/strata') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    // AI_SCOPE-084 (item 7): since=<t> returns only processHistory points newer than t - the mirror lenses keep
+    // the ring on the client, so re-sending all 150 points every 2 s (tens of KB per poll) is pure payload cost.
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(stratastats.getState(limit)));
+    return res.end(JSON.stringify(stratastats.getState(limit, since)));
   }
   if (url.pathname === '/api/llamacpp') {
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    // AI_SCOPE-082: llama.cpp's mirror lenses ride the 084 delta (see /api/ollama) - &since=<t> sends only newer points.
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(llamacppstats.getState(limit)));
+    // 106 item 4: no Models folder override here. A GET must not change server-wide state - any client
+    // (or a second tab voting a different value each poll) could point the server at any folder on this
+    // PC. The folder comes only from the scope card's setting, applied in llamacppstats.start().
+    return res.end(JSON.stringify(llamacppstats.getState(limit, since)));
   }
   if (url.pathname === '/api/bionic/models') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -299,21 +300,27 @@ http.createServer((req, res) => {
   }
   if (url.pathname === '/api/bionic') {   // Bionic's requests (from its server logs)
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 1000);
+    const since = parseInt(url.searchParams.get('since'), 10) || 0;   // AI_SCOPE-103: the delta cursor now feeds BOTH rings below (was parsed inline)
     let body;
     try {
       body = lmstats.getLatestRequests(limit);
-      body.rows.forEach(r => { r.peak = lmPeak(r); });
       body.current = lmstats.getCurrentRequest();
       // A model unloaded mid-request (or its llama-server ended) leaves no "stop processing" line in the log, so the
       // request would look like it's running until the log has been silent for 2 min. Bionic's API knows better.
       if (body.current && lmapi.loadedCount() === 0) body.current = null;
       body.average = lmstats.getAverage(body.rows);
+      // AI_SCOPE-103 (D3/D5): the gen tok/s ring, sampled from the SAME pick the card shows, and
+      // the prompt twin of the average (stratastats' promptAverage shape) for the idle big value.
+      body.promptAverage = lmstats.getPromptAverage(body.rows);
+      lmstats.samplePerf(body.current);
+      body.tpsHistory = lmstats.tpsHistorySince(since);
       body.process = procstats.get('bionic');   // Bionic's model process (AI_SCOPE-049)
       body.processSupported = procstats.supported();
       // AI_SCOPE-077: the Hardware Mirror Lens family (web/js/mirror.js) also needs the 5-minute process
       // history and the Hardware card names / totals, like stratastats.js sends for Strata (072). The history
       // is kept for every cycle procstats finds Bionic's processes, so the tiles ride through "Inactive".
-      body.processHistory = procstats.history('bionic');
+      // AI_SCOPE-084 (item 7): ?since=<t> narrows it to the new points (see the /api/strata route).
+      body.processHistory = procstats.history('bionic', since);
       body.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
     }
     catch (e) { body = { rows: [], error: String(e && e.message || e) }; }

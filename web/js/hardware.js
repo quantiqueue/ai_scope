@@ -3,7 +3,9 @@
 
 // ---------- Tiles ----------
 // A tile: header tab (label; GPU temperature on the right), big value, sub line, meter and a 5-minute sparkline.
-// data-tile = its key in tileValues().
+// data-tile = its key in tileValues(). AI_SCOPE-092: the axis prints only "now" — the line spans the samples actually
+// held (up to five minutes of them) with the newest at the right edge, so a left-hand "5 min ago" would be a claim
+// the ring does not always honour.
 function tileHtml(t) {
   return `
   <div class="tilebox" data-tile="${t.id}">` + lensHeadMarkup(t.label, '<span class="temp" title="GPU temperature" hidden></span>') + `
@@ -14,7 +16,7 @@ function tileHtml(t) {
     <div class="spark"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
       <path class="area"></path><path class="line"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
       <div class="tip" hidden></div></div>
-    <div class="spark-axis"><span>5 min ago</span><span>now</span></div>
+    <div class="spark-axis"><span></span><span>now</span></div>
   </div></div>`;
 }
 
@@ -26,18 +28,6 @@ function tileValues(s) {
   const cards = s.gpus && s.gpus.length ? s.gpus : [{ util: s.gpu, vramUsed: s.vramUsed, vramTotal: s.vramTotal }];
   cards.forEach((g, i) => { v['gpu' + i] = g.util; v['vram' + i] = pct(g.vramUsed, g.vramTotal); v['pow' + i] = pct(g.power, g.powerLimit); });
   return v;
-}
-function setTile(el, value, big, sub, series) {
-  if (!el) return;
-  el.querySelector('.v').innerHTML = big;
-  el.querySelector('.sub').textContent = sub;
-  el.querySelector('.sub').title = sub;
-  el.querySelector('.meter > div').style.width = (value == null ? 0 : Math.max(0, Math.min(100, value))) + '%';
-  const pts = series.map((v, i) => v == null ? null : [series.length < 2 ? 100 : 100 * i / (series.length - 1), 100 - Math.max(0, Math.min(100, v))]);
-  const valid = pts.filter(Boolean);
-  const d = valid.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join(' ');
-  el.querySelector('.line').setAttribute('d', d);
-  el.querySelector('.area').setAttribute('d', valid.length ? d + ` L${valid[valid.length-1][0]} 100 L${valid[0][0]} 100 Z` : '');
 }
 
 // GPU temperature on the GPU tile's header (right). Amber from 80 °C, red from 90 °C. Hidden when unknown.
@@ -56,7 +46,17 @@ function setTemp(el, temp) {
 defineSource('hardware', '/api/hardware');
 subscribeSource('hardware', d => { if (d) hwHist = d.history; });   // always on: other scopes' "System load" rows need it
 const hwLatest = d => d.history[d.history.length - 1];
-const hwSeries = (d, id) => d.history.map(h => tileValues(h)[id]);
+const hwWin = d => sparkWindow((d && d.history) || []);   // 092: the ring windowed by TIME (5 min), keeping one sample older so the line enters from the edge
+const hwSeries = (d, id) => sparkSegs(hwWin(d), h => tileValues(h)[id]);
+const hwScaleHist = d => hwWin(d);   // the same slice the y-scales are computed over, so "top of the chart" is what you see
+// The Hardware sample nearest a given time (092): anything that needs the system ceilings (a mirror tile's RAM
+// ceiling, the System load row) must read them from the sample it is quoting, not from an index on a different axis.
+function hwSampleAt(t) {
+  if (!hwHist.length) return {};
+  let best = hwHist[0];
+  for (let i = 1; i < hwHist.length; i++) if (Math.abs(hwHist[i].t - t) < Math.abs(best.t - t)) best = hwHist[i];
+  return best;
+}
 const NA_HTML = '<span class="na">n/a</span>';
 
 // AI_SCOPE-077: hover registry for the Hardware Mirror Lens family (web/js/mirror.js). mirror.js pushes one
@@ -72,7 +72,7 @@ defineLens({
   render(L, d) {
     const s = hwLatest(d); if (!s) return;
     const v = tileValues(s), info = d.info;
-    setTile(L.el.querySelector('.tile'), v.cpu, v.cpu.toFixed(0) + '<small>%</small>', info.cpuModel + ' · ' + info.cores + ' threads', hwSeries(d, 'cpu'));
+    sparkTile(L.el.querySelector('.tile'), v.cpu, v.cpu.toFixed(0) + '<small>%</small>', info.cpuModel + ' · ' + info.cores + ' threads', hwSeries(d, 'cpu'));
   },
 });
 defineLens({
@@ -89,16 +89,16 @@ defineLens({
     if (L.settings.show === 'committed') {
       // Committed (reserved against RAM + pagefile) - the numbers 073 / 074 read in one CIM / meminfo call.
       const lim = s.commitLimit;
-      if (lim == null) { setTile(box, null, NA_HTML, 'Committed memory: not available on this system', []); return; }
+      if (lim == null) { sparkTile(box, null, NA_HTML, 'Committed memory: not available on this system', []); return; }
       const pctC = b => (b != null && lim) ? Math.min(100, 100 * b / lim) : null;
       const val = pctC(s.commitUsed);
-      setTile(box, val, (s.commitUsed != null ? GB(s.commitUsed) + '<small> / ' + GB(lim) + ' GB</small>' : NA_HTML),
+      sparkTile(box, val, (s.commitUsed != null ? GB(s.commitUsed) + '<small> / ' + GB(lim) + ' GB</small>' : NA_HTML),
         (val == null ? 'detecting…' : val.toFixed(0) + '% of commit limit'),
-        d.history.map(h => h.commitLimit ? pctC(h.commitUsed) : null));   // samples before the field landed stay gaps
+        sparkSegs(hwWin(d), h => h.commitLimit ? pctC(h.commitUsed) : null));   // samples before the field landed stay gaps
       return;
     }
     const v = tileValues(s);
-    setTile(box, v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', hwSeries(d, 'ram'));
+    sparkTile(box, v.ram, GB(s.ramUsed) + '<small> / ' + GB(s.ramTotal) + ' GB</small>', v.ram.toFixed(0) + '% used', hwSeries(d, 'ram'));
   },
 });
 // One graphics card: GPU usage (with temperature and power), VRAM, or both side by side.
@@ -131,7 +131,7 @@ defineLens({
     // Sub line: card name, then power draw / limit when the card reports it (NVIDIA). Temperature is the badge.
     const extra = [g.power != null ? Math.round(g.power) + (g.powerLimit ? ' / ' + Math.round(g.powerLimit) : '') + ' W' : null].filter(Boolean);
     if (gEl) {
-      setTile(gEl, util, util != null ? util.toFixed(0) + '<small>%</small>' : NA_HTML, [name].concat(extra).join(' · '), hwSeries(d, 'gpu' + i));
+      sparkTile(gEl, util, util != null ? util.toFixed(0) + '<small>%</small>' : NA_HTML, [name].concat(extra).join(' · '), hwSeries(d, 'gpu' + i));
       setTemp(gEl, g.temp);
     }
     if (vEl) {
@@ -140,7 +140,7 @@ defineLens({
         vramBig = GB(g.vramUsed) + (g.vramTotal ? '<small> / ' + GB(g.vramTotal) + ' GB</small>' : '<small> GB</small>');
         vramSub = (vram != null ? vram.toFixed(0) + '% used' : 'total unknown') + (gpus.length > 1 ? ' · ' + name : '');
       }
-      setTile(vEl, vram, vramBig, vramSub, hwSeries(d, 'vram' + i));
+      sparkTile(vEl, vram, vramBig, vramSub, hwSeries(d, 'vram' + i));
     }
   },
 });
@@ -167,7 +167,7 @@ defineLens({
       ? Math.round(g.power) + (g.powerLimit != null ? '<small> / ' + Math.round(g.powerLimit) + ' W</small>' : '<small> W</small>')
       : NA_HTML;
     const sub = g.power != null ? name : name + ' · power not available for this card';
-    setTile(box, tileValues(s)['pow' + i], big, sub, hwSeries(d, 'pow' + i));
+    sparkTile(box, tileValues(s)['pow' + i], big, sub, hwSeries(d, 'pow' + i));
     box.querySelector('.spark').title = g.powerLimit != null ? 'Top of the chart = ' + Math.round(g.powerLimit) + ' W (the card\'s power limit)' : '';
   },
 });
@@ -178,10 +178,11 @@ defineLens({
 // MB/s values; chart scaled to the busiest moment of the 5 minutes (+25 %), minimum 1 MB/s.
 const pcieOf = (s, i) => { const g = s && s.gpus && s.gpus[i]; return g && g.pcieRx != null ? g : null; };
 const pcieScale = (hist, i) => Math.max(1, 1.25 * hist.reduce((a, s) => { const g = pcieOf(s, i); return g ? Math.max(a, g.pcieRx || 0, g.pcieTx || 0) : a; }, 0));
-function pciePath(hist, i, key, max) {
-  const n = hist.length;
-  return hist.map((s, k) => { const g = s.gpus && s.gpus[i]; return g && g[key] != null ? [n < 2 ? 100 : 100 * k / (n - 1), 100 - Math.min(100, 100 * (g[key] || 0) / max)] : null; })
-    .filter(Boolean).map((p, j) => (j ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join(' ');
+// 092: both PCIe lines share the one time-mapped axis; a card that stops reporting breaks its line rather than
+// stretching the gap. The scale is computed over the same window the chart draws, so the ceiling matches what is on screen.
+// Edge caps (2026-11-01): the painters take SEGMENTS so one pass paints line, and sparkCapsInto closes both runs.
+function pcieSegs(pts, i, key, max) {
+  return sparkSegs(pts, s => { const g = s.gpus && s.gpus[i]; return g && g[key] != null ? Math.min(100, 100 * (g[key] || 0) / max) : null; });
 }
 const fmtMb = m => m == null ? '—' : m >= 1024 ? (m / 1024).toFixed(2) + ' GB/s' : Math.round(m) + ' MB/s';
 function linkText(l) {
@@ -204,7 +205,7 @@ defineLens({
     <div class="spark"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
       <path class="line"></path><path class="line wline"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
       <div class="tip" hidden></div></div>
-    <div class="spark-axis"><span>5 min ago</span><span class="dlegend"><i class="rd"></i>rx <i class="wr"></i>tx</span><span>now</span></div>
+    <div class="spark-axis"><span></span><span class="dlegend"><i class="rd"></i>rx <i class="wr"></i>tx</span><span>now</span></div>
   </div></div>`,
   render(L, d) {
     const info = d.info, gpus = info.gpus || [], i = L.settings.card;
@@ -223,14 +224,16 @@ defineLens({
       return;
     }
     const rx = g.pcieRx || 0, tx = g.pcieTx || 0, both = rx + tx;
-    const scale = pcieScale(d.history, i);
+    const scale = pcieScale(hwScaleHist(d), i);
     v.querySelector('.v').innerHTML = both + '<small> MB/s</small>';
     const lt = linkText(gpus[i] && gpus[i].link);
     v.querySelector('.sub').textContent = lt ? lt + ' · ' + name : name;   // 068: name the card next to the link text
     if (lt) v.querySelector('.sub').title = 'PCIe link between card and PC: Gen sets the per-lane speed, × the lanes (Gen 4 ×16 = 16 GB/s). Showing current vs what the card could use at most — current can drop while the card is idle; below max explains slow model loads.';
     v.querySelector('.meter > div').style.width = Math.max(0, Math.min(100, 100 * both / scale)) + '%';
-    v.querySelector('.line').setAttribute('d', pciePath(d.history, i, 'pcieRx', scale));
-    v.querySelector('.wline').setAttribute('d', pciePath(d.history, i, 'pcieTx', scale));
+    const rxSegs = pcieSegs(hwWin(d), i, 'pcieRx', scale), txSegs = pcieSegs(hwWin(d), i, 'pcieTx', scale);
+    v.querySelector('.line:not(.wline)').setAttribute('d', sparkPath(rxSegs));
+    v.querySelector('.wline').setAttribute('d', sparkPath(txSegs));
+    sparkCapsInto(v, rxSegs, txSegs);
     v.querySelector('.spark').title = 'Top of the chart = ' + fmtMb(scale) + ' (rx / tx MB/s)';
   },
 });
@@ -241,10 +244,10 @@ const fmtRate = b => b == null ? '—' : b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB/
 const diskOf = (s, id) => s && s.disks ? (id ? s.disks.find(x => x.id === id) : s.disks[0]) || null : null;
 // The lines are scaled to the busiest moment of the last 5 minutes (+25 %), at least 1 MB/s.
 const diskScale = (hist, id) => Math.max(1e6, 1.25 * hist.reduce((a, s) => { const x = diskOf(s, id); return x ? Math.max(a, x.read || 0, x.write || 0) : a; }, 0));
-function diskPath(hist, id, key, max) {
-  const n = hist.length;
-  return hist.map((s, i) => { const x = diskOf(s, id); return x ? [n < 2 ? 100 : 100 * i / (n - 1), 100 - Math.min(100, 100 * (x[key] || 0) / max)] : null; })
-    .filter(Boolean).map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join(' ');
+// 092: same time-mapped axis and the same break rule as every other lens; a disk that stops reporting is a hole, not a slope.
+// Edge caps (2026-11-01): SEGMENTS come back so sparkPath + sparkCapsInto paint each run's borders in one pass.
+function diskSegs(pts, id, key, max) {
+  return sparkSegs(pts, s => { const x = diskOf(s, id); return x ? Math.min(100, 100 * (x[key] || 0) / max) : null; });
 }
 defineLens({
   id: 'hardware.disk', scope: 'hardware', size: 'tile',
@@ -259,7 +262,7 @@ defineLens({
     <div class="spark"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
       <path class="line"></path><path class="line wline"></path><line class="guide" y1="0" y2="100" style="display:none"></line></svg>
       <div class="tip" hidden></div></div>
-    <div class="spark-axis"><span>5 min ago</span><span class="dlegend"><i class="rd"></i>read <i class="wr"></i>write</span><span>now</span></div>
+    <div class="spark-axis"><span></span><span class="dlegend"><i class="rd"></i>read <i class="wr"></i>write</span><span>now</span></div>
   </div></div>`,
   render(L, d) {
     const info = d.info, disks = info.disks || [], want = L.settings.disk || '';
@@ -279,18 +282,20 @@ defineLens({
     const sub = 'Read ' + fmtRate(x.read) + ' · Write ' + fmtRate(x.write);
     el.querySelector('.sub').textContent = sub; el.querySelector('.sub').title = 'Active time = how busy the disk was (like Task Manager)';
     el.querySelector('.meter > div').style.width = Math.max(0, Math.min(100, x.active || 0)) + '%';
-    const max = diskScale(d.history, id);
-    el.querySelector('.line:not(.wline)').setAttribute('d', diskPath(d.history, id, 'read', max));
-    el.querySelector('.wline').setAttribute('d', diskPath(d.history, id, 'write', max));
+    const max = diskScale(hwScaleHist(d), id);
+    const rdSegs = diskSegs(hwWin(d), id, 'read', max), wrSegs = diskSegs(hwWin(d), id, 'write', max);
+    el.querySelector('.line:not(.wline)').setAttribute('d', sparkPath(rdSegs));
+    el.querySelector('.wline').setAttribute('d', sparkPath(wrSegs));
+    sparkCapsInto(el, rdSegs, wrSegs);
     el.querySelector('.spark').title = 'Top of the chart = ' + fmtRate(max);
   },
 });
 
-// Setting of the Current request / Current job lenses (AI_SCOPE-020): show the process stats row (below) or not.
+// Setting of the Current request / Current run lenses (AI_SCOPE-020): show the process stats row (below) or not.
 const PROC_STATS_FIELD = { id: 'procStats', label: 'Show process stats', type: 'toggle', default: true,
   tip: 'While a request or job runs: the row with GPU, VRAM, CPU and RAM use — of the app\'s own process where known, otherwise of the whole computer.' };
 
-// ---- "System load" row on the Current request / Current job cards ----
+// ---- "System load" row on the Current request / Current run cards ----
 // Whole-computer totals from the latest Hardware sample (all apps together, not this request alone).
 // Shown only while something is running.
 // The "System load" row on the running-request cards: whole-computer GPU / VRAM / CPU / RAM.
@@ -369,60 +374,49 @@ function peakCell(p) {
 }
 
 // Hover on a sparkline (any tile, on any page): show the value at that point in time.
+// AI_SCOPE-092: the pointer picks a TIME on the axis the chart actually drew (lens.js sparkHover), then the nearest
+// sample to that time answers — the guide, the value and the clock label agree even when samples are missing or the
+// pace changed, which index math could not promise. Mirror tiles are dispatched first: they carry their own history
+// and can be hovered before the Hardware sampler has produced any (077).
 document.addEventListener('mousemove', e => {
   const spark = e.target.closest && e.target.closest('[data-tile] .spark'); if (!spark) return;
   const id = spark.closest('[data-tile]').dataset.tile;
-  // Hardware pages need the Hardware history; mirror tiles (mirror.js) carry their own, so they do not wait for it.
-  const mirrorTile = typeof MIRROR_HOVER !== 'undefined' && MIRROR_HOVER.some(m => id.indexOf(m.prefix) === 0);
-  if (!hwHist.length && !mirrorTile) return;
-  const r = spark.getBoundingClientRect();
-  const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-  const tip = spark.querySelector('.tip'), guide = spark.querySelector('.guide');
-  // 077: a mirror tile can be hovered before the Hardware sampler has any history (its branches read their own
-  // history). hwHist is non-empty whenever we are not in that case, so the guard below covers every read of h / v.
-  const h = hwHist.length ? hwHist[Math.round(f * (hwHist.length - 1))] : null;
-  if (mirrorTile && !h) {
-    for (let mi = 0; mi < MIRROR_HOVER.length; mi++) {
-      if (id.indexOf(MIRROR_HOVER[mi].prefix) === 0) { MIRROR_HOVER[mi].fn(spark, f, guide, tip); return; }
-    }
-  }
-  const i = Math.round(f * (hwHist.length - 1));
-  const v = id.indexOf('disk:') === 0 ? null : tileValues(h)[id];
-  const x = hwHist.length < 2 ? 100 : 100 * i / (hwHist.length - 1);
-  guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.style.display = '';
-  tip.hidden = false; tip.style.left = x + '%';
-  if (id.indexOf('disk:') === 0) {   // disk tile: read / write / active at that time
-    const x = diskOf(h, id.slice(5));
-    tip.textContent = (x ? 'R ' + fmtRate(x.read) + ' · W ' + fmtRate(x.write) + ' · ' + (x.active != null ? x.active.toFixed(0) : '—') + '%' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
-    return;
-  }
-  if (id.indexOf('pcie') === 0) {   // PCIe tile (AI_SCOPE-065): rx / tx at that time
-    const g = h.gpus && h.gpus[+id.slice(4)];
-    tip.textContent = (g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
-    return;
-  }
-  if (id === 'ramC') {   // Committed RAM tile (AI_SCOPE-074): reserved memory against the commit limit at that time
-    const lim = h.commitLimit;
-    tip.textContent = (lim != null && h.commitUsed != null
-      ? GB(h.commitUsed) + ' / ' + GB(lim) + ' GB (' + Math.min(100, Math.round(100 * h.commitUsed / lim)) + '%)'
-      : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
-    return;
-  }
-  // Hardware Mirror Lens tiles (AI_SCOPE-072/073/075/076, shared family since 077): the per-scope hover is
-  // registered by mirror.js against the tile-id prefix, so every scope's tiles read their OWN history.
-  // (Before 077 this handler held four hardcoded branches reading window.STRATA_PROC_HIST by name.)
+  const rect = spark.getBoundingClientRect();
+  const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const guide = spark.querySelector('.guide'), tip = spark.querySelector('.tip');
   if (typeof MIRROR_HOVER !== 'undefined') {
     for (let mi = 0; mi < MIRROR_HOVER.length; mi++) {
       if (id.indexOf(MIRROR_HOVER[mi].prefix) === 0) { MIRROR_HOVER[mi].fn(spark, f, guide, tip); return; }
     }
   }
+  const pts = sparkWindow(hwHist);
+  if (!pts.length) return;
+  sparkHover(spark, f, guide, tip, pts, h => hwTipText(h, id));
+});
+
+// The value the Hardware hover prints for one sample, by data-tile key ('cpu', 'ram', 'ramC', 'gpu<i>', 'vram<i>',
+// 'pow<i>', 'pcie<i>', 'disk:<id>'). The clock time is appended by sparkHover, same as the mirror tiles.
+function hwTipText(h, id) {
+  if (id.indexOf('disk:') === 0) {   // disk tile: read / write / active at that time
+    const d = diskOf(h, id.slice(5));
+    return d ? 'R ' + fmtRate(d.read) + ' · W ' + fmtRate(d.write) + ' · ' + (d.active != null ? d.active.toFixed(0) : '—') + '%' : 'n/a';
+  }
+  if (id.indexOf('pcie') === 0) {   // PCIe tile (AI_SCOPE-065): rx / tx at that time
+    const g = h.gpus && h.gpus[+id.slice(4)];
+    return g && g.pcieRx != null ? 'RX ' + g.pcieRx + ' · TX ' + (g.pcieTx || 0) + ' MB/s' : 'n/a';
+  }
+  if (id === 'ramC') {   // Committed RAM tile (AI_SCOPE-074): reserved memory against the commit limit at that time
+    const lim = h.commitLimit;
+    return (lim != null && h.commitUsed != null)
+      ? GB(h.commitUsed) + ' / ' + GB(lim) + ' GB (' + Math.min(100, Math.round(100 * h.commitUsed / lim)) + '%)' : 'n/a';
+  }
   if (id.indexOf('pow') === 0) {   // power tile (AI_SCOPE-027): watts at that time
     const g = h.gpus && h.gpus[+id.slice(3)];
-    tip.textContent = (g && g.power != null ? Math.round(g.power) + ' W' + (g.powerLimit ? ' of ' + Math.round(g.powerLimit) + ' W limit' : '') : 'n/a') + ' · ' + new Date(h.t).toLocaleTimeString();
-    return;
+    return g && g.power != null ? Math.round(g.power) + ' W' + (g.powerLimit ? ' of ' + Math.round(g.powerLimit) + ' W limit' : '') : 'n/a';
   }
-  tip.textContent = (v == null ? 'n/a' : v.toFixed(0) + '%') + ' · ' + new Date(h.t).toLocaleTimeString();
-});
+  const v = tileValues(h)[id];
+  return v == null ? 'n/a' : v.toFixed(0) + '%';
+}
 document.addEventListener('mouseout', e => {
   const spark = e.target.closest && e.target.closest('.spark');
   if (spark && !spark.contains(e.relatedTarget)) { spark.querySelector('.tip').hidden = true; spark.querySelector('.guide').style.display = 'none'; }
@@ -444,9 +438,4 @@ defineScopeLayout('hardware', () => {
   disks.forEach(x => items.push({ lens: 'hardware.disk', settings: { disk: x.id } }));   // AI_SCOPE-030
   return items;
 });
-subscribeSource('hardware', (d, err) => {
-  const meta = document.getElementById('hwMeta');
-  if (err) { meta.textContent = 'Could not reach server: ' + err.message; return; }
-  const s = hwLatest(d);
-  meta.textContent = s ? 'updated ' + new Date(s.t).toLocaleTimeString() + ' · every 2 s' : 'warming up…';
-});
+// AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).

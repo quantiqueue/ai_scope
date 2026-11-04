@@ -23,7 +23,8 @@ let fastMs = FAST_MS;            // AI_SCOPE-010: the settings' "Process Refresh
 const SLOW_MS = 30000;           // while nobody looks: keeps the query open (no cold start) and a coarse history
 const IDLE_MS = 30000;           // back to SLOW_MS this long after the last look
 const STALE_MS = 3 * SLOW_MS;    // a sample this old is not shown (the sampler is gone or stuck)
-const HIST_MS = 5 * 60 * 1000;   // samples kept for the lenses' 5-minute lines
+const HIST_MS = 5 * 60 * 1000;   // samples kept for the lenses' 5-minute lines (AI_SCOPE-092: sized in TIME; HIST_MAX below is only a safety cap)
+const HIST_MAX = Math.ceil(HIST_MS / 2000) + 20;   // the most samples that can fit in the window at the fastest legal pace (2 s), plus slack
 // How often to sample, read by proctop.ps1 every 250 ms (a faster pace wakes it at once).
 const CTL_FILE = path.join(os.tmpdir(), 'ai_scope-proctop-ctl-' + process.pid + '.txt');
 const PS_FILE = path.join(__dirname, 'proctop.ps1');
@@ -42,6 +43,7 @@ function dllFor(src) {
 
 // Exe icons (AI_SCOPE-023): path -> { id, png }, id -> png; pid -> exe path (sent once per process by proctop.ps1)
 const icons = {}, iconById = {}, pidPath = {};
+const sampleHandlers = [];   // AI_SCOPE-084: procstats.js aggregates its families from these samples
 let ps = null, lastLook = 0, idleTimer = null, startedAt = 0, latest = null, startError = null;
 let every = SLOW_MS, failures = 0, restartTimer = null, history = [];   // history: full (not partial) samples, oldest first
 // Start-up timings of the current sampler (AI_SCOPE-059): Node's spawn / first output / first blocks + the script's T lines
@@ -51,7 +53,7 @@ let startup = null;
 function handleBlock(lines) {
   const byPid = {};
   let partial = false;
-  const proc = pid => byPid[pid] || (byPid[pid] = { pid: pid, name: '', cpu: null, ram: null, luids: {} });
+  const proc = pid => byPid[pid] || (byPid[pid] = { pid: pid, name: '', cpu: null, ram: null, priv: null, ppid: 0, luids: {} });
   const num = s => { if (s === '' || s == null) return null; const v = parseFloat(String(s).replace(',', '.')); return isFinite(v) ? v : null; };
   lines.forEach(function (l) {
     const p = l.split('|');
@@ -67,6 +69,8 @@ function handleBlock(lines) {
       r.name = p[2]; r.cpu = num(p[3]); r.ram = num(p[4]);
       if (p[5]) pidPath[r.pid] = p[5];
       r.ioRead = num(p[6]); r.ioWrite = num(p[7]);   // all I/O bytes/s (disk, network, devices; AI_SCOPE-030)
+      if (p.length >= 9) r.priv = num(p[8]);         // AI_SCOPE-084: private bytes, for the mirror's RAM (Committed) lens
+      if (p.length >= 10) r.ppid = num(p[9]) || 0;   // AI_SCOPE-084: the parent, so procstats.js can resolve an app's process family from this table
     } else if (p[0] === 'G' && p.length >= 6) {
       const r = proc(+p[1]);
       r.luids[p[2].toLowerCase()] = { vram: num(p[3]) || 0, shared: num(p[4]) || 0, util: num(p[5]) };
@@ -75,13 +79,31 @@ function handleBlock(lines) {
   Object.keys(pidPath).forEach(function (pid) { if (!byPid[pid]) delete pidPath[pid]; });   // gone
   if (startup && partial && !startup.partialAt) startup.partialAt = Date.now();
   if (startup && !partial && !startup.fullAt) startup.fullAt = Date.now();
-  latest = { at: Date.now(), partial: partial, procs: Object.keys(byPid).map(function (k) { return byPid[k]; }).filter(function (r) { return r.pid > 0; }) };
+  latest = { at: Date.now(), every: every, partial: partial, procs: Object.keys(byPid).map(function (k) { return byPid[k]; }).filter(function (r) { return r.pid > 0; }) };   // 092: every sample carries the pace it was taken at
   if (!partial) {
     history.push(latest);
-    while (history.length && history[0].at < latest.at - HIST_MS) history.shift();
+    while (history.length > 1 && history[1].at < latest.at - HIST_MS) history.shift();   // 092: prune by TIME, keeping the one sample older than the window
+    if (history.length > HIST_MAX) history.splice(0, history.length - HIST_MAX);         // safety cap only
   }
+  // AI_SCOPE-084 (item 3): the app scopes' Hardware Mirror numbers (procstats.js) come from THIS sample rather
+  // than a second all-process loop of their own. Subscribers aggregate their own families out of it; a handler
+  // that throws never takes the sampler down.
+  sampleHandlers.forEach(function (fn) { try { fn(latest); } catch (e) { console.log('[proctop] sample handler failed: ' + e.message); } });
+}
+// Subscribe to samples ({ at, partial, procs }). Partial blocks (the sampler's first one, CPU % / GPU % / I/O not
+// in yet) are passed too - subscribers that need rates check .partial. Returns the unsubscribe function.
+function onSample(fn) {
+  sampleHandlers.push(fn);
+  return function () { const i = sampleHandlers.indexOf(fn); if (i >= 0) sampleHandlers.splice(i, 1); };
 }
 
+// One sampler, one rate (AI_SCOPE-084 item 3, the user's rule): the period is the fastest pace anything needs, and
+// every lens that shares this source is polled at THAT rate - no faked display cadence. uiEvery is 059's rule
+// (fast while a Processes lens is looked at, SLOW_MS after IDLE_MS of nobody looking); demands come from the app
+// scopes whose Hardware Mirror lenses sample their processes at 2 s (procstats.js). 060's configurable refresh
+// rate will hang off the same two inputs.
+let uiEvery = SLOW_MS;
+const demands = {};        // key -> ms
 function setEvery(ms) {
   if (ms === every && ps) return;
   const faster = ms < every;
@@ -89,19 +111,37 @@ function setEvery(ms) {
   if (NIX) { if (faster) nixKick(); return; }
   try { fs.writeFileSync(CTL_FILE, String(ms)); } catch (e) {}
 }
-// AI_SCOPE-010's "Process Refresh Rate": the watched pace, in ms (2-60 s). A sampler already on the old fast pace
+function computeEvery() {
+  let ms = uiEvery;
+  Object.keys(demands).forEach(function (k) { if (demands[k] < ms) ms = demands[k]; });
+  setEvery(ms);
+}
+function setLooked(ms) { uiEvery = ms; computeEvery(); }
+// Ask for a pace while an app scope needs numbers; release it when its watchers go quiet.
+function demand(key, ms) {
+  const n = Math.max(500, Math.min(60000, Math.round(ms)));
+  if (demands[key] === n) return;
+  demands[key] = n;
+  computeEvery();
+}
+function release(key) {
+  if (demands[key] === undefined) return;
+  delete demands[key];
+  computeEvery();
+}
+// AI_SCOPE-010's "Process Refresh Rate": the watched pace, in ms (2-60 s). A sampler already on the fast pace
 // moves to the new one at once; a cold one stays cold until someone looks.
 function setFastMs(ms) {
   const n = Math.max(2000, Math.min(60000, Math.round(ms)));
-  const wasOnFastPace = every === fastMs;
+  const wasOnFastPace = uiEvery === fastMs;
   fastMs = n;
-  if (wasOnFastPace) setEvery(fastMs);
+  if (wasOnFastPace) setLooked(fastMs);
 }
 
 // ---------- Linux / macOS sampler (AI_SCOPE-052) ----------
 // Every `every` ms: one snapshot of all processes (+ nvidia-smi on Linux), turned into P / G lines for handleBlock().
 // The first block comes at once with the plain values (W|partial, like AI_SCOPE-059's first block), the rates 1 s later.
-let nixTimer = null, nixPrev = null, nixLast = 0, nixBusy = false;
+let nixTimer = null, nixPrev = null, nixSnap = null, nixLast = 0, nixBusy = false;
 function nixCycle(first) {
   nixTimer = null;
   if (!ps || nixBusy) return;
@@ -118,13 +158,15 @@ function nixCycle(first) {
           const p = snap.procs[k], o = prev && dt > 0.2 && prev.procs[k] && prev.procs[k].start === p.start ? prev.procs[k] : null;
           const rate = function (a, b) { return o && a != null && b != null ? String(Math.max(0, (a - b) / dt)) : ''; };
           lines.push('P|' + p.pid + '|' + String(p.name).replace(/\|/g, '/') + '|' + (o ? String(Math.max(0, 100 * (p.cpu - o.cpu) / dt / cores)) : '') + '|' +
-            (p.rss || 0) + '||' + rate(p.ioR, o && o.ioR) + '|' + rate(p.ioW, o && o.ioW));
+            (p.rss || 0) + '||' + rate(p.ioR, o && o.ioR) + '|' + rate(p.ioW, o && o.ioW) + '|' +
+            (p.priv == null ? '' : String(p.priv)) + '|' + (p.ppid || 0));   // 084: the same 9th / 10th fields the Windows sampler sends
           const g = gpu && gpu[k];
           if (g) Object.keys(g).forEach(function (card) { lines.push('G|' + p.pid + '|' + card + '|' + g[card].vram + '|0|' + (g[card].util == null ? '' : g[card].util)); });
         });
         if (first && startup) { startup.begin = startup.spawnAt; startup.how = 'node'; }
         handleBlock(lines);
         nixPrev = snap;
+        nixSnap = snap;   // AI_SCOPE-084: procstats.js resolves families out of THIS snapshot instead of taking its own
       }
       nixTimer = setTimeout(function () { nixCycle(false); }, first ? 1000 : every);
     };
@@ -147,11 +189,11 @@ function startNix() {
 function start() {
   if (ps) return;
   if (NIX) {
-    if (!idleTimer) idleTimer = setInterval(function () { if (ps && every !== SLOW_MS && Date.now() - lastLook > IDLE_MS) setEvery(SLOW_MS); }, 5000);
+    if (!idleTimer) idleTimer = setInterval(function () { if (ps && uiEvery !== SLOW_MS && Date.now() - lastLook > IDLE_MS) setLooked(SLOW_MS); }, 5000);
     return startNix();
   }
   if (process.platform !== 'win32') return;
-  if (!idleTimer) idleTimer = setInterval(function () { if (ps && every !== SLOW_MS && Date.now() - lastLook > IDLE_MS) setEvery(SLOW_MS); }, 5000);
+  if (!idleTimer) idleTimer = setInterval(function () { if (ps && uiEvery !== SLOW_MS && Date.now() - lastLook > IDLE_MS) setLooked(SLOW_MS); }, 5000);
   let src; try { src = fs.readFileSync(PS_FILE, 'utf8'); } catch (e) { startError = 'proctop.ps1 is missing'; return; }
   let child;
   try {
@@ -216,7 +258,7 @@ function get() {
   if (!supported()) return { supported: false, procs: [] };
   lastLook = Date.now();
   if (!ps && !startError && !restartTimer) start();
-  setEvery(fastMs);
+  setLooked(fastMs);   // AI_SCOPE-084: a look sets the UI pace; a demand from an app scope can still be faster
   const fresh = latest && Date.now() - latest.at < STALE_MS;
   return {
     supported: true,
@@ -239,7 +281,7 @@ function get() {
 // when it opens or comes back after a gap. Doesn't count as a look.
 function getHistory() {
   if (!supported()) return { supported: false, samples: [] };
-  return { supported: true, every: every, lastLookAgo: lastLook ? Date.now() - lastLook : null, samples: history.map(function (h) { return { at: h.at, procs: shape(h, false) }; }) };
+  return { supported: true, every: every, lastLookAgo: lastLook ? Date.now() - lastLook : null, samples: history.map(function (h) { return { at: h.at, every: h.every || every, procs: shape(h, false) }; }) };   // 092: each kept sample carries its own pace
 }
 // ms after Node spawned PowerShell: psRunning (script began), firstOutput, partialBlock, fullBlock; and the script's own
 // phase times: types (+ how), counters, collect1, cycle1. null while unknown.
@@ -254,4 +296,7 @@ function startupTimes() {
 function icon(id) { return /^[0-9a-f]{12}$/.test(id) && iconById[id] || null; }
 function supported() { return process.platform === 'win32' || NIX; }
 module.exports = { start: start, get: get, history: getHistory, icon: icon, supported: supported, setFastMs: setFastMs,
+  everyMs: function () { return every; },   // AI_SCOPE-092: the pace the mirror rings stamp their points with
+  onSample: onSample, demand: demand, release: release,   // AI_SCOPE-084 item 3: shared samples and the shared pace
+  snapshot: function () { return NIX ? nixSnap : null; },   // the procnix snapshot behind the last sample (family resolving)
   _test: { handleBlock: handleBlock, latest: function () { return latest; } } };

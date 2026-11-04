@@ -100,11 +100,9 @@ function fmtUntil(ms) {
 }
 const ONONE = '—';
 const featTags = f => f && f.length ? f.map(x => '<span class="tag">' + escH(x) + '</span>').join('') : ONONE;
-// Bionic (LM Studio-format) log timestamps are local "YYYY-MM-DD HH:MM:SS"
-function lmTs(ts) {
-  const m = /^(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+)$/.exec(ts || '');
-  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : null;
-}
+// AI_SCOPE-094 slice 2: lmTs() is gone. It turned a Bionic log timestamp string into epoch ms on the
+// browser; lmstats.js now sends a real `end` on the record, so no client parses log stamps any more.
+// The server-side twin (tsToMs in lmstats.js) is what fills that field.
 // Text wrapped in an external link (with an "opens in new tab" icon) when a URL is known.
 const EXT_ICON = '<svg class="extico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
 function extLink(text, url, title) {
@@ -129,6 +127,19 @@ const store = {
 const fmtSec = ms => ms == null ? '—' : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + ' s';
 const fmtNum = n => n == null ? '—' : n.toLocaleString();
 const fmtTps = n => n == null ? '—' : n.toFixed(1);
+// AI_SCOPE-094: moved here from strata.js so the shared Requests columns (lens.js) can use it.
+const fmtPct = f => f == null ? '—' : Math.round(f * 100) + '%';
+// AI_SCOPE-094 slice 4: where a number came from (the server writes `src` per field; see reqstats.js).
+// exact / derived need no marker; estimated and substitute do - they are not measurements.
+const provOf = (r, f) => (r && r.src && r.src[f]) || 'exact';
+const provMarked = (r, f) => { const k = provOf(r, f); return k === 'estimated' || k === 'substitute'; };
+const provText = (r, f) => {
+  const k = provOf(r, f);
+  if (k === 'estimated') return 'Estimated by AI_SCOPE from what it could see between polls - the app gave no per-request measurement';
+  if (k === 'substitute') return 'Substituted: this app reports no such measurement, so the column carries a related number instead';
+  if (k === 'derived') return 'Computed by AI_SCOPE from the app\u2019s own reported numbers';
+  return null;
+};
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // Icon of custom scopes (tabs, Scopes page, dialogs): four tiles.

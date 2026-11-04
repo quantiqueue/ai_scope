@@ -1,7 +1,7 @@
 # AI_SCOPE proctop loop (AI_SCOPE-023): numbers for EVERY process, for the Processes scope's top-5 lenses.
 # proctop.js runs it from a temp file (-File) after filling in __PARENT__ (Node's PID) and __EVERY__ (ms between samples).
 # Every cycle prints:
-#   P|pid|exe|cpuPercent|workingSet|path|ioRead|ioWrite   one line per process (CPU % of the whole CPU, all cores); path (full exe path)
+#   P|pid|exe|cpuPercent|workingSet|path|ioRead|ioWrite|privateBytes|parentPid   one line per process (CPU % of the whole CPU, all cores); path (full exe path)
 #                                            only the first time a process is seen, '' after that or when Windows won't tell
 #                                            (refused: System32\<exe> if it exists, e.g. svchost.exe / dwm.exe); ioRead / ioWrite =
 #                                            bytes/s of ALL the process's I/O (disk, network, devices - AI_SCOPE-030)
@@ -71,7 +71,7 @@ public static class AiScopeTop {
     return res;
   }
   // ---- Every process in one call (AI_SCOPE-059): SYSTEM_PROCESS_INFORMATION entries, read by offset ----
-  class Snap { public long Cpu, Create, Rd, Wr; }   // CPU time (user + kernel, 100 ns), creation time (tells a reused PID apart), I/O bytes
+  class Snap { public long Cpu, Create, Rd, Wr, Priv, Ppid; }   // CPU time (user + kernel, 100 ns), creation time (tells a reused PID apart), I/O bytes, private bytes and parent pid (AI_SCOPE-084: the mirror's RAM (Committed) lens needs the first, procstats.js resolves each app's process family from the second - the rules the old procstats.ps1 ran, now on this table)
   static Dictionary<int, Snap> prevSnap = null; static long prevTicks = 0;
   static IntPtr spiBuf = IntPtr.Zero; static int spiLen = 0;
   // pid -> name, pid -> working set, pid -> counters. false if Windows refused (then the cycle has no per-process numbers).
@@ -85,7 +85,12 @@ public static class AiScopeTop {
       if (st != 0) return false;
       bool x64 = IntPtr.Size == 8;
       // offsets: 32 CreateTime, 40 UserTime, 48 KernelTime, 56 ImageName (UNICODE_STRING); then by pointer size:
-      int oNameBuf = x64 ? 64 : 60, oPid = x64 ? 80 : 68, oWs = x64 ? 144 : 104, oRd = x64 ? 232 : 160;   // oRd: ReadTransferCount, + 8 = WriteTransferCount
+      // oRd: ReadTransferCount, + 8 = WriteTransferCount.
+      // oPriv (AI_SCOPE-084) = PrivateUsage, 32 bytes before ReadTransferCount; verified on snow 2026-10-29 against
+      // Get-Process PrivateMemorySize64 (and it equals PagefileUsage there, as psapi's PROCESS_MEMORY_COUNTERS reports).
+      // oPpid (AI_SCOPE-084) = InheritedFromUniqueProcessId, the ULONG_PTR right after UniqueProcessId - verified the
+      // same day against Get-CimInstance Win32_Process.ParentProcessId for 8 processes, all matching.
+      int oNameBuf = x64 ? 64 : 60, oPid = x64 ? 80 : 68, oPpid = oPid + 8, oWs = x64 ? 144 : 104, oRd = x64 ? 232 : 160, oPriv = oRd - 32;
       long p = spiBuf.ToInt64();
       while (true) {
         IntPtr e = new IntPtr(p);
@@ -94,7 +99,8 @@ public static class AiScopeTop {
         int nlen = Marshal.ReadInt16(e, 56) & 0xFFFF; IntPtr nbuf = Marshal.ReadIntPtr(e, oNameBuf);
         string name = pid == 0 ? "Idle" : nbuf != IntPtr.Zero && nlen > 0 ? Marshal.PtrToStringUni(nbuf, nlen / 2) : pid == 4 ? "System" : "";
         Snap s = new Snap(); s.Create = Marshal.ReadInt64(e, 32); s.Cpu = Marshal.ReadInt64(e, 40) + Marshal.ReadInt64(e, 48);
-        s.Rd = Marshal.ReadInt64(e, oRd); s.Wr = Marshal.ReadInt64(e, oRd + 8);
+        s.Rd = Marshal.ReadInt64(e, oRd); s.Wr = Marshal.ReadInt64(e, oRd + 8); s.Priv = Marshal.ReadInt64(e, oPriv);
+        s.Ppid = (long)Marshal.ReadIntPtr(e, oPpid).ToInt64();
         inst[pid] = name; ws[pid] = (double)Marshal.ReadIntPtr(e, oWs).ToInt64(); now[pid] = s;
         if (next <= 0) break;
         p += next;
@@ -170,8 +176,13 @@ public static class AiScopeTop {
         if (path != "" && !iconSent.Contains(path)) { iconSent.Add(path); iconQueue.Enqueue(path); }
       }
       double rv, xv; bool hr = ior.TryGetValue(pid, out rv), hx = iow.TryGetValue(pid, out xv);
+      // AI_SCOPE-084: private bytes (the mirror's RAM (Committed) lens) and the parent pid (procstats.js resolves
+      // each app's process family from the sample's own table - the 077 generic-runner and 080 tree rules used to
+      // run here, next to a second CreateToolhelp32Snapshot that cost 125-240 ms every re-resolve).
+      Snap snp = null; now.TryGetValue(pid, out snp);
       sb.Append("P|" + pid + "|" + name.Replace("|", "/") + "|" + (hc ? F(Math.Max(0, cv)) : "") + "|" + (hw ? F(wv) : "") + "|" + path + "|" +
-        (hr ? F(Math.Max(0, rv)) : "") + "|" + (hx ? F(Math.Max(0, xv)) : "") + "\n");
+        (hr ? F(Math.Max(0, rv)) : "") + "|" + (hx ? F(Math.Max(0, xv)) : "") + "|" + (snp != null ? F(snp.Priv) : "") + "|" +
+        (snp != null ? snp.Ppid.ToString() : "0") + "\n");
     }
     // forget processes that are gone
     List<int> gone = new List<int>(); foreach (int k in seen.Keys) if (!inst.ContainsKey(k)) gone.Add(k); foreach (int k in gone) seen.Remove(k);
@@ -216,20 +227,41 @@ if (-not [AiScopeTop]::Open()) { exit 1 }
 $t = $sw.ElapsedMilliseconds; $first = [AiScopeTop]::Cycle($true); $t = $sw.ElapsedMilliseconds - $t
 [Console]::Out.Write('T|types|' + $tTypes + '|' + $how + "`nT|counters|" + [AiScopeTop]::AddMs + "`nT|collect1|" + [AiScopeTop]::CollectMs +
   "`nT|cycle1|" + $t + "`n" + $first + "---`n"); [Console]::Out.Flush()
-# Pace (AI_SCOPE-059): ms between samples, from the control file proctop.js writes (fast while a Processes lens is looked
-# at, slow otherwise). Read every 250 ms while waiting; a faster pace than the current wait takes a sample at once.
+# Pace (AI_SCOPE-059): ms between samples, from the control file proctop.js writes (fast while a Processes lens is
+# looked at, slow otherwise; AI_SCOPE-084 adds a demand from the app scopes). AI_SCOPE-090: $every is the PERIOD, not
+# the sleep - the schedule is computed from the moment the last cycle BEGAN, so the cycle's own time (200-230 ms over
+# ~350 processes on snow, and 226 ms in its own T|cycle1 timing) counts against it. Before this a 2 s pace put
+# samples 2.13-2.26 s apart, which made the "every 2 s" the page prints and the "about 2 s" in AI_SCOPE-084's notes
+# both slightly untrue. A faster pace from the control file still takes the next sample at once (never closer than
+# 1 s to the last cycle - CPU % / GPU % / I/O are rates and need the span).
 $ctl = '__CTL__'; $every = __EVERY__
 function Pace { try { $v = [int]([IO.File]::ReadAllText($ctl).Trim()); if ($v -ge 1000) { return $v } } catch {}; return $every }
-$wait = 1000   # first numbers: CPU % and GPU % need two samples, 1 s apart is enough (then every $every ms)
+# $next is measured on $sw, the stopwatch this script already runs for its start-up timings; $last marks the start of
+# the current cycle so the wait is period - cycle time rather than period + cycle time.
+$last = $sw.ElapsedMilliseconds
+$next = $last + 1000   # first numbers: CPU % and GPU % need two samples, 1 s apart is enough (then every $every ms)
 while ($true) {
   if (-not [AiScopeTop]::Alive(__PARENT__)) { exit }
-  $slept = 0
-  while ($slept -lt $wait) {
-    Start-Sleep -Milliseconds 250; $slept += 250
+  while ($true) {
+    $rem = $next - $sw.ElapsedMilliseconds
+    if ($rem -le 0) { break }
+    # the slice is what is LEFT, capped at 250 ms - a fixed 250 ms slice overshoots by the Windows timer
+    # granularity (~15 ms each), and eight of them added ~120-200 ms to the "2 s" period (measured 2026-10-29:
+    # median 2196 ms with fixed slices).
+    # the argument MUST be parenthesised: at argument position PowerShell reads a bare
+    # [Math]::Min(250, ...) as the literal string "[Math]::Min", the binding fails, and with
+    # $ErrorActionPreference = 'SilentlyContinue' (line 23) the failed statement is invisible -
+    # the loop then spins with no wait at all (measured 2026-10-30: 4195 passes / 1812 ms of CPU
+    # for one 1.8 s window, a whole core).
+    Start-Sleep -Milliseconds ([Math]::Min(250, [Math]::Max(1, $rem)))
     $e = Pace
-    if ($e -ne $every) { $faster = $e -lt $every; $every = $e; if ($faster) { $wait = [Math]::Min($wait, [Math]::Max(1000, $slept)) } }   # rates need >= 1 s
+    if ($e -ne $every) {
+      $every = $e
+      $next = $last + [Math]::Max(1000, $every)     # faster: take it now if already due; slower: spread the wait
+    }
   }
-  $wait = $every
+  $last = $sw.ElapsedMilliseconds
   [Console]::Out.Write([AiScopeTop]::Cycle($false) + "---`n"); [Console]::Out.Flush()
   $icons = [AiScopeTop]::Icons(40); if ($icons) { [Console]::Out.Write($icons); [Console]::Out.Flush() }   # read with the next block
+  $next = $last + [Math]::Max(1000, $every)         # the next cycle starts a full $every after THIS one started
 }

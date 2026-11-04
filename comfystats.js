@@ -184,10 +184,23 @@ function detect(cb) {
 }
 
 let busy = false;
+// ---------- Hardware Mirror Lens attestation (AI_SCOPE-083; family rules: ~/ai-scope-terminology.md) ----------
+// Kickoff decision 2A: two states, read straight from ComfyUI's own answers - nothing invented.
+//  live - reachable. Deliberately also while no job runs: unlike every other app scope, an idle ComfyUI keeps
+//         its last checkpoint resident in VRAM (its cache does not free when a job ends), so attesting 'idle'
+//         would write heartbeat zeros over a real multi-GB holding - a false zero. procstats' real samples are
+//         the only history writer then; a missed process lookup stays a gap + n/a, never a fake dip.
+//  off  - unreachable (detect / /queue failure): zeros, sub "ComfyUI Offline". This finally unarms the key while
+//         the app is down - the root fix 091 only patched around (the last never-attesting key until now).
+// 'idle' is not attested (the residency above); 'loading' is invisible outside a running job - the load happens
+// inside a prompt already in queue_running, where the real 2 s samples cover it; 'unloading' has no state API;
+// 'failed' arrives only in /history after the job left the queue, so a one-cycle attestation would be synthetic.
+// All recorded absent, not invented (the 081 / 082 precedent).
+function mirrorState() { return online ? 'live' : 'off'; }
 function poll() {
   if (busy) return;
   busy = true;
-  const done = function () { busy = false; };
+  const done = function () { busy = false; procstats.attest('comfyui', mirrorState()); };   // AI_SCOPE-083: attest each cycle (llamacppstats.js pattern)
   if (!base) {
     return detect(function (ok) {
       online = ok; if (!ok) { current = null; pending = 0; lastError = 'ComfyUI not reachable on ' + CANDIDATES.join(', '); }
@@ -342,10 +355,14 @@ function stop() {
   timers.forEach(function (t) { clearInterval(t); clearTimeout(t); });
   timers = [];
   procstats.unwatch('comfyui');
+  procstats.unattest('comfyui');   // AI_SCOPE-083: an uninstalled scope stops claiming history (like 081 / 082)
   base = null; online = false; current = null; pending = 0; lastError = null;
 }
 
-function getState(limit) {
+// state for the page
+// AI_SCOPE-083: since (AI_SCOPE-084 item 7) sends only processHistory points newer than it - the mirror lenses
+// keep the ring on the client, so the 5-minute ring never rides the whole payload.
+function getState(limit, since) {
   limit = limit || 100;
   const now = Date.now();
   // Avg seconds per run for the most recent model (successful runs only).
@@ -369,7 +386,11 @@ function getState(limit) {
     } : null,
     average: avg,
     // ComfyUI's own processes (Windows): VRAM / GPU % per card, CPU %, RAM; null elsewhere or if not found
-    process: online ? procstats.get('comfyui') : null,
+    process: online ? procstats.get('comfyui') : null, processSupported: procstats.supported(),
+    // AI_SCOPE-083: the Hardware Mirror Lens family - the 5-minute per-process ring (delta'd by since) and the
+    // Hardware card names / totals, the shape ollamastats.js / llamacppstats.js send (081 / 082).
+    processHistory: procstats.history('comfyui', since || 0),
+    processCards: hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; }),
     totalRuns: runs.length,
     runs: runs.slice(-limit).reverse(),
   };

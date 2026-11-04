@@ -11,6 +11,7 @@
 'use strict';
 const http = require('http');
 const fs = require('fs');
+const path = require('path');
 const hwstats = require('./hwstats');
 const procstats = require('./procstats');   // Strata's model process: VRAM per card, GPU %, CPU, RAM (Windows; AI_SCOPE-051)
 // The engine (python, serve/server.py) listens on the instance's private port (e.g. 18500) and runs the model in a child
@@ -25,7 +26,9 @@ const paths = require('./paths');                       // data folder: ~/.ai_sc
 
 const DEFAULT_URL = 'http://127.0.0.1:47831';
 const REQ_FILE = paths.file('strata-requests.jsonl');
-const MAX_IN_MEMORY = 1000;
+const reqstore = require('./reqstore');            // AI_SCOPE-094 slice 1: the shared history store
+const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
+const ggufmeta = require('./ggufmeta');            // AI_SCOPE-098 review: GGUF header provenance (HF repo, size label)
 
 let base = DEFAULT_URL;
 let timer = null;
@@ -34,10 +37,27 @@ let online = false;
 let lastError = null;
 let native = null;          // last good /api/native response
 let fetchedAt = 0;
-let requests = [];          // saved finished requests, oldest first
 const known = {};           // key -> true (saved)
 const waiting = {};         // key -> raw request seen but not saved yet (waiting for the samples after it ended)
-let requestsLoaded = false;
+// One store, one file, this scope's own 1000-row ring. `requests` is the store's live array:
+// the store mutates it in place, so every reader below keeps seeing the same array.
+const store = reqstore.createStore({
+  file: REQ_FILE,
+  accept: function (r) { return !!r.key && !known[r.key]; },   // dedupe what the file already holds
+  remember: function (r) { if (r.key) known[r.key] = true; },
+  // AI_SCOPE-094 slice 2: old files are never rewritten, so every line saved before this rename
+  // arrives with the old names. Map them on read (the map is permanent, not transitional).
+  mapRow: function (r) {
+    if (r.reused !== undefined) { r.cachedTokens = r.reused; delete r.reused; }
+    if (r.decodeMs !== undefined) { r.genMs = r.decodeMs; delete r.decodeMs; }
+    // slice 4: lines saved before the provenance vocabulary carry the old boolean instead.
+    if (r.genDerived !== undefined) { if (r.genDerived) reqstats.setProv(r, 'genTps', reqstats.PROV.DERIVED); delete r.genDerived; }
+    if (r.promptTps != null) reqstats.setProv(r, 'promptTps', reqstats.PROV.DERIVED);
+    return r;
+  },
+  onError: function (msg) { lastError = msg; }
+});
+const requests = store.rows();
 let logo = { tried: 0, light: null, dark: null };   // Strata's mark for light / dark backgrounds
 
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
@@ -59,42 +79,36 @@ function getJson(path, timeout, cb) {
   req.on('error', function (e) { cb(e); });
 }
 
-// ---------- saved requests ----------
-function loadRequests() {
-  let text = '';
-  try { text = fs.readFileSync(REQ_FILE, 'utf8'); } catch (e) { return; }
-  text.split(/\r?\n/).forEach(function (l) {
-    if (!l.trim()) return;
-    try { const r = JSON.parse(l); if (r && r.key && !known[r.key]) { known[r.key] = true; requests.push(r); } } catch (e) { /* skip bad line */ }
-  });
-  requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests = requests.slice(-MAX_IN_MEMORY);
-}
-function saveRequest(r) {
-  known[r.key] = true;
-  requests.push(r);
-  if (requests.length > 1 && (requests[requests.length - 2].end || 0) > (r.end || 0)) requests.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (requests.length > MAX_IN_MEMORY) requests.shift();
-  try { paths.ensure(); fs.appendFileSync(REQ_FILE, JSON.stringify(r) + '\n'); } catch (e) { lastError = 'save failed: ' + e.message; }
-}
+// ---------- saved requests (the store does the read, parse, sort, trim, append, cap) ----------
+function loadRequests() { store.load(); }
+function saveRequest(r) { store.append(r); }
 // One finished request from the engine's metrics -> our row. `time` is when it finished (seconds).
 function toRow(inst, x) {
   const end = num(x.time) != null ? x.time * 1000 : null;
   const dur = num(x.duration_s) != null ? x.duration_s * 1000 : null;
   const promptRead = num(x.prompt_read);
-  const promptMs = num(x.prompt_ms), decodeMs = num(x.decode_ms), out = num(x.output_tokens);
-  return {
+  const promptMs = num(x.prompt_ms), genMs = num(x.decode_ms), out = num(x.output_tokens);
+  const row = {
     key: inst.id + ':' + x.id, id: String(x.id), instanceId: inst.id,
     model: inst.label || inst.model || 'unknown', variant: inst.model || null,
     start: end != null && dur != null ? end - dur : null, end: end, durationMs: dur, finish: x.finish || null,
-    promptTokens: num(x.prompt_tokens), reused: num(x.reused), promptRead: promptRead, outputTokens: out,
-    promptMs: promptMs, decodeMs: decodeMs,
-    genTps: num(x.decode_tok_s) != null ? x.decode_tok_s : (out && decodeMs ? out / (decodeMs / 1000) : null),
+    // AI_SCOPE-094 slice 2: canonical names — Strata's `reused` is the shared Cached column,
+    // and its `decode_ms` is generation time (`genMs`), like every other scope.
+    promptTokens: num(x.prompt_tokens), cachedTokens: num(x.reused), promptRead: promptRead, outputTokens: out,
+    promptMs: promptMs, genMs: genMs,
+    genTps: num(x.decode_tok_s) != null ? x.decode_tok_s : (out && genMs ? out / (genMs / 1000) : null),
     promptTps: promptRead && promptMs ? promptRead / (promptMs / 1000) : null,
     firstTokenMs: num(x.first_engine_token_s) != null ? x.first_engine_token_s * 1000 : null,
     hitRate: num(x.hit_rate),
     draftsOffered: num(x.drafts_offered), draftsAccepted: num(x.drafts_accepted),
   };
+  // AI_SCOPE-094 slice 4: provenance. Every count and duration above is Strata's own reading, so it
+  // needs no entry (no entry = exact). Speed is the exception: Strata reports decode_tok_s, and when
+  // it does not we divide tokens by time ourselves; its prompt speed is always ours, since Strata
+  // gives no prompt-token rate at all.
+  if (num(x.decode_tok_s) == null) reqstats.setProv(row, 'genTps', reqstats.PROV.DERIVED);
+  reqstats.setProv(row, 'promptTps', reqstats.PROV.DERIVED);
+  return row;
 }
 function collectRequests(instances) {
   const now = Date.now();
@@ -116,6 +130,55 @@ function collectRequests(instances) {
   });
 }
 
+// ---------- live generation-speed history (AI_SCOPE-093 slice 1, strata.tps lens) ----------
+// One point per poll while Strata reports live.tok_s - the engine's own number; the field is optional, and an
+// absent one is a gap, never a derived stand-in (the 072 no-invented-numbers rule). Time-sized like the procstats
+// rings (092): keep the window plus one older sample so the leftmost segment enters from the edge; the count is a
+// safety cap only. Each point carries `every` (the 2 s poll pace that made it) so a chart judges a gap by the pace
+// of that moment, and `m` (the model) for the hover and any later per-model series. Idle polls add NOTHING:
+// between requests the line breaks honestly - absence of a number is never a number (077).
+const TPS_WINDOW = 300000, TPS_CAP = 170;
+let tpsHist = [];
+function pushTps(t, every, v, model) {
+  tpsHist.push({ t: t, every: every, v: v, m: model });
+  const last = tpsHist[tpsHist.length - 1].t;
+  while (tpsHist.length > 1 && tpsHist[1].t < last - TPS_WINDOW) tpsHist.shift();
+  if (tpsHist.length > TPS_CAP) tpsHist.splice(0, tpsHist.length - TPS_CAP);
+}
+
+// AI_SCOPE-093 slice 2 (strata.ptps lens): the same shape for prompt-processing speed. Strata reports
+// live.prefill_tok_s_mean - a running mean of the CURRENT request's prefill. Only the prompt phases count
+// ('reading' / 'thinking'): sampling during 'generating' would replay a finished mean as fresh history,
+// which the 072 no-invented-numbers rule forbids. Idle polls again add nothing.
+// REVISED AGAIN 2026-11-01 17:50 (user: "Gen, Prompt, and Context, and Hit should create an edge border if an
+// N/A occurs on refresh"): the real-wait stamp from the neighbour-join revision (below the 12:09 note) is
+// SUPERSEDED - it hid dropouts by making every gap equal its own stamp. ptps points carry the 2 s PACE stamp
+// like tps / ctx, so a poll that found no mean is a visible N/A hole on the clock board, bordered at the faces
+// that face it. Absence is information, not something to paper over.
+let ptpsHist = [];
+function pushPtps(t, every, v, model) {
+  ptpsHist.push({ t: t, every: every, v: v, m: model });
+  const last = ptpsHist[ptpsHist.length - 1].t;
+  while (ptpsHist.length > 1 && ptpsHist[1].t < last - TPS_WINDOW) ptpsHist.shift();
+  if (ptpsHist.length > TPS_CAP) ptpsHist.splice(0, ptpsHist.length - TPS_CAP);
+}
+
+// AI_SCOPE-093 slice 3 (strata.ctx lens): context fill sampled while a request runs (prompt + generated -
+// the number the running card shows), so each run draws a rising ramp. ctxLast is the fill the engine was
+// LAST SEEN holding: Strata keeps its KV cache between requests on the same loaded instance (that is what
+// makes the next turn report millions of reused tokens), so an idle "current context" is a real claim only
+// while the same instance is still loaded - an unload or a model switch makes it stale, and getState checks
+// the instance id before returning it.
+let ctxHist = [];
+let ctxLast = null;   // { t, v, m, id }
+function pushCtx(t, every, v, model, instId) {
+  ctxHist.push({ t: t, every: every, v: v, m: model });
+  const last = ctxHist[ctxHist.length - 1].t;
+  while (ctxHist.length > 1 && ctxHist[1].t < last - TPS_WINDOW) ctxHist.shift();
+  if (ctxHist.length > TPS_CAP) ctxHist.splice(0, ctxHist.length - TPS_CAP);
+  ctxLast = { t: t, v: v, m: model, id: instId };
+}
+
 // ---------- polling ----------
 function poll() {
   if (busy) return;
@@ -129,6 +192,18 @@ function poll() {
       return;
     }
     online = true; lastError = null; native = d; fetchedAt = Date.now();
+    // AI_SCOPE-093: a generation-speed point for this cycle when Strata says a request is active and reports its
+    // own live tok/s (same instance pick and phase gate as the running card - the two must agree).
+    const tInst = pickInstance(d), tLive = tInst && tInst.metrics ? tInst.metrics.live : null;
+    if (tInst && ACTIVE[tInst.phase] && tLive && num(tLive.tok_s) != null) pushTps(fetchedAt, 2000, num(tLive.tok_s), tInst.label || tInst.model || 'unknown');
+    // AI_SCOPE-093 slice 2: the prefill mean, prompt phases only (the phase gate is the honest bit - see above).
+    if (tInst && (tInst.phase === 'reading' || tInst.phase === 'thinking') && tLive && num(tLive.prefill_tok_s_mean) != null) pushPtps(fetchedAt, 2000, num(tLive.prefill_tok_s_mean), tInst.label || tInst.model || 'unknown');
+    // AI_SCOPE-093 slice 3: context fill while a request is active - same computation as the running card's
+    // contextUsed in getState (prompt + generated), so the tile and the card can never disagree.
+    if (tInst && ACTIVE[tInst.phase] && tLive) {
+      const cP = num(tLive.prompt_tokens), cG = num(tLive.generated);
+      if (cP != null) pushCtx(fetchedAt, 2000, cP + (cG || 0), tInst.label || tInst.model || 'unknown', tInst.id);
+    }
     const enginePorts = d.instances.map(function (i) { return +i.port; }).filter(function (p) { return p > 0 && p < 65536; });
     // 077 review batch 2: attestation from the app's own API - engine instances loaded => 'live' (a
     // missed process lookup stays a gap, never zeros); no instances => 'idle' (nothing is loaded, it
@@ -193,6 +268,46 @@ function catalogEntry(d, variant) {
   }
   return null;
 }
+// AI_SCOPE-098 review: find the model's GGUF shard 1 under Strata's own data folder, so the
+// Installed lens can show the Hugging Face repo the FILE names (general.repo_url). Strata lays
+// models out as <dataFolder>\models\<DIR>\*.gguf; DIR matched to the variant id by suffix run,
+// and a shard 1 is only accepted when a GGUF name confirms the same quant tail - the mmproj
+// sidecar lives in the same folder and carries the ORG's repo_url, never the model's.
+const shardCache = {};
+function modelShard(dataFolder, variant) {
+  if (!dataFolder || !variant) return null;
+  const ck = String(dataFolder).toLowerCase() + '|' + String(variant).toLowerCase();
+  if (ck in shardCache) return shardCache[ck];
+  let found = null;
+  try {
+    const v = String(variant).toLowerCase();
+    const root = path.join(String(dataFolder), 'models');
+    const dirs = fs.readdirSync(root, { withFileTypes: true }).filter(function (e) { return e.isDirectory(); });
+    for (const d0 of dirs) {
+      const dl = d0.name.toLowerCase();
+      const tail = v.slice(Math.max(0, v.lastIndexOf('-') + 1));
+      const head = v.slice(0, Math.max(0, v.lastIndexOf('-')));
+      let okDir = dl === v || dl === tail || dl === head || (tail.length >= 4 && dl.slice(-tail.length) === tail);
+      if (!okDir) continue;
+      let files = [];
+      try { files = fs.readdirSync(path.join(root, d0.name)); } catch (e) { continue; }
+      const ggufs = files.filter(function (f) { return /\.gguf$/i.test(f); });
+      // quant must appear as its own token in the file name (an IQ1_M folder must not accept a mmproj BF16)
+      const qm = /((?:UD-)?(?:I?Q\d+(?:_[A-Z0-9]+)+|I?Q\d+|BF16|F16|F32))$/i.exec(tail);
+      if (qm) {
+        const qre = new RegExp('(?:^|[-_.])' + qm[1] + '(?:[-_.]|$)', 'i');
+        if (!qre.test(ggufs.join(' '))) continue;
+      }
+      const first = ggufs.filter(function (f) { return /-00001-of-\d+\.gguf$/i.test(f); })[0];
+      const whole = first || (dl === v && ggufs.length === 1 ? ggufs[0] : null);   // lone un-split file only on an exact folder match
+      if (!whole) continue;
+      found = path.join(root, d0.name, whole);
+      break;
+    }
+  } catch (e) { found = null; }
+  shardCache[ck] = found;
+  return found;
+}
 function gpuNames(d, indexes) {
   const gpus = d.hardware && Array.isArray(d.hardware.gpus) ? d.hardware.gpus : [];
   return (indexes || []).map(function (ix) {
@@ -202,11 +317,11 @@ function gpuNames(d, indexes) {
 }
 const ACTIVE = { loading: 1, reading: 1, thinking: 1, generating: 1 };
 
-function getState(limit) {
+function getState(limit, since) {
   const d = native;
   const out = { online: online, url: base, error: lastError, fetchedAt: fetchedAt || null,
                 version: null, engineVersion: null, updateNotice: null,
-                current: null, loaded: null, totals: null, average: null, installed: [],
+                current: null, loaded: null, totals: null, average: null, promptAverage: null, installed: [],
                 totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse() };
   // Strata's model process(es): VRAM / GPU % per card, CPU %, RAM; null elsewhere or with no model loaded.
   // AI_SCOPE-072: processCards (Hardware card names / totals for the tile labels) and processHistory (5 min,
@@ -215,8 +330,11 @@ function getState(limit) {
   // carry the process's ram / ramPrivate for the Strata RAM lens (per-process RAM exists on macOS / Linux too,
   // so that lens is not gated on per-process GPU support).
   out.process = procstats.get('strata'); out.processSupported = procstats.supported();
-  out.processHistory = procstats.history('strata');
+  out.processHistory = procstats.history('strata', since);   // AI_SCOPE-084: ?since=<t> sends only the new points
   out.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
+  out.tpsHistory = tpsHist;   // AI_SCOPE-093: the whole (small) ring rides every answer - the client appends only newer points
+  out.promptHistory = ptpsHist;   // AI_SCOPE-093 slice 2
+  out.contextHistory = ctxHist;   // AI_SCOPE-093 slice 3
   if (!d) return out;
   out.version = d.version || null;
   out.engineVersion = (d.engineInfo && d.engineInfo.version) || (d.engine && d.engine.version) || null;
@@ -235,39 +353,74 @@ function getState(limit) {
     };
     if (ACTIVE[inst.phase]) {
       const prompt = num(live.prompt_tokens), gen = num(live.generated);
+      // AI_SCOPE-100 (D4): the live record joins 094's canonical names - generated -> outputTokens,
+      // tok_s -> genTps, prefill mean -> promptTps. phase / phaseText stay Strata's own words (080).
       out.current = {
         model: out.loaded.label, phase: inst.phase, phaseText: live.phase || null, queued: num(live.queued),
         promptTokens: prompt, promptRead: num(live.prompt_read), promptTotal: num(live.prompt_total),
-        generated: gen, maxTokens: num(live.max_tokens), elapsedMs: num(live.elapsed_s) != null ? live.elapsed_s * 1000 : null,
-        tokS: num(live.tok_s), prefillTokS: num(live.prefill_tok_s_mean),
+        outputTokens: gen, maxTokens: num(live.max_tokens), elapsedMs: num(live.elapsed_s) != null ? live.elapsed_s * 1000 : null,
+        genTps: num(live.tok_s), promptTps: num(live.prefill_tok_s_mean),
         contextUsed: prompt != null ? prompt + (gen || 0) : null, contextMax: ctxMax,
       };
     }
     const t = m.totals;
     if (t) out.totals = { since: num(t.since) != null ? t.since * 1000 : null, requests: num(t.requests),
-                          promptTokens: num(t.prompt_tokens), reused: num(t.reused), outputTokens: num(t.output_tokens),
+                          promptTokens: num(t.prompt_tokens), cachedTokens: num(t.reused), outputTokens: num(t.output_tokens),
                           draftsOffered: num(t.drafts_offered), draftsAccepted: num(t.drafts_accepted) };
+    // AI_SCOPE-093 slice 3: the context tile's big number. Live while a request runs (the card's own contextUsed);
+    // idle is the last-seen held fill, claimed ONLY while the same instance id is still loaded - Strata keeps its
+    // KV cache between requests (that is why the next one reuses millions of tokens), but an unload or a loaded
+    // model change makes the held number stale, and then the honest answer is no answer.
+    const cMax = num(eng.max_context) || num(inst.context);
+    if (out.current && out.current.contextUsed != null) out.contextState = { used: out.current.contextUsed, max: cMax || null, model: out.current.model, at: fetchedAt, live: true };
+    else if (ctxLast && ctxLast.id === inst.id) out.contextState = { used: ctxLast.v, max: cMax || null, model: inst.label || ctxLast.m, at: ctxLast.t, live: false };
   }
-  // Token-weighted average generation speed for the loaded model's recent saved requests.
+  // AI_SCOPE-094 slice 3: both idle numbers come from one shared token-weighted builder; what stays
+  // here is what only Strata knows - which label the loaded model carries, and that its prompt
+  // speed is the tokens ACTUALLY READ after cache reuse, not the whole prompt.
   const model = out.loaded ? out.loaded.label : (requests.length ? requests[requests.length - 1].model : null);
-  const recent = requests.filter(function (r) { return r.model === model && r.outputTokens && r.decodeMs; }).slice(-20);
-  if (recent.length) {
-    let tok = 0, ms = 0;
-    recent.forEach(function (r) { tok += r.outputTokens; ms += r.decodeMs; });
-    out.average = { model: model, genTps: tok / (ms / 1000), requests: recent.length };
-  }
+  const a = reqstats.avgSpeed(requests, model, { timeField: 'genMs' });
+  if (a) out.average = { model: model, genTps: a.value, requests: a.requests };
+  const pa = reqstats.avgSpeed(requests, model, { tokensField: 'promptRead', timeField: 'promptMs' });
+  if (pa) out.promptAverage = { model: model, promptTps: pa.value, requests: pa.requests };
   const inst2 = d.installed && Array.isArray(d.installed.models) ? d.installed.models : [];
   out.installed = inst2.map(function (x) {
     const c = catalogEntry(d, x.model);
     const rec = c && c.size.gpu_options ? (c.size.gpu_options.options || []).filter(function (o) { return o.key === c.size.gpu_options.recommended; })[0] : null;
+    // AI_SCOPE-098 (D3): publisher = the catalog family title as the floor; the model file's own
+    // GGUF header (general.repo_url / quantized_by / size_label) overrides it with the real HF
+    // repo and gives an honest params label - Strata's catalog carries none of that itself.
+    const q = /(?:^|[-_.])((?:UD-)?(?:I?Q\d+(?:_[A-Z0-9]+)*|BF16|F16|F32))(?:[-_.]|$)/i.exec(String(x.model || ''));
+    const dispName = c ? c.family.title + ' ' + c.size.model : (x.model_name || x.model);
+    const shard = modelShard(x.dataFolder, x.model);
+    const hm = shard ? ggufmeta.header(shard) : null;
+    const repo = hm && hm.repoUrl ? String(hm.repoUrl).trim().split(/\s+/)[0] : null;   // repo_url can list several space-separated
+    const hf = repo && /huggingface\.co\//i.test(repo) ? repo : null;
+    const pub = hf ? decodeURIComponent(hf.replace(/^https?:\/\/huggingface\.co\//i, '').split('/')[0]) : (c ? (c.family.title || null) : null);
     return {
-      variant: x.model, name: c ? c.family.title + ' ' + c.size.model : (x.model_name || x.model),
-      diskGb: num(x.diskGb), context: num(x.context), ready: !!x.ready, images: x.images === 'yes',
+      variant: x.model, name: dispName,
+      publisher: pub || null,
+      publisherUrl: (function () { const om = hf ? /^https?:\/\/[^/]+\/[^/]+/i.exec(hf) : null; return om ? om[0] : null; })(),
+      modelUrl: hf || null,
+      quant: q ? q[1].replace(/^UD-/, '').toUpperCase() : null,
+      features: x.images === 'yes' ? ['vision'] : [],   // 098: the shared Features cell reads records, not per-scope flags
+      diskGb: num(x.diskGb), size: Math.round((num(x.diskGb) || 0) * 1e9) || null,
+      context: num(x.context), ready: !!x.ready, images: x.images === 'yes',
       loaded: (d.instances || []).some(function (i) { return i.model === x.model && i.status === 'ready'; }),
       memoryGb: c ? num(c.size.memory_gb) : null, onThisPc: c ? c.size.on_this_pc || null : null,
       fitSummary: rec ? rec.summary || null : null, missingParts: num(x.partsMissing),
+      gguf: shard || null
     };
   });
+  // AI_SCOPE-099 (user review 2026-11-02): Strata's engine-instances answer carries no quant and no
+  // size, but her installed list does - for this exact variant, matched by the same model key that
+  // sets that row's own loaded flag (:407). Copy HER numbers onto the loaded record: one source, an
+  // identity join the app itself defines, no second measurement and no guessing. Params stays a gap:
+  // her catalog carries no token count (the 098 rule).
+  if (out.loaded && inst) {
+    const row = out.installed.find(function (x) { return x.variant === inst.model; });
+    if (row) { out.loaded.quant = row.quant; out.loaded.size = row.size; }
+  }
   return out;
 }
 
@@ -275,7 +428,7 @@ function start(settings) {
   stop();
   settings = settings || {};
   base = String(settings.url || DEFAULT_URL).replace(/\/+$/, '');
-  if (!requestsLoaded) { requestsLoaded = true; loadRequests(); }
+  loadRequests();          // the store ignores a second load (AI_SCOPE-094 slice 1)
   poll();
   timer = setInterval(poll, 2000);
 }
@@ -286,4 +439,6 @@ function stop() {
   online = false; native = null; lastError = null;
 }
 
-module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo };
+module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo,
+  // the llama.cpp precedent (098 review): _test exposes the shipped helpers for probes
+  _test: { modelShard: modelShard, catalogEntry: catalogEntry } };

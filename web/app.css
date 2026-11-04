@@ -192,6 +192,11 @@
   .dlegend i { display:inline-block; width:10px; height:2px; background:var(--accent); vertical-align:middle; }
   .dlegend i.wr { background:var(--mid); margin-left:6px; }
   .spark .guide { stroke:var(--muted); stroke-width:1; opacity:.6; vector-effect:non-scaling-stroke; }
+  /* Edge caps (097): borders where a sparkline run faces an N/A hole - SAME stroke as the line itself
+     (and the amber-dashed one for the write / tx series). No caps at the board edges: there the window
+     only clipped a continuing series. Painted by lens.js sparkCaps / sparkCapsInto, all tiles and rows. */
+  .spark .caps { fill:none; stroke:var(--accent); stroke-width:2; stroke-linecap:round; vector-effect:non-scaling-stroke; }
+  .spark .caps.wline { stroke:var(--mid); stroke-dasharray:4 3; }
   .spark .tip { position:absolute; top:-26px; transform:translateX(-50%); background:var(--text); color:var(--bg);
                 font-size:.72rem; padding:2px 6px; border-radius:4px; white-space:nowrap; pointer-events:none; }
   .spark-axis { display:flex; justify-content:space-between; font-size:.68rem; color:var(--muted); margin-top:2px; }
@@ -477,6 +482,7 @@
 .pspk .line { fill:none; stroke:var(--accent); stroke-width:1.5; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
 .pspk .area { fill:var(--accent); opacity:.12; }
 .pspk .guide { stroke:var(--muted); stroke-width:1; opacity:.6; vector-effect:non-scaling-stroke; }
+.pspk .caps { fill:none; stroke:var(--accent); stroke-width:1.5; stroke-linecap:round; vector-effect:non-scaling-stroke; }   // edge caps, same stroke as the row line (097)
 .pspk .ptip { position:absolute; bottom:24px; transform:translateX(-50%); background:var(--text); color:var(--bg); font-size:.7rem;
   padding:2px 6px; border-radius:4px; white-space:nowrap; pointer-events:none; z-index:3; }
 /* Edit mode on scope pages (AI_SCOPE-020): the edit hint sits with the buttons; the page's own status line hides meanwhile */

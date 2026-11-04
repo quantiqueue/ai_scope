@@ -1,6 +1,6 @@
 {
   "name": "ai_scope",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "AI_SCOPE: local dashboard for monitoring AI tools (Bionic, Ollama, ComfyUI, Strata, CPU/GPU/VRAM)",
   "keywords": [
     "ai",
@@ -38,6 +38,8 @@
     "scopes.json",
     "customscopes.js",
     "paths.js",
+    "reqstore.js",
+    "reqstats.js",
     "hwstats.js",
     "diskstats.js",
     "diskstats.ps1",
@@ -47,8 +49,8 @@
     "ollamastats.js",
     "stratastats.js",
     "llamacppstats.js",
+    "ggufmeta.js",
     "procstats.js",
-    "procstats.ps1",
     "procnix.js",
     "proctop.js",
     "proctop.ps1",

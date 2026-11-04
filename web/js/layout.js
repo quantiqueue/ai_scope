@@ -63,7 +63,7 @@ function scopeTag(box, sid) {
 // The edit buttons for a page header: pencil; in edit mode Reset (scope pages), Cancel and Save.
 function layoutTools(kind) {
   return '<div class="cs-tools">' +
-    '<span class="meta lhint" hidden>Editing · add, remove or drag lenses, then save</span>' +
+    '<span class="meta lhint" hidden></span>' +   // AI_SCOPE-088: no more edit-mode hint text - this span now only ever carries a save error
     (kind === 'scope' ? '<button type="button" class="cs-cancel" data-cs-reset title="Back to this scope\'s built-in layout">Reset to default</button>' : '') +
     '<button type="button" class="iconbtn" data-cs-edit title="Edit ' + (kind === 'scope' ? 'this page' : 'scope') + '">' + ICON.pencil + '</button>' +
     '<button type="button" class="cs-cancel" data-cs-cancel title="Cancel">Cancel</button>' +
@@ -72,7 +72,7 @@ function layoutTools(kind) {
 }
 function setHead(pg) {
   const p = pg.panel;
-  if (pg.head) pg.head(pg);   // custom scopes: name + "Custom scope · n lenses"
+  if (pg.head) pg.head(pg);   // custom scopes: just the name (AI_SCOPE-088 removed the meta line)
   p.classList.toggle('editing', pg.editing);
   p.querySelector('[data-cs-edit]').hidden = pg.editing;
   p.querySelector('[data-cs-save]').hidden = !pg.editing;
@@ -81,7 +81,7 @@ function setHead(pg) {
   const reset = p.querySelector('[data-cs-reset]');
   if (reset) reset.hidden = !pg.editing;
   const hint = p.querySelector('.lhint');
-  if (hint) hint.hidden = !pg.editing || pg.kind === 'custom';   // custom scopes say it in their own meta line
+  if (hint) hint.hidden = !hint.classList.contains('bad');   // AI_SCOPE-088: the lhint span shows only when it carries an error
 }
 function renderPage(pg) {
   pg.mounted.forEach(unmountLens);
@@ -145,7 +145,7 @@ async function savePage(pg, btn) {
   btn.disabled = false;
   if (!r.ok) { pageError(pg, 'Not saved: ' + (r.error || 'failed')); return; }
   pg.panel.querySelectorAll('.section-head .bad').forEach(m => m.classList.remove('bad'));
-  const hint = pg.panel.querySelector('.lhint'); if (hint) hint.textContent = 'Editing · add, remove or drag lenses, then save';
+  const hint = pg.panel.querySelector('.lhint'); if (hint) { hint.textContent = ''; hint.hidden = true; }   // AI_SCOPE-088: a good save just clears the error line - no hint text to restore
   pg.editing = false; pg.draft = null; pg.shownJson = null;   // re-render from the saved layout
   if (r.apply) r.apply(); else renderPage(pg);
 }
