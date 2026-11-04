@@ -7,15 +7,15 @@ const lcK = n => n == null ? '—' : n >= 1000 ? (n / 1000).toFixed(n >= 10000 ?
 const lcCtx = n => n == null ? '—' : n % 1024 === 0 ? (n / 1024) + 'K' : lcK(n);
 const LC_EXACT = 'Exact: from the server\'s own counters (--metrics), the request ran alone on its model';
 const LC_EST = 'Estimated from AI_SCOPE\'s looks at the server\'s slots (every ½ s, ¼ s while busy; llama.cpp keeps no per-request timings)';
-// AI_SCOPE-098: the Models folder as a LENS setting. The router lists unloaded models but never
-// sends their paths, and AI_SCOPE cannot ask for --models-dir (auto-detect from the process command
-// line was weighed at review and skipped as over-built), so the lens that shows files asks for the
-// folder itself. The value rides the source poll URL (?md=); the server reads GGUF headers there,
-// local servers only, and it overrides the scope card's Models folder when both are set.
-const MODELS_DIR_FIELD = { id: 'modelsDir', label: 'Models folder', type: 'text', default: '',
-  help: 'The folder given to --models-dir, so unloaded rows can show their real size, fit and Hugging Face link. Read on this PC only; leave empty to use the scope card value.' };
-
-defineSource('llamacpp', '/api/llamacpp?limit=100', 'llamacpp', 1000, null, 'processHistory', 'modelsDir');   // AI_SCOPE-082 / 084: the mirror history ring goes out as a delta (?since=)
+// AI_SCOPE-098: the Models folder the Installed lens needs. The router lists unloaded models but never
+// sends their paths, and AI_SCOPE cannot ask for --models-dir (auto-detect from the process command line
+// was weighed at review and skipped as over-built), so the folder is set on the scope card and the server
+// reads GGUF headers from it there, local servers only.
+// AI_SCOPE-106 item 4: this used to be a LENS setting riding the poll URL (?md=), which let any client -
+// and any second tab with a different value - retarget the folder the server reads files from, on a
+// listener that can be LAN-exposed. The lens-level field and the poll param are gone; the scope card is
+// the only source.
+defineSource('llamacpp', '/api/llamacpp?limit=100', 'llamacpp', 1000, null, 'processHistory');   // AI_SCOPE-082 / 084: the mirror history ring goes out as a delta (?since=)
 
 // AI_SCOPE-082: the Hardware Mirror Lens family for llama.cpp (GPU / RAM Working / RAM Committed / CPU / I/O over
 // llama.cpp's own processes) comes from the shared defineMirror factory - web/js/mirror.js (077). The watch shape is
@@ -141,7 +141,7 @@ defineLens({
   id: 'llamacpp.installed', scope: 'llamacpp', size: 'full',
   name: 'Installed models',
   description: 'In router mode (--models-dir), every model in the router\'s folder: publisher, size, parameters, quantization, context, features, fit, loaded or not.',
-  settings: [PER_PAGE_FIELD, MODELS_DIR_FIELD],
+  settings: [PER_PAGE_FIELD],
   markup: instTableMarkup(LC_INST),
   render(L, d) {
     const $ = L.$, list = d.online && d.router ? d.models || [] : [];

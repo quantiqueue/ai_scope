@@ -36,6 +36,17 @@ function createStore(o) {
   // Hard rule from decision 2b: the on-disk cap can never sit below the memory cap,
   // or a restart would silently shorten history below what the lenses already show.
   const diskCap = Math.max(memCap, o.diskCap > 0 ? o.diskCap : memCap * DISK_MULTIPLE);
+  // AI_SCOPE-106 (item 1): diskCap is the TRIGGER, not the landing height. compact() used to trim to exactly
+  // diskCap, so lineCount rested on the trigger edge and EVERY later append re-read and re-wrote the whole
+  // file - a few MB of sync I/O per request. Landing one ring-window lower leaves memCap appends of headroom
+  // before the next compaction: one rewrite per memCap requests, not one per request.
+  // For the 5x default this is the user's memCap * (DISK_MULTIPLE - 1) = 4000, written as diskCap - memCap so
+  // it stays correct for any override. Two rules it must never break: it keeps at least memCap rows (the same
+  // 2b rule as diskCap - history on disk can't fall under what the lenses show), and it stays below the
+  // trigger whenever there is room to, so a compaction can never leave the file on the edge again.
+  // The else branch is the no-room case (a caller whose diskCap sits at the memory cap): keep the whole ring,
+  // compact() then finds nothing above diskCap to drop, and every row is on disk anyway.
+  const compactTo = diskCap > memCap ? Math.min(diskCap - 1, Math.max(memCap, diskCap - memCap)) : diskCap;
   const accept = o.accept || function () { return true; };
   const mapRow = o.mapRow || function (r) { return r; };
   const resort = o.resortOnAppend !== false;
@@ -58,7 +69,7 @@ function createStore(o) {
     try {
       const text = fs.readFileSync(file, 'utf8');
       const lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
-      if (lines.length > diskCap) rewrite(lines.slice(-diskCap));
+      if (lines.length > diskCap) rewrite(lines.slice(-compactTo));
     } catch (e) {
       if (o.onError) o.onError('compact failed: ' + e.message);
     }
@@ -109,6 +120,7 @@ function createStore(o) {
     append: append,
     memCap: function () { return memCap; },
     diskCap: function () { return diskCap; },
+    compactTo: function () { return compactTo; },   // 106: exposed so a test can assert the headroom, not re-derive it
     fileLines: function () { return lineCount; }
   };
 }

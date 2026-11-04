@@ -50,8 +50,7 @@ let online = false, lastError = null;
 let keyNeeded = null;       // URL of a llama.cpp server that answered 401 (needs --api-key's key)
 let apiKey = '';            // token for --api-key servers (the scope's 'API key' setting), sent as Bearer
 let scopeModelsDir = null;    // AI_SCOPE-098: the --models-dir folder from the scope card (settings)
-let lensModelsDir = null;     // AI_SCOPE-098: per-poll override from the Installed lens setting (the ?md= param)
-let modelsDir = null;         // the folder actually used this poll: lens value if set, else the scope's
+let modelsDir = null;         // the folder used: the scope setting only (106 item 4 - a request cannot change it)
 let fileResCache = {};      // dir|id -> resolved GGUF path ('' = looked and not found), re-keyed when the dir changes
 let rootProps = null, rootPropsAt = 0;
 let router = null;          // router mode: { maxInstances, autoload } (null = single model)
@@ -622,15 +621,8 @@ function resolveModelFile(id) {
   fileResCache[ck] = found || '';
   return found;
 }
-// The Installed lens can set the folder per poll (AI_SCOPE-098); the lens value overrides the
-// scope card's, and an empty poll param means no lens is asking, so the scope setting stands.
-function setModelsDir(v) {
-  const d = String(v || '').trim() || null;
-  modelsDir = d || scopeModelsDir;             // recomputed every call: the scope card may have changed since the last lens param (the bug this line guards)
-  if (d === lensModelsDir) return;
-  lensModelsDir = d;
-  fileResCache = {};
-}
+// 106 item 4: the per-poll lens override (setModelsDir, fed by ?md=) is gone. modelsDir is set only
+// from the scope card at start(), so no request can retarget the folder the server reads files from.
 function pathIsFile(p) { try { return fs.statSync(p).isFile(); } catch (e) { return false; } }
 function dirExists(p) { try { return fs.statSync(p).isDirectory(); } catch (e) { return false; } }
 function pickSplitOrTagged(dir, quant) {
@@ -684,8 +676,15 @@ function modelInfo(m) {
   // The header's size_label is deliberately NOT rendered as Params: it is the packager's
   // family-wide label (the user's point at review), not this variant's count.
   let hfile = path;
-  const sm = path ? /(-0000)(\d)(-of-\d+\.gguf)$/i.exec(path) : null;   // metadata lives in shard 1
-  if (sm && sm[2] !== '1') hfile = path.slice(0, sm.index + 6) + '1' + path.slice(sm.index + 7);
+  // 106 item 2: rewrite the part number to shard 1. The old code was /(-0000)(\d)/ + an off-by-one
+  // slice, so x-00002-of-00003 became x-000021of-00003 (the header then fails quietly), and a 10th
+  // shard did not match the pattern at all, so the high shard's headerless tail got read instead.
+  // The dash sits outside the captured digits, and the digits are replaced whole, zero-padded to the
+  // file's own width: -00002 -> -00001, -00010 -> -00001, -000123 -> -000001.
+  const sm = path ? /-(\d{5,})(-of-\d+\.gguf$)/i.exec(path) : null;   // metadata lives in shard 1
+  if (sm && sm[1] !== '1'.padStart(sm[1].length, '0')) {
+    hfile = path.slice(0, sm.index) + '-' + '1'.padStart(sm[1].length, '0') + path.slice(sm.index + 1 + sm[1].length);
+  }
   const hm = local && hfile ? ggufmeta.header(hfile) : null;
   return {
     id: m.id, name: m.id, state: m.state, path: path,
@@ -804,8 +803,7 @@ function start(settings) {
   // runs on this PC. The router never sends a path for UNLOADED models, so folder + file stem is
   // the only way their Size / Fit / header provenance can be honest instead of gaps.
   scopeModelsDir = String(settings.modelsDir || '').trim() || null;
-  lensModelsDir = null;
-  modelsDir = scopeModelsDir;
+  modelsDir = scopeModelsDir;   // 106 item 4: the scope setting is the only source of this value
   fileResCache = {};
   base = configured || null;
   loadRequests();          // the store ignores a second load (AI_SCOPE-094 slice 1)
@@ -820,12 +818,15 @@ function stop() {
   procstats.unwatch('llamacpp');
   procstats.unattest('llamacpp');   // AI_SCOPE-082: an uninstalled scope stops claiming history (like 081 / strata / bionic)
   online = false; rootProps = null; router = null; lastError = null; base = null;
-  scopeModelsDir = null; lensModelsDir = null; modelsDir = null; fileResCache = {};
+  scopeModelsDir = null; modelsDir = null; fileResCache = {};
 }
 
-module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo, setModelsDir: setModelsDir,   // the route passes the lens's ?md= value through this
+module.exports = { start: start, stop: stop, getState: getState, getLogo: getLogo,
   // _test exposes the shipped helpers for probes (098); the setters exist because `let` module
   // bindings are not writable from a vm harness script (the 094 peak-attach precedent).
-  _test: { trackSlots: trackSlots, isLlama: isLlama, modelInfo: modelInfo, hfRepo: hfRepo, withFit: withFit, resolveModelFile: resolveModelFile, setModelsDir: setModelsDir, effectiveDir: function () { return modelsDir; },
+  // 106 item 4: no setModelsDir on the public API - the route must not be able to retarget the folder.
+  // The _test setter stays so the shipped 098 probe can still drive resolveModelFile deterministically.
+  _test: { trackSlots: trackSlots, isLlama: isLlama, modelInfo: modelInfo, hfRepo: hfRepo, withFit: withFit, resolveModelFile: resolveModelFile,
+    setModelsDir: function (v) { modelsDir = String(v || '').trim() || null; }, effectiveDir: function () { return modelsDir; },
            setLocal: function (v) { local = !!v; },
            clearFileSizes: function () { Object.keys(fileSizes).forEach(function (k) { delete fileSizes[k]; }); } } };

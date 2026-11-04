@@ -85,7 +85,7 @@
           "help": "Where llama serve (port 9931) or llama-server (port 8080) is listening. Leave empty to auto-detect. Needs the /slots endpoint (on by default)." },
         { "key": "apiKey", "label": "API key", "type": "secret", "default": "", "placeholder": "(none)",
           "help": "Token for a server started with --api-key, sent as Authorization: Bearer on every request. Stored server-side only - the page and the API show just 'set'." },
-        { "key": "modelsDir", "label": "Models folder", "type": "url", "default": "", "placeholder": "The folder given to --models-dir, e.g. J:\\LLM\\models",
+        { "key": "modelsDir", "label": "Models folder", "type": "folder", "default": "", "mustExist": true, "placeholder": "The folder given to --models-dir, e.g. J:\\LLM\\models",
           "help": "When the server runs on this PC, AI_SCOPE reads each UNLOADED router model's GGUF file here for its size, fit and Hugging Face link - the router sends no file path for models that are not loaded. Leave empty if unsure; ignored for a remote server." }
       ]
     }

@@ -16,7 +16,8 @@ const MAXLEN = 48 * 1024 * 1024;   // vocabularies push the metadata past 30 MB 
 const cache = new Map();           // path -> { key, meta }
 
 function parse(buf, len) {
-  // returns { meta } on success (even partial), { more: true } when the buffer ran out mid-KV,
+  // returns { meta } on a complete read, { more: true, meta } when the buffer ran out mid-KV (106:
+  //   meta carries every key parsed up to that point),
   // { bad: reason } when it is not a readable GGUF header
   if (len < 24 || buf.slice(0, 4).toString('latin1') !== 'GGUF') return { bad: 'not GGUF' };
   const version = buf.readUInt32LE(4);
@@ -28,22 +29,26 @@ function parse(buf, len) {
   if (nkv <= 0 || nkv > 10000) return { bad: 'absurd kv count' };
   const TYPESZ = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8 };
   const meta = {};
+  // 106 item 3: a truncated read used to report { more: true } with NO meta, so every key already
+  // parsed was thrown away and header() returned null for any model whose metadata outruns the
+  // buffer - exactly the big-vocabulary case MAXLEN is sized for. general.* keys come first in a GGUF.
+  const partial = function () { return { more: true, meta: meta }; };
   for (let i = 0; i < nkv; i++) {
-    if (o + 8 > len) return { more: true };
+    if (o + 8 > len) return partial();
     const kl = Number(buf.readBigUInt64LE(o)); o += 8;
     if (kl <= 0 || kl > 4096) return { bad: 'bad key length' };
-    if (o + kl + 4 > len) return { more: true };
+    if (o + kl + 4 > len) return partial();
     const key = buf.slice(o, o + kl).toString('utf8'); o += kl;
     const t = buf.readUInt32LE(o); o += 4;
     if (t === 8) {                        // string
-      if (o + 8 > len) return { more: true };
+      if (o + 8 > len) return partial();
       const sl = Number(buf.readBigUInt64LE(o)); o += 8;
-      if (sl < 0 || o + sl > len) return { more: true };
+      if (sl < 0 || o + sl > len) return partial();
       if (key.startsWith('general.')) meta[key] = buf.slice(o, o + sl).toString('utf8');
       o += sl;
     } else if (TYPESZ[t]) {               // scalar: value only wanted for the interesting keys
       const sz = TYPESZ[t];
-      if (o + sz > len) return { more: true };
+      if (o + sz > len) return partial();
       if (key.startsWith('general.')) {
         meta[key] = t === 4 ? buf.readUInt32LE(o) : t === 5 ? buf.readInt32LE(o) : t === 6 ? buf.readFloatLE(o)
           : t === 7 ? !!buf[o] : t === 0 ? buf[o] : t === 1 ? buf.readInt8(o)
@@ -52,17 +57,17 @@ function parse(buf, len) {
       }
       o += sz;
     } else if (t === 9) {                 // array
-      if (o + 12 > len) return { more: true };
+      if (o + 12 > len) return partial();
       const at = buf.readUInt32LE(o); o += 4;
       const n = Number(buf.readBigUInt64LE(o)); o += 8;
       if (at === 8) {                     // strings: skip per element (never materialise a 150k vocab)
         for (let j = 0; j < n; j++) {
-          if (o + 8 > len) return { more: true };
+          if (o + 8 > len) return partial();
           const sl = Number(buf.readBigUInt64LE(o)); o += 8 + sl;
         }
       } else if (TYPESZ[at] && n * TYPESZ[at] >= 0) {
         const skip = n * TYPESZ[at];
-        if (o + skip > len) return { more: true };
+        if (o + skip > len) return partial();
         o += skip;
       } else return { bad: 'unknown array type' };
     } else return { bad: 'unknown type ' + t };

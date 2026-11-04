@@ -264,7 +264,9 @@ http.createServer((req, res) => {
     // AI_SCOPE-082: llama.cpp's mirror lenses ride the 084 delta (see /api/ollama) - &since=<t> sends only newer points.
     const since = parseInt(url.searchParams.get('since'), 10) || 0;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    llamacppstats.setModelsDir(url.searchParams.get('md'));   // 098: the Installed lens sends its Models folder; empty keeps the scope setting
+    // 106 item 4: no Models folder override here. A GET must not change server-wide state - any client
+    // (or a second tab voting a different value each poll) could point the server at any folder on this
+    // PC. The folder comes only from the scope card's setting, applied in llamacppstats.start().
     return res.end(JSON.stringify(llamacppstats.getState(limit, since)));
   }
   if (url.pathname === '/api/bionic/models') {
