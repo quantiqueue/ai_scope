@@ -375,6 +375,6 @@ MIRROR_HOVER.push({ prefix: 'lctx', fn: (spark, f, guide, tip) => {   // nearest
 } });
 
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
-// AI_SCOPE-101: the Gen tok/s + Prompt tok/s + Context row leads right after the current-request card
-// (093 D5 placement pattern; loaded / requests / installed / slots are the full-width cards).
-defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, 'llamacpp.tps', 'llamacpp.ptps', 'llamacpp.ctx', 'llamacpp.loaded', 'llamacpp.requests', 'llamacpp.installed', 'llamacpp.slots']).concat(LLAMACPP_MIRROR.layout()));   // AI_SCOPE-082: mirror family tail
+// AI_SCOPE-107: default = the user's saved page (2026-11-04): requests and slots lead below the card,
+// then loaded and installed, then the 101 token row (tps ptps ctx) above the mirror tail (082).
+defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, { lens: 'llamacpp.requests', settings: {}, row: true }, { lens: 'llamacpp.slots', settings: {}, row: true }, { lens: 'llamacpp.loaded', settings: {}, row: true }, { lens: 'llamacpp.installed', settings: {}, row: true }, { lens: 'llamacpp.tps', settings: {}, row: true }, 'llamacpp.ptps', 'llamacpp.ctx']).concat(LLAMACPP_MIRROR.layout()));

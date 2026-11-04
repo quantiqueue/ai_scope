@@ -264,16 +264,24 @@ defineLens({
   },
 });
 
-// ---------- The Processes page (default layout; editable, AI_SCOPE-020): AI processes (full width), CPU, RAM,
-// then GPU n + VRAM n per card, then shared GPU memory per card ----------
+// ---------- The Processes page (default layout; editable, AI_SCOPE-020) ----------
+// AI_SCOPE-107: default = the user's saved page (2026-11-04): AI processes full width, then the app-grouped
+// CPU · RAM row, then the per-pid I/O row, then one row per card: GPU · VRAM · Shared VRAM.
 defineScopeLayout('processes', () => {
   const gpus = (SOURCES.hardware.data && SOURCES.hardware.data.info.gpus) || [];
   // GPU lenses per card where this system has per-process GPU numbers (AI_SCOPE-052); Windows always shows at least one
   const n = !procHas('gpu') ? 0 : SERVER_OS === 'win32' ? Math.max(1, gpus.length) : gpus.length;
-  const items = layoutOf(['processes.apps', 'processes.cpu', 'processes.ram']);
-  for (let i = 0; i < n; i++) items.push({ lens: 'processes.gpu', settings: { card: i } }, { lens: 'processes.vram', settings: { card: i } });
-  if (procHas('shared')) for (let i = 0; i < n; i++) items.push({ lens: 'processes.shared', settings: { card: i } });
-  if (procHas('io')) items.push({ lens: 'processes.io', settings: {} });   // AI_SCOPE-030
+  const items = layoutOf([
+    'processes.apps',
+    { lens: 'processes.cpu', settings: { group: 'app' }, row: true },
+    { lens: 'processes.ram', settings: { group: 'app' } },
+  ]);
+  if (procHas('io')) items.push({ lens: 'processes.io', settings: { group: 'pid', width: 'wide' } });   // AI_SCOPE-030 (107: no row break - it joins the CPU · RAM row on a wide grid)
+  for (let i = 0; i < n; i++) {
+    items.push({ lens: 'processes.gpu', settings: { group: 'app', card: i, dwm: 'hide' }, row: true },
+               { lens: 'processes.vram', settings: { card: i } });
+    if (procHas('shared')) items.push({ lens: 'processes.shared', settings: { card: i } });
+  }
   return items;
 });
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
