@@ -276,19 +276,20 @@ function defineMirror(spec) {
   } });
 
   return {
-    // The family's default layout tail (used by defineScopeLayout): per-card GPU + VRAM pairs after the scope's
-    // own lenses (not on macOS — no per-process GPU there until 062), then the bottom row CPU · RAM (Working) ·
-    // RAM (Committed) · I/O, on every OS (each tile shows its own honest state where a number cannot exist).
+    // The family's default layout tail (used by defineScopeLayout): per-card GPU + VRAM pairs (not on macOS —
+    // no per-process GPU there until 062), then the CPU · RAM (Working) · RAM (Committed) · I/O row.
+    // AI_SCOPE-107 (2026-11-04): the pairs row and the CPU row each start a row (row: true), matching the user's saved pages.
     layout: () => {
       const items = [];
       if (SERVER_OS !== 'darwin') {
         const d = (SOURCES[key] && SOURCES[key].data) || {};
         for (let i = 0; i < Math.max(1, (d.processCards || []).length); i++) {
-          items.push({ lens: key + '.gpu', settings: { card: i, show: 'gpu' } });
+          if (i === 0) items.push({ lens: key + '.gpu', settings: { card: i, show: 'gpu' }, row: true });
+          else items.push({ lens: key + '.gpu', settings: { card: i, show: 'gpu' } });
           items.push({ lens: key + '.gpu', settings: { card: i, show: 'vram' } });
         }
       }
-      items.push({ lens: key + '.cpu' });
+      items.push({ lens: key + '.cpu', row: true });
       items.push({ lens: key + '.ram', settings: { show: 'working' } });
       items.push({ lens: key + '.ram', settings: { show: 'committed' } });
       items.push({ lens: key + '.io' });

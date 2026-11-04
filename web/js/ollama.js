@@ -371,6 +371,6 @@ document.getElementById('oHeadHelpBtn').addEventListener('click', e => {
   box.hidden = !box.hidden;
   e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
 });
-// AI_SCOPE-102: the Gen tok/s + Prompt tok/s + Context row leads right after the current-request card
-// (093 D5 / 101 D6 / 103 D5 placement); loaded / requests / installed are full-width, so the tile row is theirs alone.
-defineScopeLayout('ollama', () => layoutOf([{ lens: 'ollama.current', settings: { width: 'full' } }, 'ollama.tps', 'ollama.ptps', 'ollama.ctx', 'ollama.loaded', 'ollama.requests', 'ollama.installed']).concat(OLLAMA_MIRROR.layout()));   // AI_SCOPE-081: mirror family tail
+// AI_SCOPE-107: default = the user's saved page (2026-11-04): requests, loaded and installed rows
+// below the card, then the token row (102) above the mirror tail (081) - no extra saved settings on these rows.
+defineScopeLayout('ollama', () => layoutOf([{ lens: 'ollama.current', settings: { width: 'full' } }, { lens: 'ollama.requests', settings: {}, row: true }, { lens: 'ollama.loaded', settings: {}, row: true }, { lens: 'ollama.installed', settings: {}, row: true }, { lens: 'ollama.tps', settings: {}, row: true }, 'ollama.ptps', 'ollama.ctx']).concat(OLLAMA_MIRROR.layout()));

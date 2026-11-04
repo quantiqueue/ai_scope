@@ -380,6 +380,6 @@ MIRROR_HOVER.push({ prefix: 'shrate', fn: (spark, f, guide, tip) => {   // neare
 // every OS (procstats reports CPU % on Windows, Linux and macOS). AI_SCOPE-076: "Strata I/O" closes that row
 // (the tile answers "Windows only for now" where the counters do not exist).
 // AI_SCOPE-077: the mirror rows come from the shared family helper - same items, same order, same ids.
-// AI_SCOPE-093: the TPS + Prompt-TPS + Context + Hit-rate row leads its own row right after the current-request card
-// (user placement 2026-10-31; the loaded / requests / installed cards are full-width, so the tile row is theirs alone).
-defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, 'strata.tps', 'strata.ptps', 'strata.ctx', 'strata.hit', 'strata.loaded', 'strata.requests', 'strata.installed']).concat(STRATA_MIRROR.layout()));
+// AI_SCOPE-107: default = the user's saved page (2026-11-04): requests first below the card, loaded
+// (cols "3,8") and installed (cols "3") after it, then the 093 token row (tps ptps ctx hit) above the mirror tail.
+defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, { lens: 'strata.requests', settings: {}, row: true }, { lens: 'strata.loaded', settings: { perPage: 5, cols: '3,8' }, row: true }, { lens: 'strata.installed', settings: { perPage: 5, cols: '3' }, row: true }, { lens: 'strata.tps', settings: {}, row: true }, 'strata.ptps', 'strata.ctx', 'strata.hit']).concat(STRATA_MIRROR.layout()));

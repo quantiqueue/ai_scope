@@ -308,8 +308,7 @@ MIRROR_HOVER.push({ prefix: 'bctx', fn: (spark, f, guide, tip) => {   // nearest
 
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 // AI_SCOPE-077: the mirror rows (per-card GPU + VRAM pairs, not on macOS; then the bottom row
-// Bionic CPU · Bionic RAM (Working) · Bionic RAM (Committed) · Bionic I/O on every OS) follow the loaded
-// models, exactly like Strata's default (072 / 073 / 075 / 076 rules via mirror.js).
-// AI_SCOPE-103: the Gen tok/s + Prompt tok/s + Context row leads right after the current-request card
-// (093 D5 / 101 D6 placement); loaded / requests / installed are full-width, so the tile row is theirs alone.
-defineScopeLayout('bionic', () => layoutOf([{ lens: 'bionic.current', settings: { width: 'full' } }, 'bionic.tps', 'bionic.ptps', 'bionic.ctx', 'bionic.loaded', 'bionic.requests', 'bionic.installed']).concat(BIONIC_MIRROR.layout()));
+// Bionic CPU · Bionic RAM (Working) · Bionic RAM (Committed) · Bionic I/O on every OS) close the page.
+// AI_SCOPE-107: default = the user's saved page (2026-11-04): the requests table leads below the card
+// (its Saved-columns setting cols:"10" rides too), then loaded and installed, the token row last above the mirror tail.
+defineScopeLayout('bionic', () => layoutOf([{ lens: 'bionic.current', settings: { width: 'full' } }, { lens: 'bionic.requests', settings: { perPage: 5, cols: '10' }, row: true }, { lens: 'bionic.loaded', settings: {}, row: true }, { lens: 'bionic.installed', settings: {}, row: true }, { lens: 'bionic.tps', settings: {}, row: true }, 'bionic.ptps', 'bionic.ctx']).concat(BIONIC_MIRROR.layout()));
