@@ -393,13 +393,21 @@ function fieldHtml(f, edit) {
   const secret = f.type === 'secret';
   const v = secret ? '' : (edit ? f.value : f.default);
   const ph = secret && edit && f.value === 'set' ? 'Set - enter a new value to replace it' : f.placeholder;
-  return '<div class="field"><label for="sf-' + f.key + '">' + escH(f.label) + (f.required ? '' : ' <span class="opt">(optional)</span>') + '</label>' +
-    '<input id="sf-' + f.key + '" name="' + f.key + '" data-type="' + f.type + '" type="' + (f.type === 'number' ? 'number' : secret ? 'password' : 'text') + '"' +
-    ' value="' + escH(v == null ? '' : v) + '" placeholder="' + escH(ph) + '" spellcheck="false" autocomplete="' + (secret ? 'new-password' : 'off') + '"' +
-    (f.min != null ? ' min="' + f.min + '"' : '') + (f.max != null ? ' max="' + f.max + '"' : '') + '>' +
+  // AI_SCOPE-109: a `select` field (the Strata source picker) is a drop-down over the catalog's options.
+  // The dialog reads `input[name]` and `select[name]`, so a picker is collected like any other field.
+  const ctl = f.type === 'select'
+    ? '<select id="sf-' + f.key + '" name="' + f.key + '">' +
+      (f.options || []).map(function (o) { return '<option value="' + escH(o) + '"' + (o === v ? ' selected' : '') + '>' + escH(SELECT_WORDS[o] || o) + '</option>'; }).join('') +
+      '</select>'
+    : '<input id="sf-' + f.key + '" name="' + f.key + '" data-type="' + f.type + '" type="' + (f.type === 'number' ? 'number' : secret ? 'password' : 'text') + '"' +
+      ' value="' + escH(v == null ? '' : v) + '" placeholder="' + escH(ph) + '" spellcheck="false" autocomplete="' + (secret ? 'new-password' : 'off') + '"' +
+      (f.min != null ? ' min="' + f.min + '"' : '') + (f.max != null ? ' max="' + f.max + '"' : '') + '>';
+  return '<div class="field"><label for="sf-' + f.key + '">' + escH(f.label) + (f.required || f.type === 'select' ? '' : ' <span class="opt">(optional)</span>') + '</label>' +
+    ctl +
     (f.help ? '<div class="help">' + escH(f.help) + '</div>' : '') +
     '<div class="ferr" data-err="' + f.key + '" hidden></div></div>';
 }
+const SELECT_WORDS = { auto: 'Auto (app, else CLI)', app: 'Strata app only', cli: 'Strata CLI only' };
 function openInstall(id, edit) {
   const sc = scopeById(id);
   if (!sc || sc.builtin) return;
@@ -412,9 +420,9 @@ function openInstall(id, edit) {
     '<div class="actions"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">' + (edit ? 'Save' : 'Install') + '</button></div>';
   dlgSubmit = async () => {
     const settings = {};
-    dlgForm.querySelectorAll('input[name]').forEach(i => { settings[i.name] = i.value; });
+    dlgForm.querySelectorAll('input[name], select[name]').forEach(i => { settings[i.name] = i.value; });
     dlgForm.querySelectorAll('.ferr, .formerr').forEach(x => { x.hidden = true; });
-    dlgForm.querySelectorAll('input').forEach(i => i.classList.remove('bad'));
+    dlgForm.querySelectorAll('input, select').forEach(i => i.classList.remove('bad'));
     dlgBusy(edit ? 'Saving…' : 'Installing…');
     let r;
     try { r = await postScope('install', { id: id, settings: settings }); }

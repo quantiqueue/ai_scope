@@ -119,7 +119,12 @@ function getJson(b, path, timeout, cb) {
   req.on('error', function (e) { cb(e); });
 }
 // A llama.cpp server: its Server header, or a /props answer with llama.cpp's fields.
+// AI_SCOPE-109: a headless `strata launch` also answers /props, /slots and /metrics on 8080 with
+// default_generation_settings + total_slots, so it passes the test below and would be claimed by both
+// scopes. It is not llama.cpp: its build_info is a STRING naming Strata (a real build sends an object).
+function isStrataProps(d) { return typeof (d && d.build_info) === 'string' && /^strata\b/i.test(d.build_info); }
 function isLlama(d, headers) {
+  if (isStrataProps(d)) return false;
   return /llama\.cpp/i.test(String(headers && headers.server || '')) ||
     !!(d && (d.build_info || d.default_generation_settings) && ('total_slots' in d || d.role === 'router'));
 }
