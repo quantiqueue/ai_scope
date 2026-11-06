@@ -391,7 +391,10 @@ const REQ_COLS = {
   drafts:     { th: 'Drafts',      td: (r) => '<td' + tattr(r.draftsOffered ? 'Speculative decoding: ' + fmtNum(r.draftsAccepted || 0) + ' of ' + fmtNum(r.draftsOffered) + ' drafts accepted' : null) + '>' + (r.draftsOffered ? fmtPct(r.draftsAccepted / r.draftsOffered) : ONONE) + '</td>' },
   loadMs:     { th: 'Load Time',   td: (r) => '<td title="Model load time, included in Duration">' + (r.loadMs != null ? fmtSec(r.loadMs) : ONONE) + '</td>' },
   thinking:   { th: 'Thinking',    td: (r) => '<td title="Reasoning tokens, counted inside Generated">' + (r.thinkTokens ? fmtNum(r.thinkTokens) : ONONE) + '</td>' },
-  slot:       { th: 'Slot',        td: (r) => '<td>' + (r.slot != null ? r.slot : ONONE) + '</td>' }
+  slot:       { th: 'Slot',        td: (r) => '<td>' + (r.slot != null ? r.slot : ONONE) + '</td>' },
+  // AI_SCOPE-109 (Strata only): which face of Strata answered - the desktop app or a headless CLI launch.
+  // A number the app never reports stays a gap, and so does a row saved before this column existed.
+  source:     { th: 'Source',      td: (r) => '<td' + tattr('Which Strata answered this request: the desktop app, or a headless strata launch on its own port') + '>' + (r.source === 'cli' ? 'CLI' + (r.srcPort ? ' :' + r.srcPort : '') : r.source === 'app' ? 'App' : ONONE) + '</td>' }
 };
 function tattr(t) { return t ? ' title="' + escH(t) + '"' : ''; }
 // The ordered key list for a scope: the uniform block plus its own exclusives.
@@ -629,7 +632,7 @@ function nowCardRender(L, d, o) {
     const doing = o.doing ? o.doing(cur)
       : cur.phaseText ? String(cur.phaseText).charAt(0).toLowerCase() + String(cur.phaseText).slice(1)
       : (NOW_PHASE_WORDS[cur.phase] || 'working');
-    $('title').textContent = 'Running \u2014 ' + doing + nowTails(cur);
+    $('title').textContent = 'Running \u2014 ' + doing + nowTails(cur) + (o.suffix ? o.suffix(d, cur) : '');
     setName($('model'), cur.model);
     if (o.detail) $('detail').textContent = o.detail(d, cur) || '';
     const c = o.run ? (o.run(d, cur) || {}) : {};
@@ -651,7 +654,7 @@ function nowCardRender(L, d, o) {
   }
   // idle: the family's answer is the average-speed box (094 slice 3's d.average) + the scope's hint
   const s = o.idle(d), a = d.average;
-  $('title').textContent = s.title;
+  $('title').textContent = s.title + (o.suffix ? o.suffix(d, null) : '');
   setName($('model'), s.model != null ? s.model : ONONE);
   keys.forEach(k => show(k, k === 'speed' && !!a));
   if (a) {

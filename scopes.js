@@ -75,6 +75,11 @@ function validate(sc, input) {
       if (!isFinite(n) || Math.floor(n) !== n) errs[f.key] = 'Must be a whole number';
       else if ((f.min != null && n < f.min) || (f.max != null && n > f.max)) errs[f.key] = 'Must be between ' + f.min + ' and ' + f.max;
       v = n;
+    } else if (f.type === 'select') {
+      // AI_SCOPE-109 (the Strata source picker): a drop-down over the catalog's own `options`. An empty
+      // value means the field's default, never an arbitrary word.
+      const opts = f.options || [];
+      if (opts.indexOf(v) < 0) errs[f.key] = 'Choose one of: ' + opts.join(', ');
     }
     out[f.key] = v;
   });
@@ -143,6 +148,7 @@ function list() {
         const val = st && st.settings && st.settings[f.key] != null ? st.settings[f.key] : defaultOf(f);
         return { key: f.key, label: f.label || f.key, type: f.type || 'text', placeholder: f.placeholder || '', help: f.help || '',
                  required: !!f.required, min: f.min, max: f.max, default: defaultOf(f),
+                 options: f.options || null,   // AI_SCOPE-109: a select field's choices (the source picker)
                  // secret values stay server-side: the page (and GET /api/scopes) only ever sees 'set' or ''
                  value: f.type === 'secret' ? (val ? 'set' : '') : val };
       }),

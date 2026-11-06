@@ -13,15 +13,40 @@ defineSource('strata', '/api/strata?limit=100', null, null, null, 'processHistor
 // ---------- Current request (AI_SCOPE-100: the shared card engine) ----------
 // All five boxes - Strata's engine reports every one of them live. phase/phaseText are Strata's own
 // words (080): the engine lets her prose win the state line, and queued rides the normal tail.
+// AI_SCOPE-109: the scope now answers from two faces of Strata - the desktop app, or a headless
+// `strata launch` engine read directly. The server sends which one (`source`) and what it last told the
+// Hardware Mirror Lenses (`state`); these are the words for a scope that is reachable-but-not-reading and
+// for naming the source, so every lens says the same thing.
+function strataSource(d) {
+  if (d.source === 'cli') return 'CLI' + (d.port ? ' :' + d.port : '');
+  if (d.source === 'app') return 'App';
+  return null;
+}
+function strataDownTitle(d) {
+  if (d.keyNeeded) return 'Strata needs its API key';
+  if (d.state === 'loading') return 'Strata is loading its model';
+  return 'Strata is not running';
+}
+function strataDownSub(d) {
+  if (d.keyNeeded) return 'Strata needs a key';
+  if (d.state === 'loading') return 'Strata Loading\u2026';
+  return 'Strata Offline';
+}
 const STRATA_CARD = {
   title: 'Current request',
   boxes: ['speed', 'gen', 'prompt', 'context', 'time'],
-  offline: () => ({ title: 'Strata is not running' }),
+  // AI_SCOPE-109 (option A): a running / idle title names the face of Strata it came from, so a swap
+  // between the app and a CLI launch is visible where the numbers are. An offline title never gains one.
+  suffix: d => { const s = strataSource(d); return s ? ' \u00b7 ' + s : ''; },
+  offline: d => ({ title: strataDownTitle(d), foot: d.keyNeeded
+      ? 'Strata\'s CLI is running, but its API wants a key. Put it in this scope\'s "Strata API key" setting.'
+      : d.state === 'loading' ? 'A headless launch is setting its engine up: the port is not born yet, so there is nothing to read. The Hardware Mirror tiles show the load.'
+      : '' }),
   idle: d => {
     const l = d.loaded, a = d.average;
-    return { title: l && l.phase === 'unavailable' ? 'Engine not answering' : l ? 'Idle \u2014 no request running' : 'No model loaded',
+    return { title: l && l.phase === 'unavailable' ? 'Engine not answering' : l ? 'Idle \u2014 no request running' : d.state === 'idle' ? 'Idle \u2014 no model loaded' : 'No model loaded',
              model: l ? l.label : a ? a.model : null,
-             foot: !l ? 'Load a model in Strata to see live stats.'
+             foot: !l ? (d.state === 'idle' ? 'Load a model in Strata (the app, or `strata chat --load` for a headless launch) to see live stats.' : 'Load a model in Strata to see live stats.')
                : l.phase === 'unavailable' ? 'Strata\'s engine isn\'t answering. Check the Strata app.'
                : 'Send a message in Strata (or a request to its API) to see live stats.' };
   },
@@ -42,6 +67,10 @@ const STRATA_CARD = {
       time: { text: fmtSec(c.elapsedMs) },
     };
   },
+  // AI_SCOPE-109: a read-only telemetry key opens /v1/telemetry only, and that is a LOSSY re-shape of
+  // /metrics. The faces it cannot answer are named on the card's detail line rather than left as
+  // silent gaps the user has to discover.
+  detail: d => d.telemetryOnly && d.na && d.na.length ? 'telemetry key \u2014 n/a: ' + d.na.join('; ') : '',
   name: 'Strata',
 };
 defineLens({
@@ -84,7 +113,9 @@ defineLens({
     const opts = Object.assign({}, STRATA_LOAD, { count: l ? 1 : 0, solo: !!l, proc: d.process, multi: false });
     $('rows').innerHTML = paginate(L.key, l ? [loadedRow(l, opts)] : [], $('pager'), L.settings.perPage).join('');
     $('empty').hidden = !!l;
-    $('empty').textContent = d.online ? 'No model loaded. Load one in Strata (Models).' : 'Strata is offline. Start the Strata app to see its model and requests.';
+    // AI_SCOPE-109: a headless launch has no (Models) screen to load one from.
+    $('empty').textContent = d.online ? 'No model loaded. Load one in Strata' + (d.source === 'cli' ? ' (strata chat --load, or restart the launch with a model).' : ' (Models).')
+      : 'Strata is offline. Start the Strata app, or a headless launch (strata launch), to see its model and requests.';
     const where = l ? procVramText(d.process) : '';   // per-card VRAM of the model process (Windows, AI_SCOPE-051)
     $('hint').textContent = [where, l && l.error ? l.error : ''].filter(Boolean).map((t, i) => (i ? '' : '— ') + t).join(' · ');
   },
@@ -107,7 +138,7 @@ function strataReqTitle(key, r) {
 // One option object drives BOTH the header and the rows, so the two can never drift apart
 // (the probe caught exactly that class of bug: 11 headers over 10 cells).
 const STRATA_REQ = {
-  title: 'Requests', pager: true, extra: ['hitRate'],
+  title: 'Requests', pager: true, extra: ['source', 'hitRate'],
   keyOf: r => r.key,
   titleOf: strataReqTitle,
   statusOf: r => r.finish && r.finish !== 'stop' && r.finish !== 'length'
@@ -116,12 +147,12 @@ const STRATA_REQ = {
 defineLens({
   id: 'strata.requests', scope: 'strata', size: 'full',
   name: 'Requests',
-  description: 'Finished requests: tokens, cached prompt, speeds, first token, duration, peak load, expert hit rate.',
+  description: 'Finished requests: tokens, cached prompt, speeds, first token, duration, peak load, which Strata answered the request, expert hit rate.',
   settings: [PER_PAGE_FIELD],
   markup: reqTableMarkup(STRATA_REQ),
   render(L, d) {
     const $ = L.$, t = d.totals;
-    $('hint').textContent = t && t.requests ? '— since load: ' + fmtNum(t.requests) + ' requests' +
+    $('hint').textContent = t && t.requests ? '— since ' + (d.source === 'cli' ? 'start' : 'load') + ': ' + fmtNum(t.requests) + ' requests' +
       (t.promptTokens ? ' · ' + fmtNum(t.cachedTokens || 0) + ' of ' + fmtNum(t.promptTokens) + ' prompt tokens reused (' + Math.round(100 * (t.cachedTokens || 0) / t.promptTokens) + '%)' : '') +
       (t.draftsOffered ? ' · drafts ' + Math.round(100 * (t.draftsAccepted || 0) / t.draftsOffered) + '% accepted' : '') : '';
     $('empty').hidden = d.rows.length > 0;
@@ -157,7 +188,10 @@ defineLens({
     $('hint').textContent = instHint(STRATA_INST, d.installed);
     $('rows').innerHTML = paginate(L.key, d.installed.map(m => instRow(m, STRATA_INST)), $('pager'), L.settings.perPage).join('');
     $('empty').hidden = d.installed.length > 0;
-    $('empty').textContent = d.online ? 'No models installed in Strata.' : 'Strata is offline.';
+    // AI_SCOPE-109 (kickoff decision 6): the installed list and Strata's fit verdict come from the desktop
+    // app only - a headless engine has neither. The lens stays, and says so.
+    $('empty').textContent = d.installedOnlyApp ? 'Only shown with the Strata desktop app'
+      : (d.online ? 'No models installed in Strata.' : 'Strata is offline.');
   },
 });
 
@@ -206,7 +240,7 @@ defineLens({
     sparkTile(box, meter, v == null ? NA_HTML : fmtTps(v),
       run != null ? 'live · ' + cutName(d.current.model)
         : avg != null ? 'avg last ' + d.average.requests + ' · ' + cutName(d.average.model)
-        : d.online ? 'no requests recorded yet' : 'Strata Offline',
+        : d.online ? 'no requests recorded yet' : strataDownSub(d),
       clk.segs, clk.caps);
     box.querySelector('.spark').title = 'Top of the chart = ' + fmtTps(maxT) + ' tok/s (5-minute board max)';
   },
@@ -260,7 +294,7 @@ defineLens({
     sparkTile(box, meter, v == null ? NA_HTML : fmtTps(v),
       live != null ? 'live · ' + cutName(d.current.model)
         : avg != null ? 'avg last ' + d.promptAverage.requests + ' · ' + cutName(d.promptAverage.model)
-        : d.online ? 'no prompts recorded yet' : 'Strata Offline',
+        : d.online ? 'no prompts recorded yet' : strataDownSub(d),
       clk.segs, clk.caps);
     box.querySelector('.spark').title = 'Top of the chart = ' + fmtTps(maxT) + ' tok/s (5-minute board max)';
   },
@@ -357,7 +391,7 @@ defineLens({
     const v = last ? last.hitRate : null;
     sparkTile(box, v == null ? null : 100 * v, v == null ? NA_HTML : fmtPct(v),
       last ? 'last req · ' + fmtWhen(last.end) + ' · ' + cutName(last.model)
-        : d.online ? 'no requests recorded yet' : 'Strata Offline',
+        : d.online ? 'no requests recorded yet' : strataDownSub(d),
       segs);   // interior caps rule: one fully joined run edge-to-edge draws no borders
     box.querySelector('.spark').title = 'Top of the chart = 100% (fixed) · one step per request, in order, up to the last 100';
   },
