@@ -47,6 +47,9 @@ function Stop-AiScope {
     # AI_SCOPE-111: the system tray helper is a PowerShell child of the server, and it keeps assets\ai_scope.ico
     # open while the icon is up. Killing the server (Stop-Process, so its own cleanup never runs) would otherwise
     # leave that handle for a few seconds and the "Remove-Item $AppDir" below would fail on a file in use.
+    # The helper watches the server it belongs to and disposes the icon itself within 500 ms of that server
+    # dying, so wait that second out first: force-killing the helper is exactly what leaves an icon behind.
+    if ($procs) { Start-Sleep -Milliseconds 1200 }
     $tray = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
       Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir\tray.ps1*" }
     foreach ($p in $tray) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }

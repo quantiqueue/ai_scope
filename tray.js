@@ -2,8 +2,11 @@
 // server.js calls start() once its port is listening; tray.ps1 draws the icon and its menu.
 // Rules this keeps:
 //  - the tray belongs to the server process that started it: it appears whenever AI_SCOPE runs (installed
-//    --app, a plain console run, the login item, or the dev copy) and it is killed the moment this process ends,
-//    so the icon never claims AI_SCOPE is running when it is not;
+//    --app, a plain console run, the login item, or the dev copy) and it goes away when this process ends -
+//    tray.ps1 holds a handle to this process and takes the icon down itself. Never hard-kill the shipped
+//    helper from here: on Windows kill() is TerminateProcess, so the helper never reaches $notify.Dispose()
+//    and Windows keeps showing an icon whose process is gone until the mouse crosses it. Only a stand-in
+//    script (a probe pointing start() at its own helper) is killed, because a stand-in has no such watch;
 //  - Windows only, and it never takes anything with it: every failure is one logged line and AI_SCOPE runs on
 //    exactly as before (no interactive desktop, a restricted PowerShell, a missing file);
 //  - the menu's two items are loopback calls to this same server, so no paths or command lines are handed to
@@ -39,6 +42,9 @@ function start(opts) {
     child = spawn('powershell.exe', args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) { log('could not start: ' + e.message + ' - AI_SCOPE runs on without an icon'); return null; }
   const me = child;
+  // A probe or test pointing start() at its own stand-in script: those have no parent watch in them, so only
+  // they may be killed here. The shipped tray.ps1 takes its own icon down.
+  me.standIn = !!opts.script;
   const note = function (line) { const s = String(line).replace(/\s+$/, ''); if (s) log(s); };
   if (me.stdout) me.stdout.setEncoding('utf8');
   if (me.stderr) me.stderr.setEncoding('utf8');
@@ -60,11 +66,15 @@ function start(opts) {
   return me.pid;
 }
 
-// Take the icon down with this process (Ctrl+C, the Stop button, ai_scope --stop, a restart).
+// The icon goes down with this process (Ctrl+C, the Stop button, ai_scope --stop, Restart Now, a dev restart).
+// No kill() for the shipped helper: a hard kill skips its Dispose call, and Windows then keeps showing an icon
+// whose process is gone until the mouse crosses it. That helper holds a handle to this process and closes itself
+// within 500 ms of us exiting. A stand-in helper (a probe) has no such watch, so only those get killed.
 function stop() {
   if (!child) return false;
   const c = child; child = null;
   c.putDown = true;           // this exit is ours: the handler stays quiet about it
+  if (!c.standIn) return true;
   try { c.kill(); } catch (e) { return false; }
   return true;
 }

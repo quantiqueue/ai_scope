@@ -13,11 +13,13 @@ Write-Host 'Uninstalling AI_SCOPE' -ForegroundColor Cyan
 
 # stop it if it's running
 try {
-  Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
-    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir*" } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  $nodeProcs = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir*" })
+  foreach ($p in $nodeProcs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
   # AI_SCOPE-111: the system tray helper (a PowerShell child of the server) keeps assets\ai_scope.ico open,
-  # so end it before $AppDir goes away.
+  # so end it before $AppDir goes away. It disposes the icon itself within 500 ms of the server dying, so wait
+  # that second out first: force-killing the helper is what can leave an icon handle open.
+  if ($nodeProcs.Count) { Start-Sleep -Milliseconds 1200 }
   Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir\tray.ps1*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
