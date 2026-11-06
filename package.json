@@ -1,6 +1,6 @@
 {
   "name": "ai_scope",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "AI_SCOPE: local dashboard for monitoring AI tools (Bionic, Ollama, ComfyUI, Strata, CPU/GPU/VRAM)",
   "keywords": [
     "ai",
@@ -58,6 +58,8 @@
     "hostcheck.js",
     "settings.js",
     "logos.js",
+    "tray.js",
+    "tray.ps1",
     "README.md",
     "manual/",
     "LICENSE"

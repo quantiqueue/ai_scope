@@ -17,6 +17,8 @@ const scopelayouts = require('./scopelayouts');   // edited layouts of the scope
 const scopes = require('./scopes');
 const customscopes = require('./customscopes');   // AI_SCOPE-003: user-made pages of lenses
 const settings = require('./settings');           // app-wide settings, AI_SCOPE-010
+const tray = require('./tray');                   // the Windows system tray icon (AI_SCOPE-111)
+const appwin = require('./bin/app');              // its "Open App" reuses --app's own window path
 const spawn = require('child_process').spawn;     // Restart Now (AI_SCOPE-010)
 hwstats.start();   // Hardware is built in (its VRAM total is also used by the other scopes)
 proctop.start();   // Processes is built in: its sampler stays warm (slow while nobody looks), AI_SCOPE-059
@@ -146,6 +148,15 @@ http.createServer((req, res) => {
     console.log('[server] stop requested - exiting');
     sendJson(res, 200, { ok: true });
     return setTimeout(() => process.exit(0), 150);
+  }
+  // AI_SCOPE-111: the tray icon's "Open App". Same rules as /api/stop - this PC only, and a cross-site page
+  // cannot set the header - and it opens the window through --app's own code path (appBrowsers, the app-window
+  // profile, the Default Scope landing), so there is only one place that decides what the app window is.
+  if (url.pathname === '/api/tray/open' && req.method === 'POST') {
+    if (!isLocal(req) || req.headers['x-ai-scope'] !== 'open') return sendJson(res, 403, { ok: false, error: 'Only allowed from this computer' });
+    const via = appwin.openWindow('http://localhost:' + PORT + '/#' + landing());
+    console.log('[server] tray opened the app window in ' + via);
+    return sendJson(res, 200, { ok: true, via: via });
   }
   if (url.pathname === '/api/scopes' && req.method === 'GET') return sendJson(res, 200, scopes.list());
   if ((url.pathname === '/api/scopes/install' || url.pathname === '/api/scopes/remove') && req.method === 'POST') {
@@ -349,6 +360,9 @@ http.createServer((req, res) => {
     console.log('  (this PC only - use --host 0.0.0.0 to open it from other devices)');
   }
   console.log(`  Data:    ${require('./paths').DATA_DIR}`);
+  // AI_SCOPE-111: the tray icon belongs to this process, so it appears for every way of starting AI_SCOPE on
+  // Windows - --app, a console run, the login item, the dev copy - and goes away when this one ends.
+  tray.start({ port: PORT, version: PKG_VERSION });
   // --open (and so the Start Menu shortcut and the installer's first start) lands on the Default Scope.
   if (process.env.AI_SCOPE_OPEN === '1') require('./bin/open')(`http://localhost:${PORT}/#${landing()}`);
 });
