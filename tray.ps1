@@ -56,10 +56,21 @@ $notify.Text = $label
 $notify.ContextMenuStrip = $menu
 
 # Left click brings the menu up as well, so a plain click on the icon is enough (right click is the automatic one).
+# Do not show the menu from here: a ContextMenuStrip shown by hand has no owner window, so it can stay up after the
+# user clicks elsewhere and can come up behind the taskbar. NotifyIcon already owns its hidden window for the right
+# click, and the private ShowContextMenu is the call that path makes - take it by reflection once, at startup, and
+# call it for the left click too. Checked against the runtime that runs this file (Windows PowerShell 5.1,
+# System.Windows.Forms 4.0.0.0): instance, non-public, no parameters, returns void. If some other PowerShell is ever
+# missing that method, fall back to the old Show call rather than leave the left click dead.
+$showContextMenu = $notify.GetType().GetMethod('ShowContextMenu', [System.Reflection.BindingFlags]'Instance,NonPublic')
+
 $notify.Add_MouseClick({
   param($s, $e)
   if ($e.Button.ToString() -eq 'Left') {
-    try { $menu.Show([System.Windows.Forms.Cursor]::Position) } catch { }
+    try {
+      if ($showContextMenu) { [void]$showContextMenu.Invoke($notify, $null) }
+      else { $menu.Show([System.Windows.Forms.Cursor]::Position) }
+    } catch { }
   }
 })
 
