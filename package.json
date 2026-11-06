@@ -58,6 +58,8 @@
     "hostcheck.js",
     "settings.js",
     "logos.js",
+    "tray.js",
+    "tray.ps1",
     "README.md",
     "manual/",
     "LICENSE"

@@ -132,4 +132,4 @@ function stop(port) {
   req.end();
 }
 
-module.exports = { app: app, stop: stop, ping: ping };
+module.exports = { app: app, stop: stop, ping: ping, openWindow: openWindow };   // openWindow: the tray's "Open App" (AI_SCOPE-111) asks the running server to call this

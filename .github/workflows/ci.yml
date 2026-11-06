@@ -42,6 +42,9 @@ jobs:
         shell: bash
         env:
           AI_SCOPE_DATA: ${{ runner.temp }}/ai_scope_data
+          # AI_SCOPE-111: the Windows system tray icon. A runner has no interactive desktop, and the icon
+          # belongs to a running server - so CI turns it off instead of starting a tray helper there.
+          AI_SCOPE_TRAY: '0'
         run: |
           node bin/ai_scope.js --version
           node bin/ai_scope.js --help > /dev/null
@@ -65,6 +68,8 @@ jobs:
         shell: bash
         env:
           AI_SCOPE_DATA: ${{ runner.temp }}/ai_scope_data_packed
+          # AI_SCOPE-111: same reason as the CLI smoke test above - no interactive desktop on a runner.
+          AI_SCOPE_TRAY: '0'
         run: |
           TGZ=$(npm pack --silent)
           [ -n "$TGZ" ]

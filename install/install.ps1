@@ -7,8 +7,9 @@
 #   node\   a private node.exe - only if this PC has no Node.js 18+
 #   bin\    ai_scope.cmd (added to your user PATH) and ai_scope.vbs (starts it without a console window)
 # plus a Start Menu shortcut "AI_SCOPE" (and, if you want, one on the desktop). The shortcuts run
-# "ai_scope --app": AI_SCOPE starts in the background and opens in its own window. Settings and
-# history live in %USERPROFILE%\.ai_scope.
+# "ai_scope --app": AI_SCOPE starts in the background and opens in its own window. While it runs there's an
+# AI_SCOPE icon in the system tray (Open App / Quit AI_SCOPE) - see tray.js / tray.ps1 in the app folder.
+# Settings and history live in %USERPROFILE%\.ai_scope.
 # Run the same line again to update. Uninstall: ai_scope --uninstall
 #
 # Options (set before running):
@@ -43,7 +44,13 @@ function Stop-AiScope {
     $procs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
       Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir*" }
     foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-    if ($procs) { Say 'Stopped the running AI_SCOPE.'; Start-Sleep -Milliseconds 800 }
+    # AI_SCOPE-111: the system tray helper is a PowerShell child of the server, and it keeps assets\ai_scope.ico
+    # open while the icon is up. Killing the server (Stop-Process, so its own cleanup never runs) would otherwise
+    # leave that handle for a few seconds and the "Remove-Item $AppDir" below would fail on a file in use.
+    $tray = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
+      Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir\tray.ps1*" }
+    foreach ($p in $tray) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($procs -or $tray) { Say 'Stopped the running AI_SCOPE.'; Start-Sleep -Milliseconds 800 }
   } catch {}
 }
 
@@ -188,6 +195,7 @@ Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
 Write-Host "AI_SCOPE $version is installed." -ForegroundColor Green
 Say 'Start it from the Start Menu (AI_SCOPE) or the desktop shortcut - it opens in its own window.'
+Say 'The AI_SCOPE icon in your system tray has the same two things: Open App, and Quit AI_SCOPE.'
 Say 'Closing the window keeps AI_SCOPE running in the background. Stop it with:  ai_scope --stop'
 Say 'From a terminal:  ai_scope  (runs there, Ctrl+C to stop)   ai_scope --open  (in your browser)'
 Say 'Options:  ai_scope --help      Uninstall:  ai_scope --uninstall'

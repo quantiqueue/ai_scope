@@ -16,6 +16,11 @@ try {
   Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  # AI_SCOPE-111: the system tray helper (a PowerShell child of the server) keeps assets\ai_scope.ico open,
+  # so end it before $AppDir goes away.
+  Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$AppDir\tray.ps1*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   # the app window (Edge/Chrome using AI_SCOPE's own profile in $Root\window*), so its files can be removed
   Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe' OR Name = 'chrome.exe'" |
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*$Root\window*" } |
