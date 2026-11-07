@@ -63,6 +63,8 @@ const homeAnim = (function () {
     eva: [[6,3,10],[24,10,40],[62,28,98],[118,70,168],[155,227,60]],
     // Glass (AI_SCOPE-112): iOS wallpaper ramp, deep blue through periwinkle and sky to violet and pink
     glass: [[11,21,51],[34,58,140],[72,120,220],[150,95,215],[255,130,185]],
+    // Graphite (AI_SCOPE-113): the whole ramp is grey; the light facets read as brushed metal
+    graphite: [[9,9,10],[20,21,23],[40,42,46],[78,82,88],[150,155,163]],
   };
   let STOPS = STOPS_BY_THEME.blue;
   let W = 0, H = 0, pts = [], tris = [], running = false;
@@ -147,7 +149,7 @@ const homeAnim = (function () {
 
 // Theme (AI_SCOPE-010): an app-wide setting shown in the settings dialog - no top-bar menu any more, so the
 // value comes from the server ('default' follows the OS light / dark setting).
-const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo', eva: 'EVA', glass: 'Glass' };
+const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo', eva: 'EVA', glass: 'Glass', graphite: 'Graphite' };
 // Some apps ship a logo for light and one for dark backgrounds (Strata): ask for the one matching the theme.
 let logosReady = false;   // set once the logo checks below have started (renderTabs needs LOGO_OK)
 function prefersDark() { return !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches); }
