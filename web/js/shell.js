@@ -69,6 +69,8 @@ const homeAnim = (function () {
     ink: [[6,8,20],[16,24,64],[36,64,140],[92,64,180],[190,90,220]],
     // Amber Terminal (AI_SCOPE-115): black-brown warming through rust to phosphor amber
     amber: [[8,5,3],[24,14,6],[64,38,12],[150,95,25],[255,170,60]],
+    // Paper (AI_SCOPE-116): kraft brown warming to cream - the lab notebook under glass light
+    paper: [[32,28,21],[70,60,44],[122,104,76],[184,160,116],[240,226,196]],
   };
   let STOPS = STOPS_BY_THEME.blue;
   let W = 0, H = 0, pts = [], tris = [], running = false;
@@ -153,7 +155,7 @@ const homeAnim = (function () {
 
 // Theme (AI_SCOPE-010): an app-wide setting shown in the settings dialog - no top-bar menu any more, so the
 // value comes from the server ('default' follows the OS light / dark setting).
-const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo', eva: 'EVA', glass: 'Glass', graphite: 'Graphite', ink: 'Ink Glass', amber: 'Amber Terminal' };
+const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo', eva: 'EVA', glass: 'Glass', graphite: 'Graphite', ink: 'Ink Glass', amber: 'Amber Terminal', paper: 'Paper' };
 // Some apps ship a logo for light and one for dark backgrounds (Strata): ask for the one matching the theme.
 let logosReady = false;   // set once the logo checks below have started (renderTabs needs LOGO_OK)
 function prefersDark() { return !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches); }
