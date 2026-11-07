@@ -40,6 +40,30 @@
   :root[data-theme="graphite"] { --bg:#1b1c1e; --card:#242629; --text:#e7e8ea; --muted:#9a9ea5;
     --line:#35373c; --accent:#ffffff; --good:#9da2a9; --mid:#c3c7cd; --bad:#f3f4f6;
     color-scheme:dark; --scheme:dark; }
+  /* Ink Glass (AI_SCOPE-114): Glass (112) inverted. Translucent near-white on ink surfaces,
+     blur and saturate over a colored dark mesh; same surface-rule pattern as glass, recoloured. */
+  :root[data-theme="ink"] { --bg:#0b1020; --card:rgba(255,255,255,.10); --text:#e9edf7; --muted:#8d94ab;
+    --line:rgba(255,255,255,.13); --accent:#4aa8ff; --good:#4ade80; --mid:#fbbf24; --bad:#fb7185;
+    color-scheme:dark; --scheme:dark; }
+  [data-theme="ink"] body { background:
+      radial-gradient(1200px 700px at 8% 2%, rgba(64,110,255,.28), rgba(64,110,255,0) 62%),
+      radial-gradient(1000px 620px at 93% 5%, rgba(168,85,247,.24), rgba(168,85,247,0) 60%),
+      radial-gradient(1100px 720px at 84% 95%, rgba(34,211,238,.16), rgba(34,211,238,0) 62%),
+      radial-gradient(900px 640px at 6% 90%, rgba(99,102,241,.22), rgba(99,102,241,0) 60%),
+      #0b1020;
+      background-attachment:fixed; }
+  [data-theme="ink"] .topbar, [data-theme="ink"] th {
+      backdrop-filter:blur(14px) saturate(1.4); -webkit-backdrop-filter:blur(14px) saturate(1.4); }
+  [data-theme="ink"] .square, [data-theme="ink"] .tile, [data-theme="ink"] .card {
+      backdrop-filter:blur(16px) saturate(1.4); -webkit-backdrop-filter:blur(16px) saturate(1.4);
+      border-color:rgba(255,255,255,.14);
+      box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.12); }
+  [data-theme="ink"] .square:hover { box-shadow:0 12px 30px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.12); }
+  [data-theme="ink"] th { background:rgba(15,19,36,.82); }   /* sticky header: rows must not ghost through */
+  [data-theme="ink"] dialog.modal {
+      backdrop-filter:blur(20px) saturate(1.4); -webkit-backdrop-filter:blur(20px) saturate(1.4);
+      box-shadow:0 20px 60px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.12); }
+  [data-theme="ink"] dialog.modal::backdrop { background:rgba(4,6,14,.55); }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
   .topbar { position:sticky; top:0; z-index:10; display:flex; align-items:stretch; gap:28px; padding:0 24px;
@@ -131,6 +155,14 @@
   [data-theme="graphite"] .home .sub { color:#8b8f96; }
   [data-theme="graphite"] .home .go { color:#e7e8ea; border-color:rgba(139,143,150,.3); background:rgba(9,9,10,.5); }
   [data-theme="graphite"] .home .go:hover, [data-theme="graphite"] .home .go:focus-visible { border-color:#f5f6f7; background:rgba(60,63,68,.5); }
+  /* Ink Glass home (114): dark mesh field ramp, wordmark glow in blue and violet, frosted dark go button */
+  [data-theme="ink"] .home { background:#060814; color:#e9edf7; }
+  [data-theme="ink"] .home .vignette { background: radial-gradient(ellipse at 50% 50%, rgba(6,8,20,0) 35%, rgba(6,8,20,.55) 100%); }
+  [data-theme="ink"] .home .mark { color:#e9edf7; text-shadow:0 0 40px rgba(74,168,255,.35), 0 0 28px rgba(168,85,247,.30), 0 2px 18px rgba(0,0,0,.6); }
+  [data-theme="ink"] .home .mark span { color:#6fb7ff; }
+  [data-theme="ink"] .home .sub { color:#8d94ab; }
+  [data-theme="ink"] .home .go { color:#e9edf7; border-color:rgba(141,148,171,.3); background:rgba(6,8,20,.45); backdrop-filter:blur(14px) saturate(1.4); -webkit-backdrop-filter:blur(14px) saturate(1.4); }
+  [data-theme="ink"] .home .go:hover, [data-theme="ink"] .home .go:focus-visible { border-color:#6fb7ff; background:rgba(30,50,100,.55); }
   .gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows:1fr; gap:16px; } /* every card the same size */
   .square { min-height:200px; /* height comes from the grid row (tallest card), so all match */ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px;
             display:flex; flex-direction:column; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; min-width:0; }
