@@ -25,7 +25,7 @@ const SECTIONS = [
       options: [{ value: 'default', label: 'Default (follows the OS)' }, { value: 'dark', label: 'Dark' },
                 { value: 'magenta', label: 'Magenta' }, { value: 'neo', label: 'Neo' }, { value: 'eva', label: 'EVA' },
                 { value: 'glass', label: 'Glass' }, { value: 'graphite', label: 'Graphite' },
-                { value: 'ink', label: 'Ink Glass' }],
+                { value: 'ink', label: 'Ink Glass' }, { value: 'amber', label: 'Amber Terminal' }],
       info: 'Default follows your OS light / dark setting. Saved for every device that opens AI_SCOPE, not just this browser.' },
   ] },
   { id: 'engine', label: 'Engine', keys: [
