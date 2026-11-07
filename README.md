@@ -22,7 +22,6 @@ AI_SCOPE is a dashboard for the AI apps on your own PC. It shows what your local
 - **Token speed and context, per app.** Gen / prompt tok/s and context tiles on the LLM scopes (Strata also a prompt-cache hit rate), beside each app's current-request card and request table.
 - **Your own views.** Custom scopes put lenses from any app side by side, and every page can be rearranged.
 - **Light and private.** One install line, no admin rights, no account, no cloud, no telemetry. Settings and history are plain JSON files in `~/.ai_scope` ([where the data comes from](manual/DATA_SOURCE.md)).
-- **A tray icon while it runs (Windows).** The AI_SCOPE icon sits in the system tray as long as an AI_SCOPE is running, however you started it: click it for **Open App** or **Quit AI_SCOPE** ([running AI_SCOPE](manual/RUNNING_AI_SCOPE.md)).
 
 ## Install
 

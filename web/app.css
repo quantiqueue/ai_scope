@@ -1,14 +1,79 @@
-  :root { --bg:#f6f6f7; --card:#fff; --text:#18181b; --muted:#71717a; --line:#e4e4e7; --accent:#2563eb; --good:#16a34a; --mid:#ca8a04; --bad:#dc2626; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme]) { --bg:#0f0f11; --card:#18181b; --text:#f4f4f5; --muted:#a1a1aa; --line:#27272a; --accent:#60a5fa; color-scheme:dark; } }
+  :root { --bg:#f6f6f7; --card:#fff; --text:#18181b; --muted:#71717a; --line:#e4e4e7; --accent:#2563eb; --good:#16a34a; --mid:#ca8a04; --bad:#dc2626; --scheme:light; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme]) { --bg:#0f0f11; --card:#18181b; --text:#f4f4f5; --muted:#a1a1aa; --line:#27272a; --accent:#60a5fa; color-scheme:dark; --scheme:dark; } }
   /* Theme picker (top-right): no data-theme = Default (follows the OS light/dark setting) */
-  :root[data-theme="dark"] { --bg:#0f0f11; --card:#18181b; --text:#f4f4f5; --muted:#a1a1aa; --line:#27272a; --accent:#60a5fa; color-scheme:dark; }
+  :root[data-theme="dark"] { --bg:#0f0f11; --card:#18181b; --text:#f4f4f5; --muted:#a1a1aa; --line:#27272a; --accent:#60a5fa; color-scheme:dark; --scheme:dark; }
   :root[data-theme="magenta"] { --bg:#13080f; --card:#1f0d19; --text:#fdeaf5; --muted:#c79ab7; --line:#3d1d33; --accent:#ff3fa4;
-    --good:#34d399; --mid:#fbbf24; --bad:#f43f5e; color-scheme:dark; }
+    --good:#34d399; --mid:#fbbf24; --bad:#f43f5e; color-scheme:dark; --scheme:dark; }
   :root[data-theme="neo"] { --bg:#040905; --card:#09130b; --text:#d4f7dc; --muted:#79a985; --line:#15321c; --accent:#2bff88;
-    --good:#7dffb0; --mid:#f5d742; --bad:#ff5a5a; color-scheme:dark; }
+    --good:#7dffb0; --mid:#f5d742; --bad:#ff5a5a; color-scheme:dark; --scheme:dark; }
   /* EVA: deep purple surfaces, lime-green accent, orange for warnings / "tight" */
   :root[data-theme="eva"] { --bg:#120a1d; --card:#1d1230; --text:#f1e9fc; --muted:#b49dd6; --line:#3b2860; --accent:#9be33c;
-    --good:#7fdc5a; --mid:#ff9f2e; --bad:#ff4f6d; color-scheme:dark; }
+    --good:#7fdc5a; --mid:#ff9f2e; --bad:#ff4f6d; color-scheme:dark; --scheme:dark; }
+  /* Glass (AI_SCOPE-112): iOS-inspired frosted light theme. Translucent cards over a soft colorful mesh.
+     The nine palette vars carry no blur of their own; the [data-theme="glass"] rules below add the frosted
+     surfaces, and the glass home block sits with the other home overrides further down. */
+  :root[data-theme="glass"] { --bg:#eef1f6; --card:rgba(255,255,255,.60); --text:#181a23; --muted:#737a8c;
+    --line:#e2e6f0; --accent:#0a84ff; --good:#1f9d55; --mid:#b06a00; --bad:#d70015;
+    color-scheme:light; --scheme:light; }
+  [data-theme="glass"] body { background:
+      radial-gradient(1200px 700px at 8% 2%, rgba(120,180,255,.55), rgba(120,180,255,0) 62%),
+      radial-gradient(1000px 620px at 93% 5%, rgba(255,140,190,.42), rgba(255,140,190,0) 60%),
+      radial-gradient(1100px 720px at 84% 95%, rgba(150,120,255,.40), rgba(150,120,255,0) 62%),
+      radial-gradient(900px 640px at 6% 90%, rgba(90,220,180,.40), rgba(90,220,180,0) 60%),
+      #eef1f6;
+      background-attachment:fixed; }
+  [data-theme="glass"] .topbar, [data-theme="glass"] th {
+      backdrop-filter:blur(14px) saturate(1.5); -webkit-backdrop-filter:blur(14px) saturate(1.5); }
+  [data-theme="glass"] .square, [data-theme="glass"] .tile, [data-theme="glass"] .card {
+      backdrop-filter:blur(16px) saturate(1.5); -webkit-backdrop-filter:blur(16px) saturate(1.5);
+      border-color:rgba(255,255,255,.6);
+      box-shadow:0 10px 30px rgba(45,65,120,.10), inset 0 1px 0 rgba(255,255,255,.65); }
+  [data-theme="glass"] .square:hover { box-shadow:0 12px 30px rgba(45,65,120,.16), inset 0 1px 0 rgba(255,255,255,.65); }
+  [data-theme="glass"] th { background:rgba(248,250,253,.80); }   /* sticky header: rows must not ghost through */
+  [data-theme="glass"] dialog.modal {
+      backdrop-filter:blur(20px) saturate(1.5); -webkit-backdrop-filter:blur(20px) saturate(1.5);
+      box-shadow:0 20px 60px rgba(30,40,90,.30), inset 0 1px 0 rgba(255,255,255,.6); }
+  [data-theme="glass"] dialog.modal::backdrop { background:rgba(30,40,90,.35); }
+  /* Graphite (AI_SCOPE-113): pure monochrome dark. Greys only; white is the single accent.
+     Status colour becomes status luminance: bad is the brightest thing on screen, mid middle, good quiet.
+     No surface rules beyond the nine vars - the point is a quiet page, not an effect. */
+  :root[data-theme="graphite"] { --bg:#1b1c1e; --card:#242629; --text:#e7e8ea; --muted:#9a9ea5;
+    --line:#35373c; --accent:#ffffff; --good:#9da2a9; --mid:#c3c7cd; --bad:#f3f4f6;
+    color-scheme:dark; --scheme:dark; }
+  /* Ink Glass (AI_SCOPE-114): Glass (112) inverted. Translucent near-white on ink surfaces,
+     blur and saturate over a colored dark mesh; same surface-rule pattern as glass, recoloured. */
+  :root[data-theme="ink"] { --bg:#0b1020; --card:rgba(255,255,255,.10); --text:#e9edf7; --muted:#8d94ab;
+    --line:rgba(255,255,255,.13); --accent:#4aa8ff; --good:#4ade80; --mid:#fbbf24; --bad:#fb7185;
+    color-scheme:dark; --scheme:dark; }
+  [data-theme="ink"] body { background:
+      radial-gradient(1200px 700px at 8% 2%, rgba(64,110,255,.28), rgba(64,110,255,0) 62%),
+      radial-gradient(1000px 620px at 93% 5%, rgba(168,85,247,.24), rgba(168,85,247,0) 60%),
+      radial-gradient(1100px 720px at 84% 95%, rgba(34,211,238,.16), rgba(34,211,238,0) 62%),
+      radial-gradient(900px 640px at 6% 90%, rgba(99,102,241,.22), rgba(99,102,241,0) 60%),
+      #0b1020;
+      background-attachment:fixed; }
+  [data-theme="ink"] .topbar, [data-theme="ink"] th {
+      backdrop-filter:blur(14px) saturate(1.4); -webkit-backdrop-filter:blur(14px) saturate(1.4); }
+  [data-theme="ink"] .square, [data-theme="ink"] .tile, [data-theme="ink"] .card {
+      backdrop-filter:blur(16px) saturate(1.4); -webkit-backdrop-filter:blur(16px) saturate(1.4);
+      border-color:rgba(255,255,255,.14);
+      box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.12); }
+  [data-theme="ink"] .square:hover { box-shadow:0 12px 30px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.12); }
+  [data-theme="ink"] th { background:rgba(15,19,36,.82); }   /* sticky header: rows must not ghost through */
+  [data-theme="ink"] dialog.modal {
+      backdrop-filter:blur(20px) saturate(1.4); -webkit-backdrop-filter:blur(20px) saturate(1.4);
+      box-shadow:0 20px 60px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.12); }
+  [data-theme="ink"] dialog.modal::backdrop { background:rgba(4,6,14,.55); }
+  /* Amber Terminal (AI_SCOPE-115): retro CRT, one hue only. Status meaning rides phosphor luminance -
+     good dim gold, mid brighter, bad near-white (hotter phosphor reads louder). Accent is the deep amber UI colour. */
+  :root[data-theme="amber"] { --bg:#0f0a05; --card:#1b130a; --text:#ffbe5c; --muted:#9d7f4a;
+    --line:#3b2d18; --accent:#ffa028; --good:#c78f3f; --mid:#ffd77a; --bad:#fff0c2;
+    color-scheme:dark; --scheme:dark; }
+  /* Paper (AI_SCOPE-116): quiet lab-notebook light theme. Warm off-white surfaces, ink-grey text,
+     red-brown (sienna) accent. No effects - palette and home block only. */
+  :root[data-theme="paper"] { --bg:#faf7f0; --card:#fffdf7; --text:#2b2a27; --muted:#8a8578;
+    --line:#e5e0d3; --accent:#a34a28; --good:#3e7d4e; --mid:#b07a1f; --bad:#b03a2e;
+    color-scheme:light; --scheme:light; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
   .topbar { position:sticky; top:0; z-index:10; display:flex; align-items:stretch; gap:28px; padding:0 24px;
@@ -84,6 +149,47 @@
   [data-theme="eva"] .home .go { color:#efe6fb; border-color:rgba(169,147,196,.3); background:rgba(8,4,13,.5); }
   [data-theme="eva"] .home .go:hover, [data-theme="eva"] .home .go:focus-visible { border-color:#9be33c; background:rgba(60,30,90,.55); }
   [data-theme="eva"] .brand, [data-theme="eva"] h1 { text-shadow:0 0 12px rgba(140,80,200,.35); }
+  /* Glass home (112): the wallpaper-field ramp from STOPS_BY_THEME.glass, white text, frosted go button */
+  [data-theme="glass"] .home { background:#0b1533; color:#f2f6ff; }
+  [data-theme="glass"] .home .vignette { background: radial-gradient(ellipse at 50% 50%, rgba(11,21,51,0) 35%, rgba(11,21,51,.5) 100%); }
+  [data-theme="glass"] .home .mark { color:#f2f6ff; text-shadow:0 0 40px rgba(10,132,255,.35), 0 0 28px rgba(255,120,190,.25), 0 2px 18px rgba(0,0,0,.5); }
+  [data-theme="glass"] .home .mark span { color:#5aa8ff; }
+  [data-theme="glass"] .home .sub { color:#9db4dd; }
+  [data-theme="glass"] .home .go { color:#f2f6ff; border-color:rgba(255,255,255,.35); background:rgba(255,255,255,.14); backdrop-filter:blur(14px) saturate(1.4); -webkit-backdrop-filter:blur(14px) saturate(1.4); }
+  [data-theme="glass"] .home .go:hover, [data-theme="glass"] .home .go:focus-visible { border-color:rgba(255,255,255,.6); background:rgba(255,255,255,.24); }
+  /* Graphite home (113): grey field, near-white wordmark, soft white glow instead of a colour one */
+  [data-theme="graphite"] .home { background:#09090a; color:#e7e8ea; }
+  [data-theme="graphite"] .home .vignette { background: radial-gradient(ellipse at 50% 50%, rgba(9,9,10,0) 35%, rgba(9,9,10,.55) 100%); }
+  [data-theme="graphite"] .home .mark { color:#e7e8ea; text-shadow:0 0 40px rgba(255,255,255,.20), 0 2px 18px rgba(0,0,0,.6); }
+  [data-theme="graphite"] .home .mark span { color:#f5f6f7; }
+  [data-theme="graphite"] .home .sub { color:#8b8f96; }
+  [data-theme="graphite"] .home .go { color:#e7e8ea; border-color:rgba(139,143,150,.3); background:rgba(9,9,10,.5); }
+  [data-theme="graphite"] .home .go:hover, [data-theme="graphite"] .home .go:focus-visible { border-color:#f5f6f7; background:rgba(60,63,68,.5); }
+  /* Ink Glass home (114): dark mesh field ramp, wordmark glow in blue and violet, frosted dark go button */
+  [data-theme="ink"] .home { background:#060814; color:#e9edf7; }
+  [data-theme="ink"] .home .vignette { background: radial-gradient(ellipse at 50% 50%, rgba(6,8,20,0) 35%, rgba(6,8,20,.55) 100%); }
+  [data-theme="ink"] .home .mark { color:#e9edf7; text-shadow:0 0 40px rgba(74,168,255,.35), 0 0 28px rgba(168,85,247,.30), 0 2px 18px rgba(0,0,0,.6); }
+  [data-theme="ink"] .home .mark span { color:#6fb7ff; }
+  [data-theme="ink"] .home .sub { color:#8d94ab; }
+  [data-theme="ink"] .home .go { color:#e9edf7; border-color:rgba(141,148,171,.3); background:rgba(6,8,20,.45); backdrop-filter:blur(14px) saturate(1.4); -webkit-backdrop-filter:blur(14px) saturate(1.4); }
+  [data-theme="ink"] .home .go:hover, [data-theme="ink"] .home .go:focus-visible { border-color:#6fb7ff; background:rgba(30,50,100,.55); }
+  /* Amber home (115): black-brown field warming to amber, blinking underscore in the deep accent, phosphor bloom on brand/h1 */
+  [data-theme="amber"] .home { background:#080503; color:#ffbe5c; }
+  [data-theme="amber"] .home .vignette { background: radial-gradient(ellipse at 50% 50%, rgba(8,5,3,0) 35%, rgba(8,5,3,.6) 100%); }
+  [data-theme="amber"] .home .mark { color:#ffbe5c; text-shadow:0 0 40px rgba(255,160,40,.35), 0 2px 18px rgba(0,0,0,.6); }
+  [data-theme="amber"] .home .mark span { color:#ffa028; }
+  [data-theme="amber"] .home .sub { color:#9d7f4a; }
+  [data-theme="amber"] .home .go { color:#ffbe5c; border-color:rgba(157,127,74,.35); background:rgba(8,5,3,.5); }
+  [data-theme="amber"] .home .go:hover, [data-theme="amber"] .home .go:focus-visible { border-color:#ffa028; background:rgba(90,50,10,.5); }
+  [data-theme="amber"] .brand, [data-theme="amber"] h1 { text-shadow:0 0 10px rgba(255,160,40,.25); }
+  /* Paper home (116): kraft-paper field warming to cream, cream wordmark, blinking underscore in a lighter sienna */
+  [data-theme="paper"] .home { background:#201c15; color:#f5efe2; }
+  [data-theme="paper"] .home .vignette { background: radial-gradient(ellipse at 50% 50%, rgba(32,28,21,0) 35%, rgba(32,28,21,.55) 100%); }
+  [data-theme="paper"] .home .mark { color:#f5efe2; text-shadow:0 0 40px rgba(163,74,40,.30), 0 2px 18px rgba(0,0,0,.55); }
+  [data-theme="paper"] .home .mark span { color:#d26e3f; }
+  [data-theme="paper"] .home .sub { color:#a89b85; }
+  [data-theme="paper"] .home .go { color:#f5efe2; border-color:rgba(168,155,133,.3); background:rgba(32,28,21,.5); }
+  [data-theme="paper"] .home .go:hover, [data-theme="paper"] .home .go:focus-visible { border-color:#d26e3f; background:rgba(90,55,30,.5); }
   .gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows:1fr; gap:16px; } /* every card the same size */
   .square { min-height:200px; /* height comes from the grid row (tallest card), so all match */ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px;
             display:flex; flex-direction:column; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; min-width:0; }

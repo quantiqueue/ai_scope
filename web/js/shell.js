@@ -61,6 +61,16 @@ const homeAnim = (function () {
     magenta: [[10,2,8],[30,4,24],[84,8,62],[184,24,128],[255,84,190]],
     neo: [[1,5,2],[3,16,7],[6,48,20],[14,128,58],[60,255,140]],
     eva: [[6,3,10],[24,10,40],[62,28,98],[118,70,168],[155,227,60]],
+    // Glass (AI_SCOPE-112): iOS wallpaper ramp, deep blue through periwinkle and sky to violet and pink
+    glass: [[11,21,51],[34,58,140],[72,120,220],[150,95,215],[255,130,185]],
+    // Graphite (AI_SCOPE-113): the whole ramp is grey; the light facets read as brushed metal
+    graphite: [[9,9,10],[20,21,23],[40,42,46],[78,82,88],[150,155,163]],
+    // Ink Glass (AI_SCOPE-114): the page mesh in canvas form - ink through blue and indigo to violet
+    ink: [[6,8,20],[16,24,64],[36,64,140],[92,64,180],[190,90,220]],
+    // Amber Terminal (AI_SCOPE-115): black-brown warming through rust to phosphor amber
+    amber: [[8,5,3],[24,14,6],[64,38,12],[150,95,25],[255,170,60]],
+    // Paper (AI_SCOPE-116): kraft brown warming to cream - the lab notebook under glass light
+    paper: [[32,28,21],[70,60,44],[122,104,76],[184,160,116],[240,226,196]],
   };
   let STOPS = STOPS_BY_THEME.blue;
   let W = 0, H = 0, pts = [], tris = [], running = false;
@@ -145,19 +155,24 @@ const homeAnim = (function () {
 
 // Theme (AI_SCOPE-010): an app-wide setting shown in the settings dialog - no top-bar menu any more, so the
 // value comes from the server ('default' follows the OS light / dark setting).
-const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo', eva: 'EVA' };
+const THEMES = { default: 'Default', dark: 'Dark', magenta: 'Magenta', neo: 'Neo', eva: 'EVA', glass: 'Glass', graphite: 'Graphite', ink: 'Ink Glass', amber: 'Amber Terminal', paper: 'Paper' };
 // Some apps ship a logo for light and one for dark backgrounds (Strata): ask for the one matching the theme.
 let logosReady = false;   // set once the logo checks below have started (renderTabs needs LOGO_OK)
-function darkTheme() {
+function prefersDark() { return !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches); }
+// AI_SCOPE-112: contrast comes from the --scheme property each palette declares, not from the theme name.
+// Glass is light; an unlisted theme assumes dark (all four named dark palettes set --scheme:dark).
+function schemeIsDark() {
   const t = document.documentElement.dataset.theme;
-  if (t) return t !== 'default';   // Dark, Magenta, Neo and EVA are all dark
-  return !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+  if (!t) return prefersDark();   // Default follows the OS
+  const s = getComputedStyle(document.documentElement).getPropertyValue('--scheme').trim();
+  return s ? s === 'dark' : true;
 }
+function darkTheme() { return schemeIsDark(); }   // alias kept during the migration
 function logoUrl(id) { return '/api/logo/' + id + (darkTheme() ? '?theme=dark' : ''); }
 function applyTheme(t) {
   if (!THEMES[t]) t = 'default';
   if (t === 'default') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
-  homeAnim.setPalette(t === 'magenta' || t === 'neo' || t === 'eva' ? t : 'blue');
+  homeAnim.setPalette(t);   // 112: pick the ramp from STOPS_BY_THEME; themes without a ramp (default, dark) get blue
   if (logosReady) renderTabs();   // logos that differ for light / dark backgrounds
 }
 if (window.matchMedia) {   // Default theme follows the OS: redraw the logos when it switches light / dark
