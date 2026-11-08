@@ -87,7 +87,7 @@ defineLens({
     const s = hwLatest(d); if (!s) return;
     const box = L.el.querySelector('[data-tile="ram' + (L.settings.show === 'committed' ? 'C' : '') + '"]'); if (!box) return;
     if (L.settings.show === 'committed') {
-      // Committed (reserved against RAM + pagefile) - the numbers 073 / 074 read in one CIM / meminfo call.
+      // Committed (reserved against RAM + pagefile) - the 073 / 074 numbers, now re-read every 2 s (118: GetPerformanceInfo / meminfo).
       const lim = s.commitLimit;
       if (lim == null) { sparkTile(box, null, NA_HTML, 'Committed memory: not available on this system', []); return; }
       const pctC = b => (b != null && lim) ? Math.min(100, 100 * b / lim) : null;

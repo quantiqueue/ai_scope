@@ -43,6 +43,8 @@
     "hwstats.js",
     "diskstats.js",
     "diskstats.ps1",
+    "ramcommitstats.js",
+    "ramcommitstats.ps1",
     "lmstats.js",
     "lmapi.js",
     "comfystats.js",

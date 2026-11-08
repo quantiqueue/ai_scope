@@ -15,6 +15,7 @@ const fs = require('fs');                 // /proc/meminfo on Linux (AI_SCOPE-07
 const execFile = require('child_process').execFile;
 const spawn = require('child_process').spawn;
 const diskstats = require('./diskstats');   // read / write per physical disk (AI_SCOPE-030)
+const ramcommitstats = require('./ramcommitstats');   // committed memory on Windows (AI_SCOPE-118)
 
 const INTERVAL_MS = 2000;
 // AI_SCOPE-092: the history is sized in TIME, not in samples - HISTORY is only a safety cap. The ring keeps
@@ -469,6 +470,7 @@ function pollGpu() {
 
 function sample() {
   if (amdCards.length) amdCards.forEach(readAmdCard);   // refresh amdgpu sysfs values each tick (AMD cards on Linux)
+  sampleCommit();   // committed memory at the 2 s pace (AI_SCOPE-118)
   const total = os.totalmem(), free = os.freemem();
   const cards = allCards();
   const has = function (k) { return cards.some(function (c) { return c[k] != null; }); };
@@ -479,7 +481,8 @@ function sample() {
     ramUsed: total - free,
     ramTotal: total,
     commitLimit: commitLimit,   // AI_SCOPE-073/074: RAM + pagefile ceiling for committed memory (null where it has no meaning)
-    commitUsed: commitUsed,     // AI_SCOPE-074: committed in use (same one call, above)
+    commitUsed: commitUsed,     // AI_SCOPE-074: committed in use (same reading, above)
+    commitPeak: commitPeak,     // AI_SCOPE-118: session peak (Windows only; no UI yet, and old samples lack the field)
     // Whole-PC GPU numbers (busiest card, VRAM summed over all cards)...
     gpu: has('util') ? Math.max.apply(null, cards.map(function (c) { return c.util || 0; })) : null,
     vramUsed: has('vramUsed') ? sum('vramUsed') : null,
@@ -510,53 +513,47 @@ function sample() {
 let diskNames = {}, diskOrder = [];
 let started = false;
 
-// ---- Committed memory: what is reserved and the ceiling it must fit in (AI_SCOPE-073 / 074) ----
-// The "Committed" RAM tile needs both numbers, and they come from ONE call.
-// Windows (CIM, locale-free where the \Memory\... counter paths are not): TotalVirtualMemorySize is the commit
-// limit and TotalVirtualMemorySize - FreeVirtualMemory is committed in use - verified on snow against the PDH
-// counters (limit 153,927,544 KB = 157,621,805,056 B = 146.8 GB, i.e. 127.8 GB RAM + a 19 GB pagefile; committed
-// 133.6 GB by both routes). One call costs ~1.8 s of PowerShell startup, so it is read at start and every
-// MEM_LIMIT_EVERY - never per 2 s sample - and a failed read keeps the last good values.
+// ---- Committed memory: what is reserved and the ceiling it must fit in (AI_SCOPE-073 / 074; AI_SCOPE-118 moved
+// Windows off WMI) ----
+// The "Committed" RAM tile needs both numbers, sampled like every other number - every 2 s.
+// Windows: GetPerformanceInfo from one long-running PowerShell (ramcommitstats.js / ramcommitstats.ps1), the same
+// helper pattern as diskstats.js. (The old route was Get-CimInstance Win32_OperatingSystem every 60 s; on snow that
+// class costs 9-11 s and blew the 10 s timeout, so the reads failed silently.) CommitLimit is the ceiling (RAM plus
+// pagefile) and CommitTotal the reservation; commitPeak is the session high-water mark - kept in the sample, no UI
+// yet. When the helper is stale, commitUsed (and commitPeak) go null so the chart shows a gap, but the last good
+// commitLimit is kept: the ceiling rarely moves, and without it the Mirror lens falls back to the RAM ceiling.
 // Linux: /proc/meminfo (cheap fs read) - CommitLimit is the ceiling, Committed_AS the reservation (an accounting
 // estimate: with default overcommit it can exceed the limit, which the tile shows as a full meter).
 // macOS has no commit-limit concept, so both stay null and the tile says so; 074 also leaves it out of the macOS
 // default layout.
-let commitLimit = null, commitUsed = null;
-const MEM_LIMIT_EVERY = 60000;
-const PS_COMMIT =
-  "$ErrorActionPreference='SilentlyContinue';" +
-  "$o=Get-CimInstance Win32_OperatingSystem;" +
-  "if ($o) { [int64]$o.TotalVirtualMemorySize * 1KB; [int64]$o.FreeVirtualMemory * 1KB }";
-function readCommit() {
+let commitLimit = null, commitUsed = null, commitPeak = null;
+function readCommitLinux() {
+  let text = '';
+  try { text = fs.readFileSync('/proc/meminfo', 'utf8'); } catch (e) { return; }
+  const kb = function (name) { const m = new RegExp('^' + name + ':\\s+(\\d+)', 'm').exec(text); return m ? +m[1] * 1024 : null; };
+  const total = kb('MemTotal'), cl = kb('CommitLimit');
+  if (total) commitLimit = cl != null ? cl : total + (kb('SwapTotal') || 0);
+  commitUsed = kb('Committed_AS');
+}
+// One reading into the module-level values. Called from every 2 s sample (and once at start, so the first
+// sample already carries numbers wherever the source is immediate).
+function sampleCommit() {
   if (process.platform === 'win32') {
-    try {
-      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_COMMIT],
-        { windowsHide: true, timeout: 10000 }, function (e, out) {
-          if (e) return;                          // keep the last good values
-          const v = String(out).trim().split(/\r?\n/).map(function (s) { return parseInt(s.trim(), 10); });
-          if (v[0] > 0) { commitLimit = v[0]; commitUsed = (v[1] > 0 && v[1] <= v[0]) ? v[0] - v[1] : null; }
-        });
-    } catch (e) { /* the tile then falls back to Usage */ }
+    const c = ramcommitstats.get();
+    if (c) { commitLimit = c.limit; commitUsed = c.used; commitPeak = c.peak; }
+    else { commitUsed = null; commitPeak = null; }   // stale: chart gap; commitLimit keeps its last good value
     return;
   }
-  if (process.platform === 'linux') {
-    let text = '';
-    try { text = fs.readFileSync('/proc/meminfo', 'utf8'); } catch (e) { return; }
-    const kb = function (name) { const m = new RegExp('^' + name + ':\\s+(\\d+)', 'm').exec(text); return m ? +m[1] * 1024 : null; };
-    const total = kb('MemTotal'), cl = kb('CommitLimit');
-    if (total) commitLimit = cl != null ? cl : total + (kb('SwapTotal') || 0);
-    commitUsed = kb('Committed_AS');
-    return;
-  }
-  commitLimit = null; commitUsed = null;    // macOS
+  if (process.platform === 'linux') { readCommitLinux(); return; }
+  commitLimit = null; commitUsed = null; commitPeak = null;    // macOS
 }
 
 function start() {
   if (started) return;
   started = true;
   diskstats.start();
-  readCommit();
-  setInterval(readCommit, MEM_LIMIT_EVERY);
+  ramcommitstats.start();   // committed memory on Windows comes from this helper, at the 2 s pace (AI_SCOPE-118)
+  sampleCommit();           // immediate on Linux / trivially null on macOS; the first 2 s sample carries values
   cpuPercent();
   detectGpu(function () {
     const cards = allCards();
