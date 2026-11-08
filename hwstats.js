@@ -2,7 +2,8 @@
 // every 2 s and keeps ~5 minutes of history. Conservative JS for older Node versions.
 //
 // GPU sources:
-//  - NVIDIA cards: nvidia-smi (ships with the driver), one line per card.
+//  - NVIDIA cards: nvidia-smi (ships with the driver): one detection call at start, then one long-running
+//    '--query-gpu ... -lms 2000' loop feeds every card (AI_SCOPE-119; no spawn per poll).
 //  - Other cards on Windows (AMD/Intel): DXGI lists the adapters (name, LUID, dedicated VRAM), and
 //    the Windows GPU performance counters (same source as Task Manager) give usage per adapter LUID.
 //  - Mixed PCs (NVIDIA + AMD/Intel) use both. If DXGI is unavailable, the old single combined
@@ -15,6 +16,7 @@ const fs = require('fs');                 // /proc/meminfo on Linux (AI_SCOPE-07
 const execFile = require('child_process').execFile;
 const spawn = require('child_process').spawn;
 const diskstats = require('./diskstats');   // read / write per physical disk (AI_SCOPE-030)
+const ramcommitstats = require('./ramcommitstats');   // committed memory on Windows (AI_SCOPE-118)
 
 const INTERVAL_MS = 2000;
 // AI_SCOPE-092: the history is sized in TIME, not in samples - HISTORY is only a safety cap. The ring keeps
@@ -33,7 +35,6 @@ let amdCards = [];    // AMD cards read from amdgpu sysfs (Linux): the nvidia ca
 let winCards = [];    // cards read from Windows counters: [{ id, luid, name, vendor, source, util, vramUsed, vramTotal }]
 let dxgiList = [];    // every DXGI adapter (name, LUID, vendor) - also used to find the LUID of NVIDIA cards (procstats.js)
 let winAggregate = false; // fallback: no DXGI, so all counter adapters are summed into one card
-let nvBusy = false;
 
 // ---- CPU: % busy across all cores since the previous sample ----
 function cpuTimes() {
@@ -57,42 +58,143 @@ function cpuPercent() {
 }
 
 function run(cmd, args, timeout, cb) {
-  execFile(cmd, args, { timeout: timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, function (err, stdout) {
-    cb(err, err ? '' : String(stdout));
+  // 119: cb also gets stderr - readNvidia's detection needs the whole output to tell a rejected field from a timeout.
+  execFile(cmd, args, { timeout: timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, function (err, stdout, stderr) {
+    cb(err, String(stdout || ''), String(stderr || ''));
   });
 }
 function numOrNull(x) { const n = parseFloat(x); return isFinite(n) ? n : null; }
 
 function allCards() { return nvCards.concat(winCards, amdCards); }
 
-// ---- NVIDIA: one line per card ----
-// Temperature (°C) and power draw / limit (W) are extra fields; very old drivers may not know them, so if the
-// full query fails once we fall back to the basic one for good (temperature then shows n/a).
+// ---- NVIDIA: one detection call, then one long-running loop ----
+// (AI_SCOPE-119, on the helper pattern of diskstats/ramcommitstats.) Detection (readNvidia) decides whether NVIDIA
+// cards exist and builds the list the DXGI matching depends on; its readings also seed the first numbers. Per-card
+// values then stream from one attached 'nvidia-smi --query-gpu=<set> -lms 2000' loop - no more spawn per 2 s poll.
+// Field sets: temperature / power draw + limit are extra fields (very old drivers don't know them), the PCIe link
+// (AI_SCOPE-065) even less so. The ladder steps down ONLY when nvidia-smi rejects a field (quick exit, no data,
+// 'is not a valid field to query' - on snow that message lands on stdout, exit code 2). Timeouts and other
+// failures never step down (the old bug).
 const NV_BASIC = 'index,name,utilization.gpu,memory.used,memory.total';
 const NV_FULL = NV_BASIC + ',temperature.gpu,power.draw,power.limit';
-// PCIe link (AI_SCOPE-065): current vs max negotiated link; extra fields, so the fallback steps down
-// full-pcie -> full -> basic (old drivers may not know the pcie fields).
 const NV_PCIE = NV_FULL + ',pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max';
-let nvQuery = NV_PCIE;
+const NV_LADDER = [NV_PCIE, NV_FULL, NV_BASIC];   // step down only on rejection, top to bottom
+let nvQuery = NV_PCIE;   // what detection settled on; the loop starts with this and keeps it across restarts
+
+// One '--query-gpu' csv line -> a card reading, or null for anything that is not a data line.
+function parseNvLine(l, query) {
+  const p = String(l).trim().split(',').map(function (x) { return x.trim(); });
+  if (!/^\d+$/.test(p[0]) || !p[1]) return null;
+  const used = numOrNull(p[3]), total = numOrNull(p[4]);
+  return { id: 'nv' + p[0], name: p[1], vendor: 'NVIDIA', source: 'nvidia', util: numOrNull(p[2]),
+           vramUsed: used == null ? null : used * 1048576, vramTotal: total == null ? null : total * 1048576,
+           temp: numOrNull(p[5]), power: numOrNull(p[6]), powerLimit: numOrNull(p[7]),
+           link: query === NV_PCIE ? { gen: numOrNull(p[8]), genMax: numOrNull(p[9]), width: numOrNull(p[10]), widthMax: numOrNull(p[11]) } : null };
+}
+function nvRejected(text) { return /is not a valid field to query/.test(String(text)); }
+
+// Detection: ONE call, ladder at its side. A rejected field steps down; anything else is retried once at the
+// same field set, and then means no NVIDIA cards. On success nvQuery holds the set it settled on.
 function readNvidia(cb) {
-  const query = nvQuery;
-  run('nvidia-smi', ['--query-gpu=' + query, '--format=csv,noheader,nounits'], 5000,
-    function (err, out) {
-      if (err || !out.trim()) {
-        if (query === NV_PCIE) { nvQuery = NV_FULL; return readNvidia(cb); }
-        if (query === NV_FULL) { nvQuery = NV_BASIC; return readNvidia(cb); }
-        return cb(null);
-      }
-      const cards = out.trim().split(/\r?\n/).map(function (l) {
-        const p = l.split(',').map(function (x) { return x.trim(); });
-        const used = numOrNull(p[3]), total = numOrNull(p[4]);
-        return { id: 'nv' + p[0], name: p[1], vendor: 'NVIDIA', source: 'nvidia', util: numOrNull(p[2]),
-                 vramUsed: used == null ? null : used * 1048576, vramTotal: total == null ? null : total * 1048576,
-                 temp: numOrNull(p[5]), power: numOrNull(p[6]), powerLimit: numOrNull(p[7]),
-                 link: query === NV_PCIE ? { gen: numOrNull(p[8]), genMax: numOrNull(p[9]), width: numOrNull(p[10]), widthMax: numOrNull(p[11]) } : null };
-      }).filter(function (c) { return c.name; });
-      cb(cards.length ? cards : null);
+  const attempt = function (qi, retried) {
+    const query = NV_LADDER[qi];
+    run('nvidia-smi', ['--query-gpu=' + query, '--format=csv,noheader,nounits'], 5000, function (err, out, errOut) {
+      const cards = String(out).split(/\r?\n/).map(function (l) { return parseNvLine(l, query); }).filter(Boolean);
+      if (cards.length) { nvQuery = query; cb(cards); return; }
+      if (err && nvRejected(out + errOut) && qi + 1 < NV_LADDER.length) return attempt(qi + 1, false);   // field rejected
+      if (!retried) return attempt(qi, true);   // timeout / hiccup: one retry at the SAME set, never step down
+      cb(null);
     });
+  };
+  attempt(0, false);
+}
+
+// ---- the loop ----
+// Each tick prints one line per card; lines group into a tick when the index comes back to 0, or after one line
+// per known card, and the whole tick is applied at once, by id. The loop NEVER adds or removes cards (that stays
+// detection's job). Exit handling: rejected field -> step down once and restart; anything else -> restart at the
+// same set after 5 s, giving up after NV_MAX_BAD starts that delivered no data (the dmon policy of 065/071: a
+// data line resets the count). While no tick is younger than NV_STALE_MS the live values go null (mergeNvidia),
+// so a stalled loop shows gaps instead of frozen numbers - card facts (size, name, link) survive.
+const NV_LOOP_MS = 2000;
+const NV_STALE_MS = 3 * NV_LOOP_MS;
+const NV_MAX_BAD = 4;
+let nvProc = null, nvBad = 0, nvGaveUp = false, nvExitHooked = false;
+let nvTickBuf = [], nvTickAt = 0;
+
+function applyNvTick() {
+  if (!nvTickBuf.length) return;
+  const tick = nvTickBuf; nvTickBuf = [];
+  nvCards.forEach(function (c) {
+    const x = tick.filter(function (t) { return t.id === c.id; })[0];
+    if (!x) return;
+    c.util = x.util; c.vramUsed = x.vramUsed; c.vramTotal = x.vramTotal;
+    c.temp = x.temp; c.power = x.power; c.powerLimit = x.powerLimit;
+    if (x.link) c.link = x.link;
+  });
+  nvTickAt = Date.now();
+}
+function nvFailLoop() {
+  if (nvGaveUp) return;
+  nvTickBuf = [];
+  if (++nvBad >= NV_MAX_BAD) {
+    nvGaveUp = true;
+    console.log('[hwstats] nvidia-smi loop died ' + nvBad + ' times in a row - giving up; GPU numbers stay n/a');
+    return;
+  }
+  setTimeout(startNvidiaLoop, 5000);
+}
+function startNvidiaLoop() {
+  if (nvGaveUp || nvProc) return;
+  let ps;
+  try {
+    ps = spawn('nvidia-smi', ['--query-gpu=' + nvQuery, '--format=csv,noheader,nounits', '-lms', String(NV_LOOP_MS)],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) { nvFailLoop(); return; }
+  const startedAt = Date.now();
+  let delivered = false, junk = '', buf = '';   // per child (111's lesson): a dying stream's flags must not leak
+  ps.on('error', function () {});
+  ps.stderr.on('data', function (d) { if (junk.length < 4000) junk += d; });
+  ps.on('exit', function () {
+    if (nvProc !== ps) return;
+    nvProc = null; nvTickBuf = [];
+    // rejected field only when this start never delivered data AND died quickly (119)
+    if (!delivered && Date.now() - startedAt < 5000 && nvRejected(junk) && NV_LADDER.indexOf(nvQuery) + 1 < NV_LADDER.length) {
+      nvQuery = NV_LADDER[NV_LADDER.indexOf(nvQuery) + 1];
+      console.log('[hwstats] nvidia-smi rejected a query field - looping with: ' + nvQuery);
+      setTimeout(startNvidiaLoop, 1000);
+      return;
+    }
+    nvFailLoop();
+  });
+  ps.stdout.on('data', function (d) {
+    buf += d;
+    const lines = buf.split(/\r?\n/); buf = lines.pop();
+    lines.forEach(function (l) {
+      const c = parseNvLine(l, nvQuery);
+      if (!c) { if (junk.length < 4000) junk += l; return; }   // the rejection message lands on stdout (snow)
+      delivered = true; nvBad = 0;                             // data flowing - forget earlier dead starts (071)
+      if (c.id === 'nv0' && nvTickBuf.length) applyNvTick();   // index back to 0 -> the previous tick is complete
+      nvTickBuf.push(c);
+      if (nvTickBuf.length >= nvCards.length) applyNvTick();   // or: one line per known card seen - apply now
+    });
+  });
+  if (!nvExitHooked) {   // one exit hook for all time - it kills the CURRENT loop, not a captured one (071)
+    nvExitHooked = true;
+    process.on('exit', function () { if (nvProc) { try { nvProc.kill(); } catch (e) {} } });
+  }
+  nvProc = ps;
+}
+
+// Called by every 2 s sample (this is where pollGpu used to spawn): ticks stream in on their own, so this only
+// drops the LIVE values when the loop went silent or was given up on - a gap in the charts, not frozen numbers.
+// vramTotal is NOT blanked: card size is a fixed fact from detection (like name and the negotiated PCIe link),
+// and the VRAM tile ceiling, info.gpus and the model Fit columns (vramInfo/vramFit) all depend on it.
+function mergeNvidia() {
+  if (!nvCards.length) return;
+  if (nvGaveUp || Date.now() - nvTickAt > NV_STALE_MS) {
+    nvCards.forEach(function (c) { c.util = null; c.vramUsed = null; c.temp = null; c.power = null; c.powerLimit = null; });
+  }
 }
 
 // ---- Windows: list adapters with DXGI (name, LUID, dedicated VRAM; 64-bit sizes, unlike WMI) ----
@@ -412,7 +514,7 @@ function detectGpu(cb) {
   const forceWin = String(process.env.AI_SCOPE_GPU_SOURCE || '').toLowerCase() === 'windows';
   const afterNvidia = function (nv) {
     nvCards = nv || [];
-    if (nvCards.length) startPcie();   // PCIe traffic stream (AI_SCOPE-065)
+    if (nvCards.length) { nvTickAt = Date.now(); startPcie(); startNvidiaLoop(); }   // PCIe traffic stream (065) + the per-card loop (119); detection's seed counts fresh until the first tick
     if (process.platform !== 'win32') {
       if (process.platform === 'linux' && !nvCards.length) {   // AMD cards via amdgpu sysfs
         amdCards = findAmdCards();
@@ -452,23 +554,10 @@ function detectGpu(cb) {
   if (forceWin) afterNvidia(null); else readNvidia(afterNvidia);
 }
 
-function pollGpu() {
-  // Windows counters stream in on their own; only NVIDIA needs polling.
-  if (nvBusy || !nvCards.length) return;
-  nvBusy = true;
-  readNvidia(function (cards) {
-    nvBusy = false;
-    if (!cards) return;
-    // Keep the card list stable; update readings by id.
-    cards.forEach(function (c) {
-      const old = nvCards.filter(function (o) { return o.id === c.id; })[0];
-      if (old) { old.util = c.util; old.vramUsed = c.vramUsed; old.vramTotal = c.vramTotal; old.temp = c.temp; old.power = c.power; old.powerLimit = c.powerLimit; if (c.link) old.link = c.link; }
-    });
-  });
-}
-
 function sample() {
   if (amdCards.length) amdCards.forEach(readAmdCard);   // refresh amdgpu sysfs values each tick (AMD cards on Linux)
+  sampleCommit();   // committed memory at the 2 s pace (AI_SCOPE-118)
+  mergeNvidia();    // NVIDIA fold BEFORE building the sample, so a stale stream gaps this entry, not next (119)
   const total = os.totalmem(), free = os.freemem();
   const cards = allCards();
   const has = function (k) { return cards.some(function (c) { return c[k] != null; }); };
@@ -479,7 +568,8 @@ function sample() {
     ramUsed: total - free,
     ramTotal: total,
     commitLimit: commitLimit,   // AI_SCOPE-073/074: RAM + pagefile ceiling for committed memory (null where it has no meaning)
-    commitUsed: commitUsed,     // AI_SCOPE-074: committed in use (same one call, above)
+    commitUsed: commitUsed,     // AI_SCOPE-074: committed in use (same reading, above)
+    commitPeak: commitPeak,     // AI_SCOPE-118: peak commit charge since the last boot (Windows only; no UI yet, old samples lack the field)
     // Whole-PC GPU numbers (busiest card, VRAM summed over all cards)...
     gpu: has('util') ? Math.max.apply(null, cards.map(function (c) { return c.util || 0; })) : null,
     vramUsed: has('vramUsed') ? sum('vramUsed') : null,
@@ -504,59 +594,52 @@ function sample() {
     while (history.length > 1 && history[1].t < s.t - HW_WINDOW) history.shift();   // 092: prune by time, keeping one older sample at the left edge
     if (history.length > HISTORY) history.splice(0, history.length - HISTORY);      // safety cap only
   }
-  pollGpu(); // async; result lands in the next sample
 }
 
 let diskNames = {}, diskOrder = [];
 let started = false;
 
-// ---- Committed memory: what is reserved and the ceiling it must fit in (AI_SCOPE-073 / 074) ----
-// The "Committed" RAM tile needs both numbers, and they come from ONE call.
-// Windows (CIM, locale-free where the \Memory\... counter paths are not): TotalVirtualMemorySize is the commit
-// limit and TotalVirtualMemorySize - FreeVirtualMemory is committed in use - verified on snow against the PDH
-// counters (limit 153,927,544 KB = 157,621,805,056 B = 146.8 GB, i.e. 127.8 GB RAM + a 19 GB pagefile; committed
-// 133.6 GB by both routes). One call costs ~1.8 s of PowerShell startup, so it is read at start and every
-// MEM_LIMIT_EVERY - never per 2 s sample - and a failed read keeps the last good values.
+// ---- Committed memory: what is reserved and the ceiling it must fit in (AI_SCOPE-073 / 074; AI_SCOPE-118 moved
+// Windows off WMI) ----
+// The "Committed" RAM tile needs both numbers, sampled like every other number - every 2 s.
+// Windows: GetPerformanceInfo from one long-running PowerShell (ramcommitstats.js / ramcommitstats.ps1), the same
+// helper pattern as diskstats.js. (The old route was Get-CimInstance Win32_OperatingSystem every 60 s; on snow that
+// class costs 9-11 s and blew the 10 s timeout, so the reads failed silently.) CommitLimit is the ceiling (RAM plus
+// pagefile) and CommitTotal the reservation; commitPeak is the high-water mark since the last boot - kept in the
+// sample, no UI yet. When the helper is stale, commitUsed (and commitPeak) go null so the chart shows a gap, but the last good
+// commitLimit is kept: the ceiling rarely moves, and without it the Mirror lens falls back to the RAM ceiling.
 // Linux: /proc/meminfo (cheap fs read) - CommitLimit is the ceiling, Committed_AS the reservation (an accounting
 // estimate: with default overcommit it can exceed the limit, which the tile shows as a full meter).
 // macOS has no commit-limit concept, so both stay null and the tile says so; 074 also leaves it out of the macOS
 // default layout.
-let commitLimit = null, commitUsed = null;
-const MEM_LIMIT_EVERY = 60000;
-const PS_COMMIT =
-  "$ErrorActionPreference='SilentlyContinue';" +
-  "$o=Get-CimInstance Win32_OperatingSystem;" +
-  "if ($o) { [int64]$o.TotalVirtualMemorySize * 1KB; [int64]$o.FreeVirtualMemory * 1KB }";
-function readCommit() {
+let commitLimit = null, commitUsed = null, commitPeak = null;
+function readCommitLinux() {
+  let text = '';
+  try { text = fs.readFileSync('/proc/meminfo', 'utf8'); } catch (e) { return; }
+  const kb = function (name) { const m = new RegExp('^' + name + ':\\s+(\\d+)', 'm').exec(text); return m ? +m[1] * 1024 : null; };
+  const total = kb('MemTotal'), cl = kb('CommitLimit');
+  if (total) commitLimit = cl != null ? cl : total + (kb('SwapTotal') || 0);
+  commitUsed = kb('Committed_AS');
+}
+// One reading into the module-level values. Called from every 2 s sample (and once at start, so the first
+// sample already carries numbers wherever the source is immediate).
+function sampleCommit() {
   if (process.platform === 'win32') {
-    try {
-      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_COMMIT],
-        { windowsHide: true, timeout: 10000 }, function (e, out) {
-          if (e) return;                          // keep the last good values
-          const v = String(out).trim().split(/\r?\n/).map(function (s) { return parseInt(s.trim(), 10); });
-          if (v[0] > 0) { commitLimit = v[0]; commitUsed = (v[1] > 0 && v[1] <= v[0]) ? v[0] - v[1] : null; }
-        });
-    } catch (e) { /* the tile then falls back to Usage */ }
+    const c = ramcommitstats.get();
+    if (c) { commitLimit = c.limit; commitUsed = c.used; commitPeak = c.peak; }
+    else { commitUsed = null; commitPeak = null; }   // stale: chart gap; commitLimit keeps its last good value
     return;
   }
-  if (process.platform === 'linux') {
-    let text = '';
-    try { text = fs.readFileSync('/proc/meminfo', 'utf8'); } catch (e) { return; }
-    const kb = function (name) { const m = new RegExp('^' + name + ':\\s+(\\d+)', 'm').exec(text); return m ? +m[1] * 1024 : null; };
-    const total = kb('MemTotal'), cl = kb('CommitLimit');
-    if (total) commitLimit = cl != null ? cl : total + (kb('SwapTotal') || 0);
-    commitUsed = kb('Committed_AS');
-    return;
-  }
-  commitLimit = null; commitUsed = null;    // macOS
+  if (process.platform === 'linux') { readCommitLinux(); return; }
+  commitLimit = null; commitUsed = null; commitPeak = null;    // macOS
 }
 
 function start() {
   if (started) return;
   started = true;
   diskstats.start();
-  readCommit();
-  setInterval(readCommit, MEM_LIMIT_EVERY);
+  ramcommitstats.start();   // committed memory on Windows comes from this helper, at the 2 s pace (AI_SCOPE-118)
+  sampleCommit();           // immediate on Linux / trivially null on macOS; the first 2 s sample carries values
   cpuPercent();
   detectGpu(function () {
     const cards = allCards();
@@ -630,4 +713,4 @@ function peakBetween(t0, t1) {
 function oldestSample() { return history.length ? history[0].t : null; }
 
 module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, cardKeys: cardKeys, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
-                   _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards } };
+                   _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards, parseNvLine: parseNvLine, nvRejected: nvRejected } };
