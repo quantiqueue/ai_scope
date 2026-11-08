@@ -114,8 +114,8 @@ function readNvidia(cb) {
 // per known card, and the whole tick is applied at once, by id. The loop NEVER adds or removes cards (that stays
 // detection's job). Exit handling: rejected field -> step down once and restart; anything else -> restart at the
 // same set after 5 s, giving up after NV_MAX_BAD starts that delivered no data (the dmon policy of 065/071: a
-// data line resets the count). While no tick is younger than NV_STALE_MS the streamed values go null (mergeNvidia),
-// so a stalled loop shows gaps instead of frozen numbers.
+// data line resets the count). While no tick is younger than NV_STALE_MS the live values go null (mergeNvidia),
+// so a stalled loop shows gaps instead of frozen numbers - card facts (size, name, link) survive.
 const NV_LOOP_MS = 2000;
 const NV_STALE_MS = 3 * NV_LOOP_MS;
 const NV_MAX_BAD = 4;
@@ -187,12 +187,13 @@ function startNvidiaLoop() {
 }
 
 // Called by every 2 s sample (this is where pollGpu used to spawn): ticks stream in on their own, so this only
-// drops the values when the loop went silent or was given up on - a gap in the charts, not frozen numbers.
-// name and the negotiated PCIe link are left alone (detection's, not chart values).
+// drops the LIVE values when the loop went silent or was given up on - a gap in the charts, not frozen numbers.
+// vramTotal is NOT blanked: card size is a fixed fact from detection (like name and the negotiated PCIe link),
+// and the VRAM tile ceiling, info.gpus and the model Fit columns (vramInfo/vramFit) all depend on it.
 function mergeNvidia() {
   if (!nvCards.length) return;
   if (nvGaveUp || Date.now() - nvTickAt > NV_STALE_MS) {
-    nvCards.forEach(function (c) { c.util = null; c.vramUsed = null; c.vramTotal = null; c.temp = null; c.power = null; c.powerLimit = null; });
+    nvCards.forEach(function (c) { c.util = null; c.vramUsed = null; c.temp = null; c.power = null; c.powerLimit = null; });
   }
 }
 
@@ -513,7 +514,7 @@ function detectGpu(cb) {
   const forceWin = String(process.env.AI_SCOPE_GPU_SOURCE || '').toLowerCase() === 'windows';
   const afterNvidia = function (nv) {
     nvCards = nv || [];
-    if (nvCards.length) { startPcie(); startNvidiaLoop(); }   // PCIe traffic stream (AI_SCOPE-065) + the per-card loop (119)
+    if (nvCards.length) { nvTickAt = Date.now(); startPcie(); startNvidiaLoop(); }   // PCIe traffic stream (065) + the per-card loop (119); detection's seed counts fresh until the first tick
     if (process.platform !== 'win32') {
       if (process.platform === 'linux' && !nvCards.length) {   // AMD cards via amdgpu sysfs
         amdCards = findAmdCards();
@@ -556,6 +557,7 @@ function detectGpu(cb) {
 function sample() {
   if (amdCards.length) amdCards.forEach(readAmdCard);   // refresh amdgpu sysfs values each tick (AMD cards on Linux)
   sampleCommit();   // committed memory at the 2 s pace (AI_SCOPE-118)
+  mergeNvidia();    // NVIDIA fold BEFORE building the sample, so a stale stream gaps this entry, not next (119)
   const total = os.totalmem(), free = os.freemem();
   const cards = allCards();
   const has = function (k) { return cards.some(function (c) { return c[k] != null; }); };
@@ -592,7 +594,6 @@ function sample() {
     while (history.length > 1 && history[1].t < s.t - HW_WINDOW) history.shift();   // 092: prune by time, keeping one older sample at the left edge
     if (history.length > HISTORY) history.splice(0, history.length - HISTORY);      // safety cap only
   }
-  mergeNvidia();   // NVIDIA stream fold: silent loop -> null values, not frozen ones (AI_SCOPE-119)
 }
 
 let diskNames = {}, diskOrder = [];
