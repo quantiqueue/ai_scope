@@ -345,7 +345,7 @@ function cliContainer() {
     label: model || 'Strata CLI', model: model,
     status: loaded ? 'ready' : 'unloaded', phase: live.state || (loaded ? 'idle' : 'unloaded'),
     metrics: m, context: num(eng.max_context) || num(h.max_context), parallel: num(m.engine && m.engine.batch),
-    loadedAt: null, error: null, gpus: [],
+    loadedAt: null, error: null, gpus: null,   // null = this face never names devices (AI_SCOPE-120); NOT "no GPU"
   };
   return { instances: [inst], defaultId: inst.id, source: 'cli',
            engineInfo: { version: (cli.status && cli.status.engine) || eng.version || null },
@@ -620,7 +620,11 @@ function modelShard(dataFolder, variant) {
   shardCache[ck] = found;
   return found;
 }
+// AI_SCOPE-120: three answers, not two. null = this Strata face reports no device list at all (the headless
+// CLI: /metrics and /v1/telemetry name no cards) - the cell must not claim CPU placement. An empty array is
+// Strata's own answer, "this model uses no card", so it stays a real list.
 function gpuNames(d, indexes) {
+  if (indexes == null) return null;
   const gpus = d.hardware && Array.isArray(d.hardware.gpus) ? d.hardware.gpus : [];
   return (indexes || []).map(function (ix) {
     const g = gpus.filter(function (x) { return x.index === ix; })[0];
@@ -787,6 +791,7 @@ module.exports = { start: start, stop: stop, getState: getState, getLogo: getLog
   // cliContainer without any Strata running.
   _test: { modelShard: modelShard, catalogEntry: catalogEntry, discoverCli: discoverCli, cliOrigin: cliOrigin,
     portOf: portOf, telToMetrics: telToMetrics, cliContainer: cliContainer, cliInstanceId: cliInstanceId,
+    gpuNames: gpuNames,   // AI_SCOPE-120: the three-state device mapping, probeable without a running app
     setConfig: function (s) { start(s); }, setApiKey: function (v) { apiKey = String(v || '').trim(); },
     setCliConfigured: function (v) { cliConfigured = String(v || '').trim().replace(/\/+$/, ''); },
     setCli: function (v) { cli = v; }, setUrls: function (v) { cliUrls = v.slice(); cliDiscoverAt = Date.now(); },

@@ -538,7 +538,15 @@ const LOADED_COLS = {
   flash:    { th: 'Flash attention', td: (m) => '<td>' + (m.flashAttention == null ? ONONE : m.flashAttention ? 'on' : 'off') + '</td>' },
   kvWhere:  { th: 'KV location', td: (m) => '<td title="Where Bionic keeps this model\'s KV cache">' + (m.kvOnGpu == null ? ONONE : m.kvOnGpu ? 'GPU' : 'CPU') + '</td>' },
   kvQuant:  { th: 'KV cache', td: (m) => '<td title="Quantization Strata gives the KV cache itself">' + escH(m.kv ? String(m.kv).toUpperCase() : ONONE) + '</td>' },
-  gpus:     { th: 'GPUs', td: (m) => '<td title="Cards Strata spread this model over; the rest reads from system RAM">' + escH(m.gpus && m.gpus.length ? m.gpus.join(' + ') + ' + RAM' : 'CPU / RAM') + '</td>' },
+  gpus:     { th: 'GPUs', td: (m) => {
+                // AI_SCOPE-120: null = this Strata face names no devices at all (a headless launch answers with
+                // none); the cell must not claim CPU placement. [] is Strata's own answer: no card is used.
+                const unknown = m.gpus == null;
+                return '<td' + tattr(unknown ? "Strata did not report which cards this model sits on (a headless launch names none); this says nothing about where the model runs"
+                  : (m.gpus.length ? "Cards Strata spread this model over; the rest reads from system RAM"
+                                   : "Strata reports this model runs without a GPU card")) + '>' +
+                  (unknown ? ONONE : escH(m.gpus.length ? m.gpus.join(' + ') + ' + RAM' : 'CPU / RAM')) + '</td>';
+              } },
   experts:  { th: 'Experts in VRAM', td: (m) => '<td title="Model experts kept in VRAM; the rest are read from RAM while answering">' +
               (m.expertSlots != null ? fmtNum(m.expertSlots) + (m.expertCacheMib != null ? '<span class="na"> \u00b7 ' + fmtBytes(m.expertCacheMib * 1048576) + '</span>' : '') : ONONE) + '</td>' },
   vramFree: { th: 'Free VRAM', td: (m) => '<td title="VRAM still free on the card after this load">' + (m.vramFreeMib != null ? fmtBytes(m.vramFreeMib * 1048576) : ONONE) + '</td>' },
