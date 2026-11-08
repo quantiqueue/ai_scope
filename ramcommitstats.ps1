@@ -1,7 +1,7 @@
-# AI_SCOPE commit loop (AI_SCOPE-118): committed bytes, the commit limit and the session commit peak, for the
-# Hardware scope's RAM (Committed) tile and the app scopes' Mirror RAM (Committed) lens. ramcommitstats.js runs it
-# from a temp file (-File) after filling in __PARENT__ (Node's PID) and __EVERY__ (ms between samples). Every
-# cycle prints one line:
+# AI_SCOPE commit loop (AI_SCOPE-118): committed bytes, the commit limit and the peak commit charge since the
+# last boot, for the Hardware scope's RAM (Committed) tile and the app scopes' Mirror RAM (Committed) lens.
+# ramcommitstats.js runs it from a temp file (-File) after filling in __PARENT__ (Node's PID) and __EVERY__
+# (ms between samples). Every cycle prints one line:
 #   M|CommitTotalBytes|CommitLimitBytes|CommitPeakBytes   (GetPerformanceInfo pages x PageSize)
 # One GetPerformanceInfo call per sample, in a long-running PowerShell: the old per-60-s CIM route cost 9-11 s on
 # Win32_OperatingSystem (snow, 2026-11-07) and timed out, which is why this exists.

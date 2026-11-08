@@ -482,7 +482,7 @@ function sample() {
     ramTotal: total,
     commitLimit: commitLimit,   // AI_SCOPE-073/074: RAM + pagefile ceiling for committed memory (null where it has no meaning)
     commitUsed: commitUsed,     // AI_SCOPE-074: committed in use (same reading, above)
-    commitPeak: commitPeak,     // AI_SCOPE-118: session peak (Windows only; no UI yet, and old samples lack the field)
+    commitPeak: commitPeak,     // AI_SCOPE-118: peak commit charge since the last boot (Windows only; no UI yet, old samples lack the field)
     // Whole-PC GPU numbers (busiest card, VRAM summed over all cards)...
     gpu: has('util') ? Math.max.apply(null, cards.map(function (c) { return c.util || 0; })) : null,
     vramUsed: has('vramUsed') ? sum('vramUsed') : null,
@@ -519,8 +519,8 @@ let started = false;
 // Windows: GetPerformanceInfo from one long-running PowerShell (ramcommitstats.js / ramcommitstats.ps1), the same
 // helper pattern as diskstats.js. (The old route was Get-CimInstance Win32_OperatingSystem every 60 s; on snow that
 // class costs 9-11 s and blew the 10 s timeout, so the reads failed silently.) CommitLimit is the ceiling (RAM plus
-// pagefile) and CommitTotal the reservation; commitPeak is the session high-water mark - kept in the sample, no UI
-// yet. When the helper is stale, commitUsed (and commitPeak) go null so the chart shows a gap, but the last good
+// pagefile) and CommitTotal the reservation; commitPeak is the high-water mark since the last boot - kept in the
+// sample, no UI yet. When the helper is stale, commitUsed (and commitPeak) go null so the chart shows a gap, but the last good
 // commitLimit is kept: the ceiling rarely moves, and without it the Mirror lens falls back to the RAM ceiling.
 // Linux: /proc/meminfo (cheap fs read) - CommitLimit is the ceiling, Committed_AS the reservation (an accounting
 // estimate: with default overcommit it can exceed the limit, which the tile shows as a full meter).

@@ -1,6 +1,6 @@
-// Committed memory on Windows (AI_SCOPE-118): committed bytes, the commit limit (RAM + pagefile) and the session
-// commit peak, for the Hardware scope's RAM (Committed) tile and the Mirror RAM (Committed) lens. Sampled by
-// hwstats.js with its other numbers (every 2 s, 5 min history).
+// Committed memory on Windows (AI_SCOPE-118): committed bytes, the commit limit (RAM + pagefile) and the peak
+// commit charge since the last boot, for the Hardware scope's RAM (Committed) tile and the Mirror RAM (Committed)
+// lens. Sampled by hwstats.js with its other numbers (every 2 s, 5 min history).
 //  - Windows: one long-running PowerShell (ramcommitstats.ps1) calling GetPerformanceInfo per sample. This replaces
 //    the per-60-s CIM route (Win32_OperatingSystem cost 9-11 s on snow and timed out - AI_SCOPE-118).
 //  - Linux / macOS: not used - hwstats.js reads /proc/meminfo itself (cheap fs read), and macOS has no commit limit.
