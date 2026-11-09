@@ -4,9 +4,12 @@
 // into one source so every app scope gets the same tiles, rules and wording: quarter tiles in the Hardware tile
 // style, 5-minute server-side history from procstats, hover from that history, Width on all, GPU with a card
 // picker, RAM with Show (Working / Committed, each with its own ceiling), CPU with no settings, I/O without a
-// disk picker (one number per process, not per drive) — and no Power / PCIe mirrors, which have no per-process
-// equivalent. The spec for this family is ~/ai-scope-terminology.md ("Hardware Mirror Lenses"); it moved out of
-// the release docs on 2026-10-29, so the old pointer to "the v0.4 tasks doc" was stale - fixed under 092.
+// disk picker (one number per process, not per drive) — and no PCIe mirror, which has no per-process equivalent.
+// A GPU Power mirror exists since AI_SCOPE-122 but is OPT-IN per scope ({ power: true } in the spec; Strata
+// first) - it shows 121's measured per-card apportionment (board watts x the family's share of that card),
+// an estimate that wears ≈; TERMINOLOGY's mirror-family section was revised for it. The spec for this family
+// is ~/ai-scope-terminology.md ("Hardware Mirror Lenses"); it moved out of the release docs on 2026-10-29, so
+// the old pointer to "the v0.4 tasks doc" was stale - fixed under 092.
 // State rules, set by 077 REVIEW BATCH (user decisions, 2026-10-28), extended by 080, and re-axied by 092:
 //   - **Time-mapped chart and hover**: x spans the samples actually held - oldest kept to newest - so points age out of
 //     the left edge, the board is full at any pace, and the axis stays honest even when the app stopped producing samples.
@@ -145,6 +148,74 @@ function defineMirror(spec) {
         : (g && g.vram != null ? GB(g.vram) + ' GB' + (tot && tot.vramTotal ? ' of ' + GB(tot.vramTotal) + ' GB' : '') : 'n/a');
     });
   } });
+
+  // ---------- GPU Power per card (AI_SCOPE-122, opt-in: spec { power: true }) ----------
+  // The GPU tile above says WHAT FRACTION of a card this app uses; this tile says what that fraction is worth
+  // in watts - the very same per-card apportionment the cost math accrues (121 D7/D8: the card's live board
+  // power x this family's share of that card's GPU usage), stamped onto the history point by pushHist as
+  // gpus[i].w. One sample, one number: the watts here, the GPU % beside it and the cost lenses' money can
+  // never come from different samples or different formulas. Board power is a DEVICE measurement, so this is
+  // an ESTIMATE and wears ≈ on every face - the reason TERMINOLOGY kept Power out of this family until 122;
+  // the user's decision to fold it in rests on the measured share, never an invented apportionment (072's
+  // no-invented-numbers rule still decides the gaps: a used card whose watts cannot be computed reads n/a
+  // for that moment; a card the family does not use reads 0 W).
+  // "Separate, just like hardware, you can choose which card" (user, 2026-11-09 kickoff): the same card picker
+  // as the GPU tile, and the default page gets one power tile per detected card. The state rules are the cost
+  // face's (121 D1/D3): attested zero heartbeats read 0 W, fresh real points the apportioned watts, a stale
+  // real reading n/a + "Inactive", and a card that reports no board power is n/a with the reason named.
+  if (spec.power) {
+    const POWER_TIP = name + "'s estimated power use on one graphics card: that card's live board watts × " + name + "'s share of the card's GPU usage — the very number the electric cost lenses accrue, so watts and money never disagree. Share of what, measured how: on an NVIDIA card both sides come from nvidia-smi's per-process SM (shader) time — " + name + "'s processes' SM % over the SM % of every process on that card, from one 1 Hz stream averaged over the moment being read. Where nvidia-smi cannot speak for a card (AMD / Intel, macOS, or that stream dying) the counters and the card's own device usage stand instead, and one card is never measured by both at once. Board power is a whole-device measurement, so this is an estimate and it wears ≈. A card the family is not using reads 0 W - idle base power belongs to nobody. Where a card the family IS using reports no board power, or no same-source total to divide by, the moment is n/a rather than guessed.";
+    defineLens({
+      id: key + '.power', scope: key, size: 'tile',
+      name: name + ' GPU Power',
+      description: "One graphics card's power use estimated for " + name + "'s processes, with a 5-minute history: the card's live watts × " + name + "'s share of that card's GPU usage. An estimate from a device measurement — it wears ≈.",
+      settings: [
+        { id:'card', label:'Graphics card', type:'gpu', default:0 },
+      ],
+      markup: st => tileHtml({ id: p + 'pw' + st.card,
+        label: name + ' GPU Power' + (st.card ? ' ' + (st.card + 1) : '') }),
+      render(L, d) {
+        const i = L.settings.card;
+        const box = L.el.querySelector('[data-tile="' + p + 'pw' + i + '"]'); if (!box) return;
+        const num = cards.length > 1 ? ' ' + (i + 1) : '';
+        const label = name + ' GPU Power' + num;   // "Strata GPU Power 2" with several cards, plain with one
+        if (box.querySelector('.ltitle').textContent !== label) box.querySelector('.ltitle').textContent = label;
+        box.querySelector('.ltitle').title = POWER_TIP;
+        if (!d.processSupported) { sparkTile(box, null, NA_HTML, 'Not available on this system', []); return; }
+        const card = cards[i] || {};
+        const cardName = card.name || (cards.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
+        const powered = card.source === 'nvidia' || card.source === 'amd';   // the cost lens' test: nvidia-smi / amdgpu report board watts, Windows' counters do not
+        const pts = sparkWindow(hist);
+        const watt = h => { const gp = h.gpus && h.gpus[i]; return gp && gp.w != null ? gp.w : null; };
+        const maxW = Math.max(10, 1.25 * pts.reduce(function (a, x) { return Math.max(a, watt(x) || 0); }, 0));   // on-board only: "top of the chart" is what you SEE
+        const segs = sparkSegs(pts, h => { const v = watt(h); return v == null ? null : Math.min(100, 100 * v / maxW); });
+        // Value rule = the cost face (the family's): an attested zero point is an honest 0 W, a fresh real point
+        // the apportioned watts, a stale real reading n/a + "Inactive". Absence of a number is not a number.
+        const last = pts.length ? pts[pts.length - 1] : null;
+        let v = null;
+        if (last) {
+          const w0 = watt(last);
+          if (w0 != null && (last.attest || Date.now() - last.t <= Math.min(120000, Math.max(1500, 3 * (last.every || 2000))))) v = w0;
+        }
+        const big = !powered || v == null ? NA_HTML : '\u2248' + Math.round(v) + '<small> W</small>';
+        let sub;
+        if (!powered) sub = card.name ? cardName + ' · power not reported for this card' : 'detecting cards\u2026';
+        else if (last && last.attest) sub = stateText(last.attest) + ' \u00b7 ' + cardName;
+        else if (v != null) sub = cardName;
+        else if (!last) sub = 'no GPU use in the last 5 min \u00b7 ' + cardName;
+        else sub = 'Inactive \u00b7 ' + cardName;
+        sparkTile(box, !powered || v == null ? null : Math.min(100, 100 * v / maxW), big, sub, segs);
+        box.querySelector('.spark').title = 'Top of the chart = \u2248' + Math.round(maxW) + ' W (5-minute board max)';
+      },
+    });
+    MIRROR_HOVER.push({ prefix: p + 'pw', fn: (spark, f, guide, tip) => {   // apportioned watts of that tile's card at that time
+      const iCard = parseInt(spark.closest('[data-tile]').dataset.tile.slice((p + 'pw').length), 10);
+      sparkHover(spark, f, guide, tip, sparkWindow(hist), hs => {
+        const gp = hs.gpus && hs.gpus[iCard];
+        return gp && gp.w != null ? '\u2248' + Math.round(gp.w) + ' W' : 'n/a';
+      });
+    } });
+  }
 
   // ---------- RAM of the model process (AI_SCOPE-073) ----------
   // Working (working set / resident) or Committed (private), one metric per tile (Show picks it); no card

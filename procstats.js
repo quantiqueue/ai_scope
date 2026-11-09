@@ -45,7 +45,7 @@ const results = {};     // key -> { at, pids, luids: { luid: { vram, shared, uti
 // chart judges a gap by the pace of that moment and never by today's setting.
 const PS_WINDOW = 300000;
 const HIST = Math.ceil(PS_WINDOW / 2000) + 20;
-const hist = {};        // key -> [{ t, every, gpus: [{ vram, util }], ram, ramPrivate, cpu, ioRead, ioWrite }]
+const hist = {};        // key -> [{ t, every, gpus: [{ vram, util, w }], ram, ramPrivate, cpu, ioRead, ioWrite }]   (w: 122 - the per-card estimated watts accrueCost charged for that sample, when it could compute one)
 // The 092 trim, used by both writers (the sampler's real points and the zero heartbeat): keep everything newer
 // than (newest - PS_WINDOW) plus the ONE sample older, so a chart's leftmost segment enters from the edge.
 function pruneRing(h) {
@@ -65,21 +65,28 @@ function pushHist(key) {
   // 080 review: util defaults to 0 (a family sample with no engine activity on a card uses 0 % of it) - the
   // sample says which cards a process is on; also covers cards the family never touched and the Linux AMD /
   // Intel case, matching get()'s documented rule.
-  h.push({ t: r.at, every: r.every,   // 092: the stamp travels with the sample it was taken from (aggregate() copies it), not from the ambient sampler
+  const pt = { t: r.at, every: r.every,   // 092: the stamp travels with the sample it was taken from (aggregate() copies it), not from the ambient sampler
     gpus: luids.map(function (l) { const g = l && r.luids[l]; return g ? { vram: g.vram, util: g.util == null ? 0 : g.util } : { vram: 0, util: 0 }; }),
     ram: r.ram, ramPrivate: r.ramPrivate,
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
-    ioRead: r.ioSeen ? r.ioRead || 0 : null, ioWrite: r.ioSeen ? r.ioWrite || 0 : null });   // AI_SCOPE-076
+    ioRead: r.ioSeen ? r.ioRead || 0 : null, ioWrite: r.ioSeen ? r.ioWrite || 0 : null };   // AI_SCOPE-076
+  h.push(pt);
   pruneRing(h);   // 092: sized in time (plus one older sample at the edge), HIST is only the safety cap
-  accrueCost(key, r, luids);   // AI_SCOPE-121: energy for this real family sample (see below)
+  // AI_SCOPE-121: energy for this real family sample (see below). AI_SCOPE-122: accrueCost also returns the
+  // same estimate PER CARD, and the point's gpus entry gets it as `w` - the GPU Power mirror tile is drawn
+  // from there, so the watts on the tile and the joules in the cost can never come from two samples or two
+  // formulas. A voided sample returns null: the point simply carries no w (an unknown, not a 0).
+  const cw = accrueCost(key, r, luids);
+  if (cw) for (let i = 0; i < cw.length; i++) if (pt.gpus[i] && cw[i] != null) pt.gpus[i].w = cw[i];
 }
 
 // ---------- Energy attributed to an app's process family (AI_SCOPE-121, the Strata Cost lens) ----------
 // Per real family sample: for each card, that card's live board power x the share of ITS OWN total device
 // utilisation this app's family accounts for, summed over the cards = the watts this app is plausibly asking of
-// its cards. Board power is a DEVICE measurement, so this is an estimate - TERMINOLOGY keeps Power out of the
-// mirror family for exactly that reason - and the lens wears ≈ on every face and names the formula in its
-// tooltip (user's plan, 2026-11-08).
+// its cards. Board power is a DEVICE measurement, so this is an estimate and the lens wears ≈ on every face and
+// names the formula in its tooltip (user's plan, 2026-11-08). AI_SCOPE-122: the per-card figures are ALSO stamped
+// onto the mirror history point as gpus[i].w (the GPU Power mirror tile draws them); TERMINOLOGY's mirror-family
+// exclusion of Power was revised by that ticket - the estimate is measured per process, not invented.
 // The share, not the percentage (AI_SCOPE-121 D7, refined by D8, user's calls 2026-11-09): the first version
 // charged `board power x family util / 100`, which quietly assumes the card was 100 % busy. A card half busy
 // draws its idle base power plus half the workload, so that formula billed Strata for a share of the load AND a
@@ -128,31 +135,39 @@ function pushHist(key) {
 // The ring is the same time-sized shape as every other (PS_WINDOW + one older point; HIST a safety cap), and
 // each charge also drops an energy CHUNK on a longer, unshipped trail so any window can be integrated (below).
 const cost = {};   // key -> { t0, ws, lastT, hist: [{ t, every, w }] }   ws = watt-seconds (J)
+// Returns the per-card estimated watts [w0, w1, ...] (AI_SCOPE-122: pushHist stamps them onto the family
+// history point as gpus[i].w), or null when the whole sample is void (the D3/D7/D8 honesty rules below).
+// The cost ring and the total keep using the summed w exactly as 121 proved them; cw is the same math
+// broken out by card (each entry rounded to 0.1 W, so the rounded entries can differ from the rounded sum
+// by a tenth - the two faces are not required to print the same rounding).
 function accrueCost(key, r, luids) {
   luids = luids || hwstats.cardKeys();   // pushHist already has the list; probes may leave it out
   let keyed = false;
   luids.forEach(function (k) { if (k) keyed = true; });
-  if (!keyed) return;
+  if (!keyed) return null;
   const g = hwstats.cardGauges();
-  if (!g) return;
+  if (!g) return null;
   const src = r.gpuSrc || {}, totals = r.cardTotals || {};
   let w = 0;
+  const cw = [];   // AI_SCOPE-122: the same estimate per card, for the GPU Power mirror tile
   for (let i = 0; i < luids.length; i++) {
     const ck = luids[i];
     const c = ck && r.luids[ck];
     const util = c && c.util != null ? c.util : 0;
-    if (util <= 0) continue;   // this card asks nothing of us (D7: idle base power is charged to nobody)
+    if (util <= 0) { cw[i] = 0; continue; }   // this card asks nothing of us (D7: idle base power is charged to nobody)
     const p = i < g.power.length ? g.power[i] : null;
-    if (p == null) return;   // used card, no power reading: whole sample unknown (D3)
+    if (p == null) return null;   // used card, no power reading: whole sample unknown (D3)
     let d;
     if (src[ck] === 'pmon') {
       d = totals[ck];   // 121 D8: this card's total from the very same pmon passes - never the device gauge
-      if (d == null || d <= 0) return;   // our share with no denominator of the same scale: unknown, not a guess
+      if (d == null || d <= 0) return null;   // our share with no denominator of the same scale: unknown, not a guess
     } else {
       d = i < g.util.length ? g.util[i] : null;   // counters-sourced numbers divide by the counters' device gauge (D7)
-      if (d == null || d <= 0) return;
+      if (d == null || d <= 0) return null;
     }
-    w += p * Math.min(1, util / d);
+    const share = p * Math.min(1, util / d);
+    w += share;
+    cw[i] = Math.round(share * 10) / 10;
   }
   w = Math.round(w * 10) / 10;
   const c = cost[key] || (cost[key] = { t0: r.at, ws: 0, lastT: null, hist: [] });
@@ -169,6 +184,7 @@ function accrueCost(key, r, luids) {
     }
   }
   c.lastT = r.at;
+  return cw;
 }
 // AI_SCOPE-121 (Requests columns + the Total Cost lens's Days range): the same accrual also leaves a trail of
 // ENERGY CHUNKS - every charged stretch as { t, ws }, the watt-seconds it added, ending at t. Chunks are
@@ -249,7 +265,7 @@ function zeroTick() {
     const last = h[h.length - 1];
     if (last && last.attest && now - last.t < ZERO_EVERY - 500) return;   // don't stack two zeros in one tick
     h.push({ t: now, attest: attested[k], every: ZERO_EVERY,   // 092: the heartbeat's own interval, stamped like a real point's
-      gpus: luids.map(function () { return { vram: 0, util: 0 }; }),
+      gpus: luids.map(function () { return { vram: 0, util: 0, w: 0 }; }),   // 122: w:0 too - an unmeasurable-at-the-moment family asks 0 W of every card (the tile's per-card powered check still words "no watts for this card" over it)
       ram: 0, ramPrivate: 0, cpu: 0, ioRead: win ? 0 : null, ioWrite: win ? 0 : null });
     pruneRing(h);   // 092: same time-sized ring as the sampler's real points
     // AI_SCOPE-121: the cost ring gets the same attested zero - an off / idle / loading family is

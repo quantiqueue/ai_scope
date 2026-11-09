@@ -199,7 +199,9 @@ defineLens({
 // The four process tiles (strata.gpu / strata.ram / strata.cpu / strata.io) are the family's first members;
 // since AI_SCOPE-077 they come from defineMirror() in web/js/mirror.js, which every app scope shares. The
 // lens ids and tile ids are unchanged ('s' prefixes), so saved layouts and the hover keep working.
-const STRATA_MIRROR = defineMirror({ key: 'strata', name: 'Strata', letter: 's' });
+// AI_SCOPE-122: { power: true } opts Strata into the GPU Power mirror tile (id strata.power, tile spw<card>) -
+// the first scope to have one; the other four scopes wait for their own tickets (123-126).
+const STRATA_MIRROR = defineMirror({ key: 'strata', name: 'Strata', letter: 's', power: true });
 
 // ---------- Strata Gen tok/s (AI_SCOPE-093 slice 1) ----------
 // Big value (user spec 2026-11-01 17:50, = D2 extended): live tok/s while Strata reports one on this refresh;
@@ -547,10 +549,19 @@ defineLens({
 // since per-process RAM exists on Linux / macOS too. AI_SCOPE-075: "Strata CPU" leads that same row, also on
 // every OS (procstats reports CPU % on Windows, Linux and macOS). AI_SCOPE-076: "Strata I/O" closes that row
 // (the tile answers "Windows only for now" where the counters do not exist).
-// AI_SCOPE-077: the mirror rows come from the shared family helper - same items, same order, same ids.
 // AI_SCOPE-107: default = the user's saved page (2026-11-04): requests first below the card, loaded
 // (cols "3,8") and installed (cols "3") after it, then the 093 token row (tps ptps ctx hit) above the mirror tail.
 // AI_SCOPE-121: "Strata Cost" starts its own row after the token row (the 093/107 rows stay untouched); the
 // 2026-11-09 split puts the two cost lenses side by side on it (GPU work is the row's subject, so the rate
 // tile leads and the range tile follows - the user's numbering).
-defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, { lens: 'strata.requests', settings: {}, row: true }, { lens: 'strata.loaded', settings: { perPage: 5, cols: '3,8' }, row: true }, { lens: 'strata.installed', settings: { perPage: 5, cols: '3' }, row: true }, { lens: 'strata.tps', settings: {}, row: true }, 'strata.ptps', 'strata.ctx', 'strata.hit', { lens: 'strata.costact', row: true }, 'strata.costtotal']).concat(STRATA_MIRROR.layout()));
+// AI_SCOPE-122 (2026-11-09): one GPU Power tile PER DETECTED CARD leads that row, left of the Cost Activity
+// tile (the user's placement); the row-start flag moves to the first power tile. The lens lives in mirror.js
+// behind defineMirror's { power: true } opt-in - the default carries it in the cost row, NOT in the mirror tail.
+defineScopeLayout('strata', () => {
+  const cards = ((SOURCES.strata && SOURCES.strata.data) || {}).processCards || [];
+  const items = [{ lens: 'strata.current', settings: { width: 'full' } }, { lens: 'strata.requests', settings: {}, row: true }, { lens: 'strata.loaded', settings: { perPage: 5, cols: '3,8' }, row: true }, { lens: 'strata.installed', settings: { perPage: 5, cols: '3' }, row: true }, { lens: 'strata.tps', settings: {}, row: true }, 'strata.ptps', 'strata.ctx', 'strata.hit'];
+  for (let i = 0; i < Math.max(1, cards.length); i++)
+    items.push({ lens: 'strata.power', settings: { card: i }, row: i === 0 });   // machine-dependent entries loop over detected hardware, never literal indices (107's rule)
+  items.push({ lens: 'strata.costact' }, 'strata.costtotal');
+  return layoutOf(items).concat(STRATA_MIRROR.layout());   // layoutOf ONCE over the whole list: pushing raw strings after it strands item.lens undefined and kills the render (122's caught bug)
+});
