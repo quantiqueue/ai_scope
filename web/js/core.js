@@ -129,6 +129,37 @@ const fmtNum = n => n == null ? '—' : n.toLocaleString();
 const fmtTps = n => n == null ? '—' : n.toFixed(1);
 // AI_SCOPE-094: moved here from strata.js so the shared Requests columns (lens.js) can use it.
 const fmtPct = f => f == null ? '—' : Math.round(f * 100) + '%';
+// ---------- AI_SCOPE-121: energy and money (shared by the Strata cost lenses and the Requests columns) ----------
+// Energy is stored as WATT-SECONDS (joules) wherever it is measured, and shown in Wh (user direction
+// 2026-11-09: "let's display as Wh instead of kWh") - kWh only ever appears inside the money arithmetic.
+// Nothing here is a measurement of cost: it is the price the user typed in Settings → General times an
+// estimate, so the caller wears ≈ on the result.
+function fmtWh(ws) {
+  // No number, no figure: null / undefined / NaN / a string (careful - null >= 0 is TRUE in JS, so a bare
+  // numeric guard would happily print "0 Wh" for an absent value, which is exactly the 072 rule forbidding).
+  if (typeof ws !== 'number' || !isFinite(ws) || ws < 0) return '—';
+  const wh = ws / 3600;   // watt-seconds -> watt-hours
+  if (wh >= 100) return Math.round(wh) + ' Wh';
+  if (wh >= 1) return wh.toFixed(1) + ' Wh';
+  // A trickle is still a measurement: below a hundredth of a Wh this keeps two significant digits rather
+  // than rounding a short request's energy away to "0 Wh".
+  return wh > 0 ? parseFloat(wh.toPrecision(2)) + ' Wh' : '0 Wh';
+}
+// The Settings → General electricity price, dollars per kWh. The Settings dialog keeps window.AI_SCOPE_SETTINGS
+// current on every POST, and the page inlines it before paint, so this is always the live price; a missing or
+// corrupt value falls back to the default. Money is computed at DRAW time (D5), never stored: "it is more likely
+// that the user entered the wrong settings price than for the price to have actually changed".
+function kwhPrice() { const p = +(window.AI_SCOPE_SETTINGS || {}).kwhPrice; return isFinite(p) && p >= 0 ? p : 0.16; }
+// Money for an estimate, at the current price. One rule, three tiers: never round away what was measured.
+// A dollar or more gets cents; a few cents get thousandths (two decimals there would keep one significant
+// digit - a rate face reading $0.014 as "$0.01" is a lie of omission); below a cent, two significant digits
+// (one request's worth of GPU energy is a fraction of a cent).
+function fmtUsd(n) {
+  if (typeof n !== 'number' || !isFinite(n) || n < 0) return '—';   // no number, no price to print (see fmtWh)
+  if (n >= 1) return '$' + n.toFixed(2);
+  if (n >= 0.01) return '$' + n.toFixed(3);
+  return n > 0 ? '$' + parseFloat(n.toPrecision(2)) : '$0.00';
+}
 // AI_SCOPE-094 slice 4: where a number came from (the server writes `src` per field; see reqstats.js).
 // exact / derived need no marker; estimated and substitute do - they are not measurements.
 const provOf = (r, f) => (r && r.src && r.src[f]) || 'exact';

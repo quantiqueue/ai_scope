@@ -68,20 +68,34 @@ const known = {};           // key -> true (saved)
 const waiting = {};         // key -> raw request seen but not saved yet (waiting for the samples after it ended)
 // One store, one file, this scope's own 1000-row ring. `requests` is the store's live array:
 // the store mutates it in place, so every reader below keeps seeing the same array.
+// AI_SCOPE-121 (D9): energyVer stamps WHICH measurement an energy figure came from, so a corrected model cannot
+// leave half-numbers behind in history. The user's call after the pmon finding: the rows saved so far measured
+// this machine's second card at 3 % of what it drew, and mixing them with real ones is worse than an empty cell.
+// Every line whose stamp is not the current one has its energy fields dropped on read - the file itself is never
+// rewritten (094's rule: history is append-only), so this is self-maintaining: change the measurement, raise the
+// number, and yesterday's rows stop being counted without anyone shipping a migration.
+const ENERGY_VER = 2;
+// Read-side field map for every line in the history file (094: the file is never rewritten, so the map is
+// permanent). Named so a probe can put saved rows through the real path without touching the app or its file.
+function mapReqRow(r) {
+  // AI_SCOPE-094 slice 2: old files are never rewritten, so every line saved before this rename
+  // arrives with the old names.
+  if (r.reused !== undefined) { r.cachedTokens = r.reused; delete r.reused; }
+  if (r.decodeMs !== undefined) { r.genMs = r.decodeMs; delete r.decodeMs; }
+  // slice 4: lines saved before the provenance vocabulary carry the old boolean instead.
+  if (r.genDerived !== undefined) { if (r.genDerived) reqstats.setProv(r, 'genTps', reqstats.PROV.DERIVED); delete r.genDerived; }
+  if (r.promptTps != null) reqstats.setProv(r, 'promptTps', reqstats.PROV.DERIVED);
+  // AI_SCOPE-121 D9: energy measured by a superseded apportionment is not history, it is a wrong measurement.
+  // Drop the fields and the row reads as "no energy recorded" - a dash in the two Requests columns, and
+  // nothing summed in the Days range - rather than a number nobody can defend.
+  if (r.energyWs != null && r.energyVer !== ENERGY_VER) { delete r.energyWs; delete r.energyPartial; }
+  return r;
+}
 const store = reqstore.createStore({
   file: REQ_FILE,
   accept: function (r) { return !!r.key && !known[r.key]; },   // dedupe what the file already holds
   remember: function (r) { if (r.key) known[r.key] = true; },
-  // AI_SCOPE-094 slice 2: old files are never rewritten, so every line saved before this rename
-  // arrives with the old names. Map them on read (the map is permanent, not transitional).
-  mapRow: function (r) {
-    if (r.reused !== undefined) { r.cachedTokens = r.reused; delete r.reused; }
-    if (r.decodeMs !== undefined) { r.genMs = r.decodeMs; delete r.decodeMs; }
-    // slice 4: lines saved before the provenance vocabulary carry the old boolean instead.
-    if (r.genDerived !== undefined) { if (r.genDerived) reqstats.setProv(r, 'genTps', reqstats.PROV.DERIVED); delete r.genDerived; }
-    if (r.promptTps != null) reqstats.setProv(r, 'promptTps', reqstats.PROV.DERIVED);
-    return r;
-  },
+  mapRow: mapReqRow,
   onError: function (msg) { lastError = msg; }
 });
 const requests = store.rows();
@@ -164,8 +178,41 @@ function collectRequests(instances) {
       if (row.end != null && now < row.end + 3000) { waiting[key] = true; return; }
       delete waiting[key];
       row.peak = row.start != null ? hwstats.peakBetween(row.start, row.end + 2000) : null;
+      // AI_SCOPE-121 (D5): the energy this request asked of the cards, integrated over the WHOLE request
+      // [start, end] - prompt read and generation, not the model load before it. Same accrual, same rules and
+      // same unknowns as the Cost lens's session total (procstats.energyBetween), and it is stored as JOULES:
+      // the money column prices it at draw time, so a corrected price re-prices history honestly. A row whose
+      // window no accrued chunk covers at all gets no field (a gap, never a zero); one that reaches back past
+      // the trail is a floor, and says so. Provenance: estimated (board power is a device measurement).
+      const en = row.start != null && row.end != null ? procstats.energyBetween('strata', row.start, row.end) : null;
+      if (en && en.n > 0) {
+        row.energyWs = Math.round(en.ws * 10) / 10;
+        if (en.partial) row.energyPartial = true;
+        row.energyVer = ENERGY_VER;   // 121 D9: which measurement produced these joules (see mapRow above)
+        reqstats.setProv(row, 'energyWs', reqstats.PROV.ESTIMATED);
+      }
       saveRequest(row);
     });
+  });
+}
+
+// AI_SCOPE-121 (D5, strata.costtotal lens's Days range): the saved request rows are the only energy record
+// that outlives a restart, so a range longer than this session sums THEM. One bucket per LOCAL calendar day,
+// oldest first: { d: <midnight ms>, ws, n, miss } - `n` rows that carry energy, `miss` rows that do not (saved
+// before this feature, or a window nothing was measured inside), which count as NOTHING and must be worded on
+// the face that shows them. Bounded by the store's own ring (1000 rows), so this is at most a few dozen
+// objects; the client picks the window and applies the price.
+function costDayBuckets() {
+  const b = {};
+  requests.forEach(function (r) {
+    if (r.end == null) return;
+    const x = new Date(r.end); x.setHours(0, 0, 0, 0);
+    const k = x.getTime();
+    const day = b[k] || (b[k] = { d: k, ws: 0, n: 0, miss: 0 });
+    if (r.energyWs != null) { day.ws += r.energyWs; day.n++; } else day.miss++;
+  });
+  return Object.keys(b).map(Number).sort(function (a, c) { return a - c; }).map(function (k) {
+    const day = b[k]; day.ws = Math.round(day.ws * 10) / 10; return day;
   });
 }
 
@@ -661,11 +708,14 @@ function getState(limit, since) {
   out.process = procstats.get('strata'); out.processSupported = procstats.supported();
   out.processHistory = procstats.history('strata', since);   // AI_SCOPE-084: ?since=<t> sends only the new points
   out.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
-  // AI_SCOPE-121 (strata.cost lens): the GPU energy attributed to Strata's process family since this server
+  // AI_SCOPE-121 (the two Cost lenses): the GPU energy attributed to Strata's process family since this server
   // booted (watt-seconds) and the 5-minute ring of estimated watts. The whole (small) ring rides every answer,
   // like the 093 rings; the $/kWh price is NOT baked in here - it is a Settings → General number the page
   // applies at draw time, so re-pricing re-prices the session honestly.
   out.cost = procstats.cost('strata');
+  // ...and the per-day sums of the SAVED requests, which is what the Total Cost lens's Days range reads
+  // (a session's ring cannot cover last week; the rows on disk can). See costDayBuckets.
+  out.costDays = costDayBuckets();
   out.tpsHistory = tpsHist;   // AI_SCOPE-093: the whole (small) ring rides every answer - the client appends only newer points
   out.promptHistory = ptpsHist;   // AI_SCOPE-093 slice 2
   out.contextHistory = ctxHist;   // AI_SCOPE-093 slice 3
@@ -797,6 +847,12 @@ module.exports = { start: start, stop: stop, getState: getState, getLogo: getLog
   _test: { modelShard: modelShard, catalogEntry: catalogEntry, discoverCli: discoverCli, cliOrigin: cliOrigin,
     portOf: portOf, telToMetrics: telToMetrics, cliContainer: cliContainer, cliInstanceId: cliInstanceId,
     gpuNames: gpuNames,   // AI_SCOPE-120: the three-state device mapping, probeable without a running app
+    // AI_SCOPE-121: the day buckets and the store behind them - a probe seeds a strata-requests.jsonl in its
+    // own AI_SCOPE_DATA, loads it with store.load(), and reads costDayBuckets() with no Strata and no timers.
+    // collectRequests is exposed for the same reason: with a stubbed procstats it shows what a saved row gains.
+    costDayBuckets: costDayBuckets, store: store, collectRequests: collectRequests,
+    // 121 D9: the read-side map and the version it checks, so a probe can feed a saved line through the real path
+    mapRow: mapReqRow, energyVer: function () { return ENERGY_VER; },
     setConfig: function (s) { start(s); }, setApiKey: function (v) { apiKey = String(v || '').trim(); },
     setCliConfigured: function (v) { cliConfigured = String(v || '').trim().replace(/\/+$/, ''); },
     setCli: function (v) { cli = v; }, setUrls: function (v) { cliUrls = v.slice(); cliDiscoverAt = Date.now(); },

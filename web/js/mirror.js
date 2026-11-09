@@ -93,10 +93,17 @@ function defineMirror(spec) {
   // ---------- GPU / VRAM per card (AI_SCOPE-072) ----------
   // One metric per tile (Show picks GPU usage or VRAM); a card picker because VRAM is per card. "Not available
   // on this system" where per-process GPU stats cannot exist (macOS; Linux AMD / Intel cards).
+  // AI_SCOPE-121 D8: on an NVIDIA card the GPU % number is nvidia-smi's per-process SM utilisation (pmon), on
+  // Windows too - the Windows GPU Engine counters this used to read are blind for CUDA work on a second card,
+  // which is why a tile could say 0 % while the cost lens charged that card's full watts. The counters keep
+  // supplying VRAM and shared memory (nvidia-smi gives no per-process memory figures on Windows) and the GPU %
+  // for cards pmon cannot speak for. The tile says which, so a number that no longer matches Task Manager is
+  // explained where it is read.
+  const GPU_TIP = name + "'s share of one graphics card. GPU usage is per-process SM (shader) time from nvidia-smi - on Windows too, because Windows' own GPU counters, the ones Task Manager's GPU column uses, never report CUDA work on a second graphics card. Where nvidia-smi cannot speak for a card the counters stand instead, and then the number is Task Manager's busiest-engine measure. The two are different measurements, never mixed on one card. VRAM and shared memory always come from the counters (nvidia-smi reports no per-process memory on Windows).";
   defineLens({
     id: key + '.gpu', scope: key, size: 'tile',
     name: name + ' GPU',
-    description: "One graphics card's GPU usage or VRAM used by " + name + "'s model process, with a 5-minute history.",
+    description: "One graphics card's GPU usage or VRAM used by " + name + "'s model process, with a 5-minute history. GPU usage is nvidia-smi's per-process SM time on an NVIDIA card (Windows included), the Windows GPU counters elsewhere.",
     settings: [
       { id:'card', label:'Graphics card', type:'gpu', default:0 },
       { id:'show', label:'Show', type:'choice', default:'gpu', options:[['gpu', 'GPU usage'], ['vram', 'VRAM']] },
@@ -109,6 +116,7 @@ function defineMirror(spec) {
       const num = cards.length > 1 ? ' ' + (i + 1) : '';
       const label = name + ' ' + (show === 'vram' ? 'VRAM' : 'GPU') + num;   // "Bionic GPU 2" with several cards, plain with one
       if (box.querySelector('.ltitle').textContent !== label) box.querySelector('.ltitle').textContent = label;
+      box.querySelector('.ltitle').title = GPU_TIP;   // 121 D8: the tile says what its GPU % number is measured by
       const card = cards[i] || {}, cardName = card.name || (cards.length ? 'GPU ' + (i + 1) + ' not found' : 'detecting…');
       if (!d.processSupported) {   // macOS has no per-process GPU source (and none is coming without 062); Linux AMD / Intel cards lack it too
         sparkTile(box, null, NA_HTML, 'Not available on this system', []);

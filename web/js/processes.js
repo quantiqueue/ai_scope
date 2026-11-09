@@ -23,7 +23,10 @@ const PROC_METRICS = {
     colTip: 'System RAM used as GPU memory. Windows can report the same shared memory on every card a process uses.',
     value: (p, c) => p.gpus[c] ? p.gpus[c].shared : 0 },
   gpu: { rate: true, floor: 10, name: 'Top GPU', col: 'GPU', card: true, min: 0.05, fmt: pctText, cap: 100,
-    description: 'The 5 processes using the most of one graphics card (busiest engine, like Task Manager).',
+    // AI_SCOPE-121 D8: NVIDIA cards rank by nvidia-smi's per-process SM utilisation (Windows and Linux both come
+    // from pmon now); the Windows GPU Engine counters are the fallback for cards pmon cannot speak for.
+    description: 'The 5 processes using the most of one graphics card — for an NVIDIA card, its share of that card\'s SM (shader) time, from nvidia-smi; other cards fall back to the Windows GPU counters (Task Manager\'s measure, busiest engine).',
+    colTip: 'Per-process GPU usage. Windows reads it from nvidia-smi (SM busy time per process), not from Task Manager\'s counters: those never report CUDA work on a second graphics card, so a model running there reads 0 % there while this lens shows the process using it. Numbers from the two sources are not on the same scale and are never mixed on one card.',
     value: (p, c) => p.gpus[c] && p.gpus[c].util || 0 },
   cpu: { rate: true, floor: 10, name: 'Top CPU', col: 'CPU', min: 0.05, fmt: pctText, cap: 100,
     description: 'The 5 processes using the most CPU (share of the whole CPU, all cores).',

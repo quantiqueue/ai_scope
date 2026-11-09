@@ -75,37 +75,84 @@ function pushHist(key) {
 }
 
 // ---------- Energy attributed to an app's process family (AI_SCOPE-121, the Strata Cost lens) ----------
-// Per real family sample: each card's live board power (hwstats) x the family's util on that card / 100,
-// summed over cards = the watts this app is plausibly asking of its cards. Board power is a DEVICE
-// measurement, so this is an estimate - TERMINOLOGY keeps Power out of the mirror family for exactly that
-// reason - and the lens wears ≈ on every face and names the formula in its tooltip (user's plan, 2026-11-08).
+// Per real family sample: for each card, that card's live board power x the share of ITS OWN total device
+// utilisation this app's family accounts for, summed over the cards = the watts this app is plausibly asking of
+// its cards. Board power is a DEVICE measurement, so this is an estimate - TERMINOLOGY keeps Power out of the
+// mirror family for exactly that reason - and the lens wears ≈ on every face and names the formula in its
+// tooltip (user's plan, 2026-11-08).
+// The share, not the percentage (AI_SCOPE-121 D7, refined by D8, user's calls 2026-11-09): the first version
+// charged `board power x family util / 100`, which quietly assumes the card was 100 % busy. A card half busy
+// draws its idle base power plus half the workload, so that formula billed Strata for a share of the load AND a
+// share of nothing - it under-charged whenever anything else was awake on the card (measured on the user's own
+// live two-card machine, 145 consecutive samples while Strata generated: 42.4 W mean against 67.0 W for exactly
+// the same instants - 1.58x, and 1.5 - 1.6x every time it was measured). The share answers the actual question -
+// of the power this card is drawing right now, how much is here because of us?
+// Whose utilisation, though (D8)? D7 divided the Windows counters' per-process % by nvidia-smi's device %, and
+// that numerator is BLIND for CUDA contexts on a second adapter: over 40 s on snow the 3060 Ti drew 59.7 W with
+// Strata the only process holding it, and the counters attributed 2.0 W of it (3 %), reading 0 in 125 of 151
+// samples and putting the process on the wrong card in two of the six where it lit up at all. Per-process GPU %
+// therefore now comes from `nvidia-smi pmon` on Windows too (proctop.js stamps it, hwstats.js keeps the stream) -
+// the same tool the Linux path has always used - and the share is
+//     min(1, our family's pmon sm % on that card  /  the pmon sm % of every process on that card)
+// both sides read out of the SAME averaged passes. Where pmon cannot speak (AMD / Intel cards, macOS, or a
+// stream that died and was given up on) the card falls back to the counters over the device gauge - D7's math -
+// and the tooltip says which source priced it. A card is never measured by both at once.
+// Measured on the same 40 s, this machine: 5060 Ti 52.0 W of its 76.1 W (share 0.19-1.00, median 0.67 - chrome
+// and the desktop composition genuinely hold SMs there) plus 3060 Ti 59.7 W of its 59.7 W (share exactly 1.00
+// every second) = 111.7 W of the machine's 135.8 W, against D7's 68.5 W. The ~24 W left over is other
+// processes' work on the display card, which is an honest remainder rather than a hole.
 // The honest-accounting rules, same roots as the mirror family's:
 //  - Energy, not money, is what accumulates: the $/kWh price lives in Settings → General and is applied at
 //    draw time, so changing it re-prices the whole session - the joules were measured regardless.
 //  - Only REAL family samples accrue energy. The attested-zero heartbeat adds 0 - it writes a w:0 point so the
-//    rate face reads "≈$0.00 /h · Offline" exactly like the mirror tiles show real zeros (0 W x anything is
-//    0, no wattage needed to claim nothing is being asked of the cards), but it can never change the total.
-//  - A card the family USES (util > 0) with no power reading makes the whole real sample unknown - no point,
-//    no accrual, no time counted. A partial sum would under-count silently, and the D3 decision was n/a,
-//    never a powerLimit stand-in. Cards the family does not use (util 0) add 0 W regardless of what they report.
-//  - If the Hardware sampler is stale (powerNow null), no REAL sample accrues for that stretch.
+//    rate face reads "≈$0.00 /h · Offline" exactly like the mirror tiles show real zeros (a family at 0 % asks
+//    for 0 W whatever the card reports), but it can never change the total. The user kept that rule (D1) after
+//    measuring the loaded-idle draw - 44 W + 54 W at 0-7 % device util, the model resident on both cards - so
+//    the lens prices what Strata USES, not what it occupies. pmon reads 0 sm in exactly that state, so idle
+//    still reads ≈$0.00 /h on the new source.
+//  - A card the family USES (util > 0) with no power reading, or with no same-source total to divide by
+//    (including a card whose device gauge reads 0 % while our counters-sourced family reads above 0 - the two
+//    samplers cannot agree, so neither number can be trusted), makes the whole real sample unknown: no point,
+//    no accrual, no time counted. A partial sum would under-count silently, and the D3 decision was n/a, never
+//    a powerLimit stand-in and never a divided-by-zero guess. Cards the family does not use (util 0) add 0 W
+//    regardless of what they report - a card's idle base power is charged to nobody.
+//  - The share is clamped at 1. The two sides come from one stream on the pmon path, but the family's number is
+//    summed across its processes and capped at 100 % by aggregate(), the card's is not, and the accrual and the
+//    sample arrive from two samplers whose idea of "now" is a few hundred ms apart. Reading a hair over the
+//    card's total is noise, not a claim that this app owns 120 % of a card.
+//  - If the Hardware sampler is stale (cardGauges null), no REAL sample accrues for that stretch.
 //  - dt between CONSECUTIVE accrued points, capped at 3 x that sample's stamp (the 092 break rule): a lookup
 //    gap costs nothing rather than inventing energy across the hole.
-//  - No cards at all (luids empty): the GPU cost is undefined here, so no points - never a $0.00 claim.
-// The ring is the same time-sized shape as every other (PS_WINDOW + one older point; HIST a safety cap).
+//  - No cards at all, or cards we cannot key per-process numbers to (the no-DXGI fallback sums every adapter
+//    into one card with no luid): the GPU cost is undefined here, so no points - never a $0.00 claim.
+// The ring is the same time-sized shape as every other (PS_WINDOW + one older point; HIST a safety cap), and
+// each charge also drops an energy CHUNK on a longer, unshipped trail so any window can be integrated (below).
 const cost = {};   // key -> { t0, ws, lastT, hist: [{ t, every, w }] }   ws = watt-seconds (J)
 function accrueCost(key, r, luids) {
   luids = luids || hwstats.cardKeys();   // pushHist already has the list; probes may leave it out
-  if (!luids.length) return;
-  const pow = hwstats.powerNow();
-  if (!pow) return;
+  let keyed = false;
+  luids.forEach(function (k) { if (k) keyed = true; });
+  if (!keyed) return;
+  const g = hwstats.cardGauges();
+  if (!g) return;
+  const src = r.gpuSrc || {}, totals = r.cardTotals || {};
   let w = 0;
   for (let i = 0; i < luids.length; i++) {
-    const g = luids[i] && r.luids[luids[i]];
-    const util = g && g.util != null ? g.util : 0;
-    const p = i < pow.length ? pow[i] : null;
-    if (p == null) { if (util > 0) return; continue; }   // unknown power on a used card: whole sample unknown (D3)
-    w += p * util / 100;
+    const ck = luids[i];
+    const c = ck && r.luids[ck];
+    const util = c && c.util != null ? c.util : 0;
+    if (util <= 0) continue;   // this card asks nothing of us (D7: idle base power is charged to nobody)
+    const p = i < g.power.length ? g.power[i] : null;
+    if (p == null) return;   // used card, no power reading: whole sample unknown (D3)
+    let d;
+    if (src[ck] === 'pmon') {
+      d = totals[ck];   // 121 D8: this card's total from the very same pmon passes - never the device gauge
+      if (d == null || d <= 0) return;   // our share with no denominator of the same scale: unknown, not a guess
+    } else {
+      d = i < g.util.length ? g.util[i] : null;   // counters-sourced numbers divide by the counters' device gauge (D7)
+      if (d == null || d <= 0) return;
+    }
+    w += p * Math.min(1, util / d);
   }
   w = Math.round(w * 10) / 10;
   const c = cost[key] || (cost[key] = { t0: r.at, ws: 0, lastT: null, hist: [] });
@@ -115,9 +162,48 @@ function accrueCost(key, r, luids) {
   if (c.hist.length > HIST) c.hist.splice(0, c.hist.length - HIST);
   if (c.lastT != null) {
     const dt = r.at - c.lastT;
-    if (dt > 0 && dt <= 3 * (r.every || MIRROR_MS)) c.ws += w * dt / 1000;   // W x s = J; no charging across a gap
+    if (dt > 0 && dt <= 3 * (r.every || MIRROR_MS)) {   // W x s = J; no charging across a gap
+      const e = w * dt / 1000;
+      c.ws += e;
+      pushCostChunk(key, r.at, e, c.lastT);   // AI_SCOPE-121: the window-queryable trail (the stretch is (lastT, r.at])
+    }
   }
   c.lastT = r.at;
+}
+// AI_SCOPE-121 (Requests columns + the Total Cost lens's Days range): the same accrual also leaves a trail of
+// ENERGY CHUNKS - every charged stretch as { t, ws }, the watt-seconds it added, ending at t. Chunks are
+// additive, so integrating any window is a sum over whole chunks: what a request [start, end] cost, and (via
+// the saved rows) what a stretch of days costs. A chunk is charged with the same rules as the total above, so
+// a hole never contributes, and the price is never baked in - joules only.
+// This is NOT the chart ring: it never rides the payload (the page asks for a window sum server-side, or takes
+// the per-day buckets the saved rows give it), so it can be long while the wire stays short. Sized in TIME -
+// a request is saved seconds after it ends, so what has to be covered is the longest request we will see -
+// and count-capped only as a runaway-pace guard (same shape as the rings above).
+const COSTLOG_MS = 3600000, COSTLOG_CAP = 4000;
+const costLog = {};   // key -> { cov: <earliest time the trail can speak for>, a: [{ t, ws }] } oldest first
+function pushCostChunk(key, t, ws, from) {
+  const lg = costLog[key] || (costLog[key] = { cov: from, a: [] });
+  lg.a.push({ t: t, ws: ws });
+  const last = lg.a[lg.a.length - 1].t;
+  // Dropping the oldest chunk moves the coverage line to where the NEXT chunk's stretch began - which is
+  // exactly the time of the chunk being dropped (consecutive charges abut).
+  while (lg.a.length > 1 && last - lg.a[0].t > COSTLOG_MS) lg.cov = lg.a.shift().t;
+  if (lg.a.length > COSTLOG_CAP) lg.cov = lg.a.splice(0, lg.a.length - COSTLOG_CAP).pop().t;
+}
+// Energy attributed to this app's family over [t0, t1], or null when there is no trail at all (the app was
+// never measurable this session - an unknown number, not a zero). `n` counts the chunks that landed in the
+// window: n = 0 means nothing was ever MEASURED inside it, which the caller must treat as unknown (a gap),
+// never as "0 Wh" - a real 0 Wh only exists when chunks are there and they read 0 W (the family was live and
+// asked nothing of its cards). `partial` says the window reaches back further than the trail does, so the sum
+// is a floor over the covered part only - the same honesty 072's peakBetween marks. Boundary rule: a chunk
+// counts when its END lands in (t0, t1], which can over-count a stretch straddling t0 by at most one pace
+// (2 s) - and never charges a hole.
+function energyBetween(key, t0, t1) {
+  const lg = costLog[key];
+  if (!lg || !lg.a.length || t0 == null || t1 == null) return null;
+  let ws = 0, n = 0;
+  for (let i = 0; i < lg.a.length; i++) if (lg.a[i].t > t0 && lg.a[i].t <= t1) { ws += lg.a[i].ws; n++; }
+  return { ws: ws, n: n, partial: t0 < lg.cov };
 }
 
 // AI_SCOPE-077 (review batch): an offline app really uses nothing, so the mirror tiles should read 0 rather
@@ -381,7 +467,7 @@ function aggregate(sample) {
   armedKeys().forEach(function (k) {
     const fam = fams[k];
     if (!fam || !fam.pids.length) { delete results[k]; return; }
-    const r = { at: sample.at, every: sample.every || proctop.everyMs(), pids: [], luids: {}, cpu: null, ram: 0, ramPrivate: 0, ioRead: 0, ioWrite: 0, ioSeen: false, privSeen: false };   // 092: the pace rides with the sample it came from (proctop.js stamps it); everyMs() is only the fallback
+    const r = { at: sample.at, every: sample.every || proctop.everyMs(), pids: [], luids: {}, gpuSrc: sample.gpuSrc || {}, cardTotals: sample.cardTotals || {}, cpu: null, ram: 0, ramPrivate: 0, ioRead: 0, ioWrite: 0, ioSeen: false, privSeen: false };   // 092: the pace rides with the sample it came from (proctop.js stamps it); everyMs() is only the fallback. 121 D8: so does which source each card's GPU % came from, and that source's own card-wide total
     fam.pids.forEach(function (x) {
       const row = rows[x.pid];
       if (!row) return;   // gone between re-resolves: no invented numbers, and the tile keeps the family it did find
@@ -508,7 +594,9 @@ module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: ge
   // AI_SCOPE-121: the energy attributed to an app's family since this server booted (watt-seconds), plus the
   // 5-minute ring of per-cycle estimated watts the Cost lens draws. null until the first accrueable sample.
   cost: function (key) { return cost[key] || null; },
+  // AI_SCOPE-121: integrate that same accrual over a window - what one request cost in joules. null = unknown.
+  energyBetween: energyBetween,
   attest: attest, unattest: unattest,   // AI_SCOPE-077 review: offline attestation drives the zero heartbeat
   _test: { aggregate: aggregate, windowsFamilies: windowsFamilies, nixResolve: nixResolve, results: results, fams: fams,
     familyOf: familyOf, ancestryOf: ancestryOf, kidsIndex: kidsIndex,
-    accrueCost: accrueCost, cost: cost, zeroTick: zeroTick } };   // AI_SCOPE-121: the energy accumulator, probeable with a stubbed hwstats
+    accrueCost: accrueCost, cost: cost, costLog: costLog, zeroTick: zeroTick } };   // AI_SCOPE-121: the energy accumulator, probeable with a stubbed hwstats

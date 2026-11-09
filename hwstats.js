@@ -412,6 +412,159 @@ function startPcie() {
   pcieProc = ps;
 }
 
+// ---- Per-process GPU utilisation on Windows (AI_SCOPE-121 D8): one persistent 'nvidia-smi pmon -d 1 -s u' stream ----
+// The Windows GPU Engine counters (what proctop.js reads, and what Task Manager's GPU column uses) were the only
+// per-process GPU % we had - and on a multi-GPU machine they are BLIND for CUDA contexts on the secondary adapter.
+// Measured on snow (three sources, same seconds): the 3060 Ti drew 42-90 W and its device util read 20-49 % in 129
+// of 151 samples while strata.exe's own per-engine counter read 0 in 125 of them; in the 6 samples where it did
+// light up it lit up on the WRONG card twice. pmon sees it every second: '1 25116 C 17 3 strata.exe'. So on Windows
+// per-process GPU % comes from pmon and the counters are the fallback (user's call, 2026-11-09, after that
+// capture, and everywhere on the page - cost lenses, mirror GPU tiles, Top GPU - so no tile disagrees with what
+// the cost math charges). Linux already works this way (procnix.js), so this stops Windows being the odd one out.
+// One stream, the dmon discipline above (065 / 071 / 119): spawning per poll would cost (1 Hz, ~27 rows a pass
+// here = 272 lines per 10 s, 188 ms of CPU per 8 s measured against 16 ms for the device loop); a pass that
+// delivers data resets the failure count; PMON_MAX_BAD starts with no data gives up; and the pass list is cleared
+// when a stream dies, so a dead stream never keeps painting its last readings.
+// What a pass MEANS: 'sm' is the share of the sample interval that process had work resident on that card's
+// streaming multiprocessors - a THIRD scale, next to the counters' engine-busy % and nvidia-smi's device %
+// (same seconds on the display card: 40 % / 59 % / 67 %). Scales are never mixed inside one ratio: the cost
+// share is pmon over pmon per card, and a card on the counters fallback divides by the device gauge instead
+// (procstats.js, accrueCost). Averages come from ONE set of passes, numerator and denominator together.
+// Memory is deliberately NOT from pmon: 'pmon -s m' reads 0 for every process on Windows (measured) and
+// --query-compute-apps=used_memory is [N/A] under WDDM (the 037/038 finding), so VRAM stays on the counters.
+const PMON_DELAY_S = 1;       // pmon's -d is SECONDS (1-10) - 1 Hz is as fine as this tool goes
+const PMON_KEEP_MS = 30000;   // passes buffered: 30 one-second passes is nothing, and it lets a slow (30 s) process
+                              // sample average the same stretch it is pricing instead of its last 6 s (decision 3)
+const PMON_STALE_MS = 6000;   // nothing this fresh = the stream is not current: fall back to the counters (decision 2)
+const PMON_MAX_BAD = 4;
+let pmonPasses = [];          // complete passes, oldest first: { at, cards: { cardKey: { pid: sm % } } }
+let pmonOpen = null;          // the pass being read (a '# gpu' header starts one)
+let pmonProc = null, pmonBad = 0, pmonGaveUp = false, pmonExitHooked = false;
+
+// pmon numbers cards by nvidia-smi index; per-process numbers are keyed by cardKeys() everywhere else (Windows:
+// the DXGI LUID that matchNvidiaLuids put on the card). null = this card cannot be keyed, so pmon says nothing.
+function pmonCardKey(index) {
+  const c = nvCards.filter(function (x) { return x.id === 'nv' + index; })[0];
+  return c && c.luid ? String(c.luid).toLowerCase() : null;
+}
+// Which column is 'sm' is read FROM THE HEADER, not assumed: pmon's columns change with the driver (a 580-series
+// Windows driver prints sm mem enc dec jpg ofa where an older one prints sm mem enc dec), and the old
+// fixed-index guess read the MEM column - idle rows ('-') made every line look like no data, which silently
+// turned the whole feature off and fell back to the counters. -1 = this header does not name an sm column.
+let pmonSmCol = 3;                          // sane default if a driver's header is ever unread
+function parsePmonHeader(l) {
+  const t = String(l).trim().replace(/^#+\s*/, '').split(/\s+/);
+  const i = t.indexOf('sm');
+  if (i > 0) pmonSmCol = i;                // a header that renames its columns mid-stream: keep the last one seen
+  return pmonSmCol;
+}
+// One pmon line -> { idx, pid, sm } or null (headers, usage text, anything not a data row). '-' = idle = 0.
+function parsePmonLine(l) {
+  const p = String(l).trim().split(/\s+/);
+  if (p.length < pmonSmCol + 1 || !/^\d+$/.test(p[0]) || !/^\d+$/.test(p[1])) return null;
+  if (!/^\d+$/.test(p[pmonSmCol])) return null;   // '-' for idle, and a driver that prints something else is no data
+  return { idx: p[0], pid: +p[1], sm: Math.min(100, +p[pmonSmCol]) };
+}
+function closePmonPass() {
+  if (pmonOpen && Object.keys(pmonOpen.cards).length) { pmonPasses.push(pmonOpen); pmonBad = 0; }   // data flowing
+  pmonOpen = null;
+}
+// One stdout line. Everything about pmon's shape (headers as pass boundaries, which column is sm, '-' as no data,
+// a pid with both a C and a G row) lives here, so a probe can feed captured output through the real path.
+function pmonLine(l) {
+  const t = l.trim();
+  if (t.charAt(0) === '#') {            // the header pair repeats once per pass - that is the pass boundary
+    if (/^#\s*gpu/i.test(t)) { closePmonPass(); parsePmonHeader(t); pmonOpen = { at: Date.now(), cards: {} }; }
+    return;
+  }
+  const x = parsePmonLine(l);
+  if (!x) return;
+  if (!pmonOpen) pmonOpen = { at: Date.now(), cards: {} };   // attaching mid-pass: data is data
+  const key = pmonCardKey(x.idx);
+  if (!key) return;
+  const byPid = pmonOpen.cards[key] || (pmonOpen.cards[key] = {});
+  byPid[x.pid] = Math.min(100, (byPid[x.pid] || 0) + x.sm);  // a pid with both a C and a G row adds up (procnix's rule)
+}
+function pmonFail() {
+  if (pmonGaveUp) return;
+  pmonPasses = []; pmonOpen = null;   // 071: a dead stream paints nothing
+  if (++pmonBad >= PMON_MAX_BAD) {
+    pmonGaveUp = true;
+    console.log('[hwstats] pmon stream died ' + pmonBad + ' times in a row - giving up; per-process GPU % falls back to the Windows counters');
+    return;
+  }
+  setTimeout(startPmon, 5000);
+}
+function startPmon() {
+  if (pmonGaveUp || pmonProc) return;
+  let ps;
+  try {
+    ps = spawn('nvidia-smi', ['pmon', '-d', String(PMON_DELAY_S), '-s', 'u'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) { pmonFail(); return; }
+  let buf = '', junk = '';
+  ps.on('error', function () {});
+  ps.stderr.on('data', function (d) { if (junk.length < 4000) junk += d; });
+  ps.on('exit', function () {
+    if (pmonProc !== ps) return;            // 111: a restart's late exit must not kill the new stream's state
+    pmonProc = null;
+    if (junk && !pmonPasses.length) console.log('[hwstats] pmon: ' + String(junk).split(/\r?\n/)[0]);
+    pmonFail();
+  });
+  ps.stdout.on('data', function (d) {
+    buf += d;
+    const lines = buf.split(/\r?\n/); buf = lines.pop();
+    lines.forEach(pmonLine);
+    while (pmonPasses.length > 1 && Date.now() - pmonPasses[0].at > PMON_KEEP_MS) pmonPasses.shift();   // time-sized, like the rings
+  });
+  if (!pmonExitHooked) {   // 071: one exit hook for all time - it kills the CURRENT stream, not a captured one
+    pmonExitHooked = true;
+    process.on('exit', function () { if (pmonProc) { try { pmonProc.kill(); } catch (e) {} } });
+  }
+  pmonProc = ps;
+}
+// The averaged per-process GPU % of the last `windowMs` of passes: { cardKey: { pid: % } }, or null when the
+// stream is not current (gave up / dead / nothing fresh) - the caller then keeps the counters' numbers.
+// Averaging is the whole point (decision 3): one 1 Hz pass swings hard (the display card measured share 0.19 ->
+// 1.00 between seconds), and BOTH sides of the cost ratio are read out of the SAME set of passes, so a second
+// pass never gets priced by its neighbour's denominator. A pid that is absent from a pass where its card
+// appeared counts as 0 there; pids averaging to 0 are left out entirely (absence means 0 downstream).
+// The averaging window is never NARROWER than the freshness bound: pmon answers at 1 Hz, a process sample asks
+// every 2 s, and a window that keeps only 2 s of passes throws away numbers that exist because they are one
+// clock tick old - the card would flip to the counters path between seconds and back, mixing the two scales on
+// one card second by second (exactly what the ratio rules forbid). So one window, sized by the stream.
+function pmonUtil(windowMs) {
+  const win = Math.max(PMON_STALE_MS, Math.min(PMON_KEEP_MS, windowMs || PMON_KEEP_MS));
+  const now = Date.now();
+  // Only COMPLETE passes are averaged - a half-read one (its header arrived, its rows are still coming) would
+  // understate a denominator, and pmon's boundaries come from its own headers, never from our clock.
+  pmonPasses = pmonPasses.filter(function (p) { return now - p.at <= win; });
+  if (pmonGaveUp || !pmonPasses.length || now - pmonPasses[pmonPasses.length - 1].at > PMON_STALE_MS) return null;
+  // One denominator for every card: the number of complete passes in the window. A card nobody worked on in a
+  // pass, or a process pmon left out of it (pmon only lists processes doing something), is 0 in that pass -
+  // dividing by the passes that happened to mention a card would report a busy-process average, not a
+  // utilisation. Numerator and denominator come from the same set either way, so the cost share is unchanged.
+  const n = pmonPasses.length;
+  const acc = {};
+  pmonPasses.forEach(function (p) {
+    Object.keys(p.cards).forEach(function (cardKey) {
+      const a = acc[cardKey] || (acc[cardKey] = { sum: {} });
+      Object.keys(p.cards[cardKey]).forEach(function (pid) { a.sum[pid] = (a.sum[pid] || 0) + p.cards[cardKey][pid]; });
+    });
+  });
+  const out = {};
+  Object.keys(acc).forEach(function (cardKey) {
+    const byPid = {};
+    Object.keys(acc[cardKey].sum).forEach(function (pid) {
+      const v = acc[cardKey].sum[pid] / n;
+      if (v > 0) byPid[pid] = Math.round(v * 10) / 10;
+    });
+    out[cardKey] = byPid;
+  });
+  return out;
+}
+// Is the pmon path live for this card (its numbers replace the counters')? null = the counters stay in charge.
+function pmonLive() { return !!pmonProc && !pmonGaveUp; }
+
 // ---- AMD cards on Linux (amdgpu sysfs): GPU % + VRAM + junction temp + power draw / limit ----
 // The amdgpu driver (ships with the kernel) exposes these cards as plain files under
 // /sys/class/drm/cardN/device, no ROCm and no root needed:
@@ -510,11 +663,13 @@ function startCounters(cb) {
 }
 
 // Set AI_SCOPE_GPU_SOURCE=windows to ignore nvidia-smi (to test the Windows counter path on an NVIDIA PC).
+// It also leaves the pmon stream off (no nvidia-smi cards to key it to), so that lever puts EVERY GPU number -
+// device, power and per-process - back on the counters, which is what the 121 fallback path has to look like.
 function detectGpu(cb) {
   const forceWin = String(process.env.AI_SCOPE_GPU_SOURCE || '').toLowerCase() === 'windows';
   const afterNvidia = function (nv) {
     nvCards = nv || [];
-    if (nvCards.length) { nvTickAt = Date.now(); startPcie(); startNvidiaLoop(); }   // PCIe traffic stream (065) + the per-card loop (119); detection's seed counts fresh until the first tick
+    if (nvCards.length) { nvTickAt = Date.now(); startPcie(); startNvidiaLoop(); if (process.platform === 'win32') startPmon(); }   // PCIe traffic (065) + the per-card loop (119) + per-process GPU % (121 D8); detection's seed counts fresh until the first tick
     if (process.platform !== 'win32') {
       if (process.platform === 'linux' && !nvCards.length) {   // AMD cards via amdgpu sysfs
         amdCards = findAmdCards();
@@ -712,16 +867,37 @@ function peakBetween(t0, t1) {
 }
 function oldestSample() { return history.length ? history[0].t : null; }
 
-// AI_SCOPE-121: the live board power of every card, in watts, in the same order as info.gpus / the samples'
-// gpus[] / cardKeys(). A card that reports no power (AMD / Intel on Windows, macOS) is null. The whole answer
-// is null when the Hardware sampler is stale - a stalled loop must never price old watts as current (092:
-// absence of a number is never a number).
-function powerNow() {
+// AI_SCOPE-121: the live board power (watts) and the TOTAL device utilisation (%) of every card, in the same
+// order as info.gpus / the samples' gpus[] / cardKeys(). A card that reports no power (AMD / Intel on Windows,
+// macOS) is null. The whole answer is null when the Hardware sampler is stale - a stalled loop must never price
+// old watts as current (092: absence of a number is never a number). Both gauges deliberately come from the SAME
+// sample: the cost math divides one by the other (how much of a card's load is ours), and a power number from
+// one tick measured against a utilisation number from another is exactly the skew that would make the answer
+// wrong - so they are handed over as a pair, never as two separate questions.
+// 121 D8: the device util is the DENOMINATOR only for a card whose per-process numbers come from these counters
+// (an AMD / Intel card, or an NVIDIA one whose pmon stream went away). On the pmon path both sides of that
+// division come from pmon (pmonUtil) - two different measurement scales must never meet inside one ratio.
+function cardGauges() {
   if (!history.length) return null;
   const s = history[history.length - 1];
   if (Date.now() - s.t > 4 * INTERVAL_MS) return null;
-  return s.gpus.map(function (g) { return g && g.power != null ? g.power : null; });
+  return {
+    power: s.gpus.map(function (g) { return g && g.power != null ? g.power : null; }),
+    util: s.gpus.map(function (g) { return g && g.util != null ? g.util : null; })
+  };
 }
 
-module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, cardKeys: cardKeys, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample, powerNow: powerNow,
-                   _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards, parseNvLine: parseNvLine, nvRejected: nvRejected } };
+module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, cardKeys: cardKeys, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample, cardGauges: cardGauges, pmonUtil: pmonUtil, pmonLive: pmonLive,
+                   _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards, parseNvLine: parseNvLine,
+                        nvRejected: nvRejected, parsePmonLine: parsePmonLine, parsePmonHeader: parsePmonHeader, pmonCardKey: pmonCardKey,
+                        // feeds captured pmon output through the real line handler and closes the last pass, so a probe
+                        // measures exactly what the stream would have measured; also lets a probe name the cards the
+                        // stream would key its rows to (pmon rows are keyed by the nvidia-smi index).
+                        pmonFeed: function (lines) { (Array.isArray(lines) ? lines : String(lines).split(/\r?\n/)).forEach(pmonLine); closePmonPass(); },
+                        pmonReset: function () { pmonPasses = []; pmonOpen = null; pmonBad = 0; pmonGaveUp = false; },
+                        // making the stream behave as if it had stopped talking (its passes kept, but old), and as if
+                        // it had been given up on - without waiting 6 s or running the restart timers.
+                        pmonAge: function (ms) { pmonPasses.forEach(function (p) { p.at -= ms; }); if (pmonOpen) pmonOpen.at -= ms; },
+                        pmonGiveUp: function () { pmonGaveUp = true; },
+                        pmonGaveUp: function () { return pmonGaveUp; },
+                        pmonSetKeys: function (cards) { nvCards = cards.map(function (c) { return { id: c.id, luid: c.luid, source: 'nvidia' }; }); } } };

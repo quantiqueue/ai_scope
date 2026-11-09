@@ -138,7 +138,7 @@ function strataReqTitle(key, r) {
 // One option object drives BOTH the header and the rows, so the two can never drift apart
 // (the probe caught exactly that class of bug: 11 headers over 10 cells).
 const STRATA_REQ = {
-  title: 'Requests', pager: true, extra: ['source', 'hitRate'],
+  title: 'Requests', pager: true, extra: ['source', 'hitRate', 'energy', 'cost'],
   keyOf: r => r.key,
   titleOf: strataReqTitle,
   statusOf: r => r.finish && r.finish !== 'stop' && r.finish !== 'length'
@@ -147,7 +147,7 @@ const STRATA_REQ = {
 defineLens({
   id: 'strata.requests', scope: 'strata', size: 'full',
   name: 'Requests',
-  description: 'Finished requests: tokens, cached prompt, speeds, first token, duration, peak load, which Strata answered the request, expert hit rate.',
+  description: 'Finished requests: tokens, cached prompt, speeds, first token, duration, peak load, which Strata answered the request, expert hit rate, and the GPU energy each one cost with its price.',
   settings: [PER_PAGE_FIELD],
   markup: reqTableMarkup(STRATA_REQ),
   render(L, d) {
@@ -405,20 +405,27 @@ MIRROR_HOVER.push({ prefix: 'shrate', fn: (spark, f, guide, tip) => {   // neare
   tip.textContent = (p.v != null ? fmtPct(p.v) + ' · ended ' + fmtWhen(p.end) : 'n/a') + (p.m ? ' · ' + cutName(p.m) : '');
 } });
 
-// ---------- Strata Cost (AI_SCOPE-121) ----------
-// What Strata's GPU work costs. The ENERGY is the server's (procstats accrues, per family sample,
-// each card's live board power x Strata's util on it / 100, integrated over consecutive 2 s points), so the
-// total keeps growing while nobody is looking; this lens only draws it and applies the price. Board power is
-// a whole-device measurement, so every number here is an ESTIMATE and wears ≈ (the 072 no-invented-numbers
+// ---------- Strata GPU cost: two lenses over one energy (AI_SCOPE-121, split 2026-11-09) ----------
+// The user's split: ACTIVITY is the live rate - what an hour at this moment would cost, with the 5-minute
+// history and the meter; TOTAL is the money spent over a range, the number only, no chart and no bar. Both
+// draw the SAME server-side accrual (procstats: per card, live board power x the share of that card's total
+// device util that is Strata's, summed and integrated over consecutive family samples - D7), so the energy keeps
+// growing while nobody is looking, and both price it at DRAW time with the Settings → General $/kWh (D5): the
+// joules were measured regardless of what the settings box says, so correcting a wrong price re-prices history
+// honestly. Board power is a
+// whole-device measurement, so every number here is an ESTIMATE and wears ≈ (the 072 no-invented-numbers
 // rule is why Hardware's Power lens has no mirror twin - the user asked for an apportionment, and it is
-// labeled as one). $/kWh is a GLOBAL setting (Settings → General, default 0.16), applied at draw time:
-// re-pricing re-prices the session, because the joules were measured regardless. The BIG value is the
-// live hourly rate (user correction 2026-11-08: "the big number was meant to be like a live hourly
-// pricing and the smaller was to be accumulated since start"); the sub line carries the total
-// since AI_SCOPE started, alongside the "since" stamp like the Requests hint's "since start: 16 requests".
-// Sparkline: the CLOCK BOARD like the 093 quartet - the ring (d.cost.hist, watts per cycle) rides whole in
-// every answer, appended-and-pruned client-side the same shape; a stretch where no power could be attributed
-// has no points at all (D3: never a powerLimit stand-in), so it breaks the line, never a zero dip.
+// labeled as one). Energy shows in Wh, not kWh (D6, the user's words: "let's display as Wh instead of kWh").
+// The two windows differ on purpose (D5 - "if I input Days: 3, it will fetch Strata requests that AI_SCOPE has
+// within the last 3 days; requests are already persisted across restarts"):
+//  - Activity: this session's 5-minute ring (d.cost.hist).
+//  - Total, Cost Range = Session start: everything this server has measured since it booted (d.cost.ws, and
+//    the sub line says since when). That includes GPU work outside any request - a model load, or a loaded
+//    model whose family still asks something of its cards between requests.
+//  - Total, Cost Range = Days: the SAVED request rows, bucketed per day by the server (d.costDays), because
+//    a session ring cannot cover last week. That sums REQUEST energy only, and a row saved before this feature
+//    (or one whose window nothing was measured inside) carries no energy and counts as nothing. The face names
+//    how many requests it summed, so the two ranges can never be mistaken for the same number.
 const COST_HIST = [];   // {t, every, w} - estimated Strata-attributable watts, newest last
 let SCOST_T1 = Date.now();   // the board time of the last render (hover parity) - see STPS_T1
 subscribeSource('strata', d => {
@@ -430,55 +437,107 @@ subscribeSource('strata', d => {
     if (COST_HIST.length > 240) COST_HIST.splice(0, COST_HIST.length - 240);
   }
 });
-// The Settings dialog keeps window.AI_SCOPE_SETTINGS current on every POST (GOTCHAS), and the page inlines
-// it before paint, so this is always the live price. A missing / corrupt value falls back to the default.
-function kwhPrice() { const p = +(window.AI_SCOPE_SETTINGS || {}).kwhPrice; return isFinite(p) && p >= 0 ? p : 0.16; }
-function fmtUsd(n) { return n >= 1 ? '$' + n.toFixed(2) : n > 0 ? '$' + n.toFixed(3) : '$0.00'; }
-const COST_TIP = 'Strata\'s estimated electric cost. Per card: the card\'s live power draw × Strata\'s GPU usage on that card ÷ 100, summed. Board power is a whole-device measurement, so this is an estimate and every face wears ≈. The big number is the LIVE hourly rate (what a whole hour at this moment would cost); the line under it is the total accumulated since AI_SCOPE started. The price per kWh comes from Settings → General. Where a card Strata is using reports no power (AMD / Intel on Windows, macOS), nothing is recorded for that moment rather than guessed - the tile says so.';
+// kwhPrice() / fmtUsd() / fmtWh() live in core.js now: the shared Requests columns (lens.js) draw the same
+// two numbers, and a helper that lives in one scope file cannot serve the other three.
+// The mirror tiles' state wording (mirror.js keeps its own copy inside defineMirror), in Strata's words.
+const COST_STATE = { off: 'Strata Offline', idle: 'No Model Loaded', loading: 'Loading\u2026',
+  unloading: 'Unloading\u2026', failed: 'Load failed' };
+const COST_TIP = 'Active GPU Usage Cost: what a whole hour of GPU work at THIS moment would cost Strata. Per card: the card\'s live power draw × Strata\'s share of that card\'s GPU usage, summed over the cards — so a card that is also busy with something else is only charged for the part Strata is asking of it. Share of what, measured how: on an NVIDIA card both sides come from nvidia-smi\'s per-process SM (shader) time — Strata\'s processes\' SM % over the SM % of every process on that card, from one 1 Hz stream averaged over the moment being priced. On Windows that replaces the GPU Engine performance counters Task Manager uses, which never report CUDA work on a second graphics card: on the machine this was measured on, a card drawing 60 W with Strata as the only process on it read 0 % there. Where nvidia-smi cannot speak for a card (AMD / Intel, macOS, or that stream dying) the counters\' numbers and the card\'s own device usage are used instead, and one card is never measured by both at once. Board power is a whole-device measurement, so this is an estimate and every face wears ≈. The chart is the same rate over the last five minutes. The price per kWh comes from Settings → General; the total spent is the other lens ("Strata GPU Total Cost"). Strata holding a model resident on a card without using it is not charged — this prices work, not occupancy. Where a card Strata is using reports no power, or no same-source usage to divide by, nothing is recorded for that moment rather than guessed - the tile says so.';
 defineLens({
-  id: 'strata.cost', scope: 'strata', size: 'tile',
-  name: 'Cost',
-  description: "Strata's estimated electric cost: the live GPU hourly rate (card watts × Strata's usage, priced at the Settings rate) with the total since AI_SCOPE started, and a 5-minute history of the rate.",
-  markup: () => tileHtml({ id: 'scost', label: 'Strata Cost' }),
+  id: 'strata.costact', scope: 'strata', size: 'tile',
+  name: 'GPU Cost Activity',
+  description: "Active GPU Usage Cost — the live hourly rate for Strata's GPU work (each card's watts × Strata's share of that card's GPU usage, measured per process by nvidia-smi on NVIDIA cards, priced at the Settings electricity rate), with the last five minutes of that rate.",
+  markup: () => tileHtml({ id: 'scostact', label: 'Strata GPU Cost Activity' }),
   render(L, d) {
-    const box = L.el.querySelector('[data-tile="scost"]'); if (!box) return;
+    const box = L.el.querySelector('[data-tile="scostact"]'); if (!box) return;
     box.querySelector('.ltitle').title = COST_TIP;
     const price = kwhPrice();
     const now = Date.now(); SCOST_T1 = now;   // remember the board this render drew
     const pts = sparkFresh(COST_HIST);
-    const c = d.cost;
     const maxW = Math.max(10, 1.25 * pts.reduce(function (a, x) { return Math.max(a, x.w || 0); }, 0));   // on-board only: "top of the chart" is what you SEE
     const clk = sparkClockSegs(COST_HIST, now, h => h.w == null ? null : Math.min(100, 100 * h.w / maxW));
     // Do these cards report board power at all? nvidia-smi (both OSes) and Linux's amdgpu sysfs do;
     // Windows' own GPU counters do not (the source field mirrors hwstats card.source, as the GPU tiles' do).
     const powered = (d.processCards || []).some(x => x.source === 'nvidia' || x.source === 'amd');
     const last = pts.length ? pts[pts.length - 1] : null;
-    // The rate face follows the mirror family's value rule: attested zero point => honest 0 ("≈$0.00 /h",
-    // like the GPU tiles' zeros); a FRESH real point => the apportioned watts; a stale real point (lookup
-    // hiccup while live) => n/a, never a false 0. The accumulated TOTAL keeps its number through all three.
+    // The rate face follows the mirror family's value rule (077/080): an attested zero point is an honest 0
+    // ("≈$0.00 /h · Strata Offline", exactly like the GPU tiles' zeros - live or idle, the user asked);
+    // a FRESH real point is the apportioned watts; a stale real point (a lookup hiccup while a model is
+    // loaded) is n/a, never a false 0. Absence of a number is not a number.
     let rate = null;
     if (last) {
       if (last.attest) rate = 0;                         // attested zero heartbeat point (off / idle / …)
       else if (now - last.t <= Math.min(120000, Math.max(1500, 3 * (last.every || 2000))))   // 092 break window
-        rate = last.w / 1000 * price;                    // wattage /h = Wh/h
+        rate = last.w / 1000 * price;                    // wattage per hour = Wh/h
     }
-    const total = c ? c.ws / 3.6e6 * price : null;   // watt-seconds -> kWh: /3.6e6
     const big = !powered || rate == null ? NA_HTML : '\u2248' + fmtUsd(rate) + '<small> /h</small>';
     const meter = rate == null ? null : Math.min(100, 100 * last.w / maxW);
     let sub;
     if (!powered) sub = (d.processCards || []).length ? 'power not reported for these cards' : 'detecting cards\u2026';
-    else if (total == null) sub = d.online ? 'no GPU use yet' : strataDownSub(d);
-    else sub = '\u2248' + fmtUsd(total) + ' since ' + fmtWhen(c.t0)
-      + (rate == null ? ' \u00b7 inactive' : '');   // a stale real reading (or a fully drained ring): big n/a, total stays
+    else if (!last) sub = d.online ? 'no GPU use in the last 5 min' : strataDownSub(d);
+    else if (last.attest) sub = COST_STATE[last.attest] || 'Inactive';
+    else if (rate == null) sub = 'Inactive';   // the newest point is a stale real reading
+    else sub = Math.round(last.w) + ' W asked of the cards \u00b7 $' + price + '/kWh';
     sparkTile(box, meter, big, sub, clk.segs, clk.caps);
     box.querySelector('.spark').title = 'Top of the chart = \u2248' + fmtUsd(maxW / 1000 * price) + ' /h (5-minute board max)';
   },
 });
-MIRROR_HOVER.push({ prefix: 'scost', fn: (spark, f, guide, tip) => {   // nearest sample to the cursor's BOARD time: the rate at that moment
+MIRROR_HOVER.push({ prefix: 'scostact', fn: (spark, f, guide, tip) => {   // nearest sample to the cursor's BOARD time: the rate at that moment
   sparkClockHover(spark, f, guide, tip, COST_HIST, hs => (hs.w != null
     ? '\u2248' + fmtUsd(hs.w / 1000 * kwhPrice()) + '/h \u00b7 ' + Math.round(hs.w) + ' W \u00b7 ' + new Date(hs.t).toLocaleTimeString()
     : 'n/a'), SCOST_T1);
 } });
+
+// The range a day number means: local midnight N days back through now, which is what the server's per-day
+// buckets are keyed by (same machine, same clock - the dashboard is local by design, ARCHITECTURE.md).
+const dayStart = ms => { const x = new Date(ms); x.setHours(0, 0, 0, 0); return x.getTime(); };
+function fmtDay(ms) {
+  if (!ms) return '—';
+  const x = new Date(ms), now = new Date();
+  const s = x.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return x.getFullYear() === now.getFullYear() ? s : s + ', ' + x.getFullYear();
+}
+const TOTAL_TIP = 'Total electric cost of Strata\'s GPU work over a range, from the same per-card estimate as the activity lens (each card\'s live power draw × Strata\'s share of that card\'s GPU usage, summed — per-process usage measured by nvidia-smi on an NVIDIA card, the Windows GPU counters where it cannot speak): every face wears ≈ because board power is a whole-device measurement. Cost Range "Session start" is everything AI_SCOPE has measured since it booted, requests and GPU work between them alike. Cost Range "Days" sums the SAVED Strata requests whose end falls in the window - the only energy record that outlives a restart, and no more complete than the 1000-request ring AI_SCOPE keeps - so it counts request energy and nothing else, and rows whose window nothing was measured inside count as nothing. Rows also count as nothing when their energy was measured by a superseded version of this formula: each saved figure carries which measurement produced it, so a corrected model never leaves the old numbers mixed into the total. Money is computed from the Settings → General price every time the tile draws, never stored, so a corrected price re-prices the whole range.';
+defineLens({
+  id: 'strata.costtotal', scope: 'strata', size: 'tile',
+  name: 'GPU Total Cost',
+  description: "Total GPU electric cost over a range: since AI_SCOPE started, or the saved Strata requests of the last N days. One number, priced at the Settings electricity rate; no chart.",
+  markup: () => '<div class="tilebox" data-tile="scosttot">' + lensHeadMarkup('Strata GPU Total Cost') +
+    '<div class="tile bignum"><div class="v">\u2014</div><div class="sub">&nbsp;</div></div></div>',
+  settings: [
+    { id: 'costRange', label: 'Cost range', type: 'choice', default: 'session',
+      options: [['session', 'Session start'], ['days', 'Days']],
+      tip: 'Session start: every measured GPU watt this AI_SCOPE server has attributed to Strata since it booted. Days: the saved Strata requests within the last N days (requests persist across restarts; GPU work outside a request is not in that sum).' },
+    { id: 'days', label: 'Days', type: 'number', default: 30, min: 1, max: 365, cascade: true,
+      when: cur => cur.costRange === 'days',
+      tip: 'How many days back to sum (calendar days, today included), from the saved Strata requests AI_SCOPE still holds. Its ring keeps the last 1000 requests, so a long range can only reach back as far as they do.' },
+  ],
+  render(L, d) {
+    const box = L.el.querySelector('[data-tile="scosttot"]'); if (!box) return;
+    box.querySelector('.ltitle').title = TOTAL_TIP;
+    const price = kwhPrice();
+    let ws = null, sub;
+    if (L.settings.costRange === 'days') {
+      const n = Math.max(1, Math.min(365, +L.settings.days || 30));
+      const from = dayStart(Date.now()) - (n - 1) * 864e5;   // calendar days, today included
+      const b = (d.costDays || []).filter(x => x.d >= from);
+      const have = b.reduce(function (a, x) { return a + x.n; }, 0);
+      const gone = b.reduce(function (a, x) { return a + (x.miss || 0); }, 0);
+      if (!have && !gone) sub = 'no saved requests in the last ' + n + ' day' + (n > 1 ? 's' : '');
+      else {
+        if (have) ws = b.reduce(function (a, x) { return a + x.ws; }, 0);
+        sub = (have ? fmtWh(ws) + ' \u00b7 ' : 'no energy recorded \u00b7 ') + have + ' of ' + (have + gone) +
+          ' requests since ' + fmtDay(from);
+      }
+    } else {
+      const c = d.cost;
+      if (c) { ws = c.ws; sub = fmtWh(ws) + ' \u00b7 since AI_SCOPE started, ' + fmtWhen(c.t0); }
+      else sub = d.online ? 'no GPU use recorded yet' : strataDownSub(d);
+    }
+    box.querySelector('.v').innerHTML = ws == null ? NA_HTML : '\u2248' + fmtUsd(ws / 3.6e6 * price);   // watt-seconds -> kWh: /3.6e6
+    box.querySelector('.sub').textContent = sub;
+  },
+});
 
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 // AI_SCOPE-072: default gets one row of Strata GPU + VRAM tiles per card after Installed Models; on macOS the
@@ -491,5 +550,7 @@ MIRROR_HOVER.push({ prefix: 'scost', fn: (spark, f, guide, tip) => {   // neares
 // AI_SCOPE-077: the mirror rows come from the shared family helper - same items, same order, same ids.
 // AI_SCOPE-107: default = the user's saved page (2026-11-04): requests first below the card, loaded
 // (cols "3,8") and installed (cols "3") after it, then the 093 token row (tps ptps ctx hit) above the mirror tail.
-// AI_SCOPE-121: "Strata Cost" starts its own row after the token row (the 093/107 rows stay untouched).
-defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, { lens: 'strata.requests', settings: {}, row: true }, { lens: 'strata.loaded', settings: { perPage: 5, cols: '3,8' }, row: true }, { lens: 'strata.installed', settings: { perPage: 5, cols: '3' }, row: true }, { lens: 'strata.tps', settings: {}, row: true }, 'strata.ptps', 'strata.ctx', 'strata.hit', { lens: 'strata.cost', row: true }]).concat(STRATA_MIRROR.layout()));
+// AI_SCOPE-121: "Strata Cost" starts its own row after the token row (the 093/107 rows stay untouched); the
+// 2026-11-09 split puts the two cost lenses side by side on it (GPU work is the row's subject, so the rate
+// tile leads and the range tile follows - the user's numbering).
+defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, { lens: 'strata.requests', settings: {}, row: true }, { lens: 'strata.loaded', settings: { perPage: 5, cols: '3,8' }, row: true }, { lens: 'strata.installed', settings: { perPage: 5, cols: '3' }, row: true }, { lens: 'strata.tps', settings: {}, row: true }, 'strata.ptps', 'strata.ctx', 'strata.hit', { lens: 'strata.costact', row: true }, 'strata.costtotal']).concat(STRATA_MIRROR.layout()));

@@ -286,6 +286,11 @@
   .tile .v { font-size:2rem; font-weight:650; font-variant-numeric:tabular-nums; margin-top:4px; }
   .tile .v small { font-size:1rem; color:var(--muted); font-weight:500; }
   .tile .sub { font-size:.8rem; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* AI_SCOPE-121 (Strata GPU Total Cost): a lens with no meter and no chart - the number is the whole tile,
+     so it takes the height its chart would have had instead of sitting at the top of an empty card. */
+  .tile.bignum { display:flex; flex-direction:column; justify-content:center; }
+  .tile.bignum .v { font-size:2.4rem; margin:0; }
+  .tile.bignum .sub { margin-top:6px; }
   .meter { height:6px; background:var(--line); border-radius:3px; margin-top:10px; overflow:hidden; }
   .meter > div { height:100%; width:0; background:var(--accent); border-radius:3px; transition:width .4s; }
   .spark { position:relative; margin-top:10px; height:48px; }
@@ -600,3 +605,6 @@
 .modal .lcol input { width:auto; margin:0; padding:0; accent-color:var(--accent); }
 .modal .lcol.fixed { opacity:.5; cursor:default; }
 .modal .flabel { display:block; font-size:.8rem; font-weight:600; margin-bottom:5px; }
+/* AI_SCOPE-121: a field that only exists because of another field's value (Cost range: Days -> Days) sits
+   indented under it, and appears / disappears while the dialog is open (js/layout.js cascade listener). */
+.modal .field.cascade { margin-left:16px; padding-left:14px; border-left:2px solid var(--line); }
