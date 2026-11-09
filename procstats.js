@@ -360,6 +360,13 @@ let owners = {}, resolveAt = 0, ownersBusy = false;
 //  2. when a port's ONLY listener evidence is pid 0, fall back to the real pid on ESTABLISHED rows whose
 //     LOCAL port is that port - the server side of an accepted connection names the owning process right;
 //  3. no real pid from either source: no owner, exactly as today.
+//  4. follow-up (user's spec, 2026-11-09): rules 1-2 only speak WHILE a connection is open, so a pid-0
+//     listener went ownerless between requests and Bionic's mirror tiles flipped back to "Inactive" - the
+//     table is rebuilt from scratch on every call. When a port is still marked by a pid-0 LISTENING row and
+//     rules 1-2 found no pid, carry over the pid the PREVIOUS table had for it. Only while that row is
+//     present: an app that closes stops listening and its remembered owner is dropped as before. A pid that
+//     died or restarted in the meantime is filtered in windowsFamilies(), which ignores a root missing from
+//     the process table - that also keeps the family code off `rows[pid].name` for a pid that is not there.
 // TIME_WAIT and every other state are ignored, and a port seen only as the REMOTE end (our side of a
 // client connection) is never used - the port is read from the LOCAL address column only.
 function portOwners(cb) {
@@ -389,7 +396,9 @@ function portOwners(cb) {
       }
     });
     Object.keys(zero).forEach(function (k) {
-      if (zero[k] && m[k] == null && est[k] != null) m[k] = est[k];     // rule 2: pid-0 listener, rescued by the connection it accepted
+      if (!zero[k] || m[k] != null) return;
+      if (est[k] != null) m[k] = est[k];                                        // rule 2: pid-0 listener, rescued by the connection it accepted
+      else if (owners[k] > 0) m[k] = owners[k];                                 // rule 4: still listening, nothing connected right now - keep the remembered owner
     });
     owners = m;
     cb(owners);
@@ -434,8 +443,11 @@ function windowsFamilies(rows, kids, tb) {
   let claimed = [];
   Object.keys(watches).filter(armed).sort().forEach(function (key) {
     const w = watches[key];
+    // Rule 4 can hand over a pid that has since died or restarted, so a port owner only becomes a root when
+    // proctop still has a row for it. (familyOf / the name at the bottom read rows[pid], which throws on a
+    // missing pid; rules 1-2 replace the remembered owner as soon as a fresher pid shows up.)
     let root = 0;
-    w.ports.forEach(function (p) { if (!root && tb[p]) root = tb[p]; });
+    w.ports.forEach(function (p) { const o = tb[p]; if (!root && o && rows[o]) root = o; });
     let fam = root ? familyOf(root, kids) : [];
     const want = w.names.map(String);
     if (w.tree) {
