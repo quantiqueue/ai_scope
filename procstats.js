@@ -71,6 +71,53 @@ function pushHist(key) {
     cpu: r.cpu == null ? null : Math.min(100, r.cpu),
     ioRead: r.ioSeen ? r.ioRead || 0 : null, ioWrite: r.ioSeen ? r.ioWrite || 0 : null });   // AI_SCOPE-076
   pruneRing(h);   // 092: sized in time (plus one older sample at the edge), HIST is only the safety cap
+  accrueCost(key, r, luids);   // AI_SCOPE-121: energy for this real family sample (see below)
+}
+
+// ---------- Energy attributed to an app's process family (AI_SCOPE-121, the Strata Cost lens) ----------
+// Per real family sample: each card's live board power (hwstats) x the family's util on that card / 100,
+// summed over cards = the watts this app is plausibly asking of its cards. Board power is a DEVICE
+// measurement, so this is an estimate - TERMINOLOGY keeps Power out of the mirror family for exactly that
+// reason - and the lens wears ≈ on every face and names the formula in its tooltip (user's plan, 2026-11-08).
+// The honest-accounting rules, same roots as the mirror family's:
+//  - Energy, not money, is what accumulates: the $/kWh price lives in Settings → General and is applied at
+//    draw time, so changing it re-prices the whole session - the joules were measured regardless.
+//  - Only REAL family samples accrue energy. The attested-zero heartbeat adds 0 - it writes a w:0 point so the
+//    rate face reads "≈$0.00 /h · Offline" exactly like the mirror tiles show real zeros (0 W x anything is
+//    0, no wattage needed to claim nothing is being asked of the cards), but it can never change the total.
+//  - A card the family USES (util > 0) with no power reading makes the whole real sample unknown - no point,
+//    no accrual, no time counted. A partial sum would under-count silently, and the D3 decision was n/a,
+//    never a powerLimit stand-in. Cards the family does not use (util 0) add 0 W regardless of what they report.
+//  - If the Hardware sampler is stale (powerNow null), no REAL sample accrues for that stretch.
+//  - dt between CONSECUTIVE accrued points, capped at 3 x that sample's stamp (the 092 break rule): a lookup
+//    gap costs nothing rather than inventing energy across the hole.
+//  - No cards at all (luids empty): the GPU cost is undefined here, so no points - never a $0.00 claim.
+// The ring is the same time-sized shape as every other (PS_WINDOW + one older point; HIST a safety cap).
+const cost = {};   // key -> { t0, ws, lastT, hist: [{ t, every, w }] }   ws = watt-seconds (J)
+function accrueCost(key, r, luids) {
+  luids = luids || hwstats.cardKeys();   // pushHist already has the list; probes may leave it out
+  if (!luids.length) return;
+  const pow = hwstats.powerNow();
+  if (!pow) return;
+  let w = 0;
+  for (let i = 0; i < luids.length; i++) {
+    const g = luids[i] && r.luids[luids[i]];
+    const util = g && g.util != null ? g.util : 0;
+    const p = i < pow.length ? pow[i] : null;
+    if (p == null) { if (util > 0) return; continue; }   // unknown power on a used card: whole sample unknown (D3)
+    w += p * util / 100;
+  }
+  w = Math.round(w * 10) / 10;
+  const c = cost[key] || (cost[key] = { t0: r.at, ws: 0, lastT: null, hist: [] });
+  c.hist.push({ t: r.at, every: r.every, w: w });
+  const last = c.hist[c.hist.length - 1].t;
+  while (c.hist.length > 1 && c.hist[1].t < last - PS_WINDOW) c.hist.shift();
+  if (c.hist.length > HIST) c.hist.splice(0, c.hist.length - HIST);
+  if (c.lastT != null) {
+    const dt = r.at - c.lastT;
+    if (dt > 0 && dt <= 3 * (r.every || MIRROR_MS)) c.ws += w * dt / 1000;   // W x s = J; no charging across a gap
+  }
+  c.lastT = r.at;
 }
 
 // AI_SCOPE-077 (review batch): an offline app really uses nothing, so the mirror tiles should read 0 rather
@@ -119,6 +166,19 @@ function zeroTick() {
       gpus: luids.map(function () { return { vram: 0, util: 0 }; }),
       ram: 0, ramPrivate: 0, cpu: 0, ioRead: win ? 0 : null, ioWrite: win ? 0 : null });
     pruneRing(h);   // 092: same time-sized ring as the sampler's real points
+    // AI_SCOPE-121: the cost ring gets the same attested zero - an off / idle / loading family is
+    // asking NOTHING of its cards, so the Cost lens's per-hour face honestly reads "≈$0.00 /h"
+    // exactly like the mirror tiles show zeros (0 W x any dt is 0 J, no board power needed to
+    // say so; the total never moves). Only keys that were ever measured have a cost ring at all -
+    // an app that has not run since boot gets no "since X: $0" claim.
+    const cc = cost[k];
+    if (cc) {
+      cc.hist.push({ t: now, every: ZERO_EVERY, w: 0, attest: attested[k] });
+      const cl = cc.hist[cc.hist.length - 1].t;
+      while (cc.hist.length > 1 && cc.hist[1].t < cl - PS_WINDOW) cc.hist.shift();
+      if (cc.hist.length > HIST) cc.hist.splice(0, cc.hist.length - HIST);
+      cc.lastT = now;   // back-to-live dt starts from the heartbeat, like the mirror ring's clock
+    }
   });
   if (!waiting && zeroTimer) { clearInterval(zeroTimer); zeroTimer = null; }
 }
@@ -445,6 +505,10 @@ module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: ge
   // 072: 5-min per-app GPU history. AI_SCOPE-084 (item 7): with since > 0 only the points newer than it are
   // sent - web/js/lens.js asks for exactly that, web/js/mirror.js appends what arrives to the ring it holds.
   history: function (key, since) { const h = hist[key] || []; return since ? h.filter(function (p) { return p.t > since; }) : h; },
+  // AI_SCOPE-121: the energy attributed to an app's family since this server booted (watt-seconds), plus the
+  // 5-minute ring of per-cycle estimated watts the Cost lens draws. null until the first accrueable sample.
+  cost: function (key) { return cost[key] || null; },
   attest: attest, unattest: unattest,   // AI_SCOPE-077 review: offline attestation drives the zero heartbeat
   _test: { aggregate: aggregate, windowsFamilies: windowsFamilies, nixResolve: nixResolve, results: results, fams: fams,
-    familyOf: familyOf, ancestryOf: ancestryOf, kidsIndex: kidsIndex } };
+    familyOf: familyOf, ancestryOf: ancestryOf, kidsIndex: kidsIndex,
+    accrueCost: accrueCost, cost: cost, zeroTick: zeroTick } };   // AI_SCOPE-121: the energy accumulator, probeable with a stubbed hwstats

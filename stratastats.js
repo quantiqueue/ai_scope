@@ -661,6 +661,11 @@ function getState(limit, since) {
   out.process = procstats.get('strata'); out.processSupported = procstats.supported();
   out.processHistory = procstats.history('strata', since);   // AI_SCOPE-084: ?since=<t> sends only the new points
   out.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
+  // AI_SCOPE-121 (strata.cost lens): the GPU energy attributed to Strata's process family since this server
+  // booted (watt-seconds) and the 5-minute ring of estimated watts. The whole (small) ring rides every answer,
+  // like the 093 rings; the $/kWh price is NOT baked in here - it is a Settings → General number the page
+  // applies at draw time, so re-pricing re-prices the session honestly.
+  out.cost = procstats.cost('strata');
   out.tpsHistory = tpsHist;   // AI_SCOPE-093: the whole (small) ring rides every answer - the client appends only newer points
   out.promptHistory = ptpsHist;   // AI_SCOPE-093 slice 2
   out.contextHistory = ctxHist;   // AI_SCOPE-093 slice 3

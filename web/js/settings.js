@@ -53,9 +53,10 @@ function rowHtml(f) {
       '" data-kind="bool" autocomplete="off"><option value="off"' + (on ? '' : ' selected') + '>Off</option>' +
       '<option value="on"' + (on ? ' selected' : '') + '>On</option></select>';
   } else if (f.kind === 'number') {
+    // AI_SCOPE-121: a field with a step (kwhPrice, $0.16) is a DECIMAL number box; without one the box stays whole.
     ctl = '<input id="' + id + '" name="' + f.key + '" data-key="' + f.key + '" data-section="' + f.section +
       '" data-kind="number" type="number" spellcheck="false" autocomplete="off" min="' + f.min + '" max="' + f.max +
-      '" value="' + escH(String(rowValue(f))) + '">';
+      '" step="' + (f.step || 1) + '" value="' + escH(String(rowValue(f))) + '">';
   } else if (f.kind === 'choice' || f.kind === 'scope') {
     const opts = f.kind === 'scope' ? scopeOptions() : (f.options || []);
     const cur = rowValue(f);
@@ -165,7 +166,9 @@ function pendingField(el) {
   if (v === el._cleanValue) return undefined;
   if (kind === 'bool') return v === 'on';
   if (kind === 'number') {
-    const n = parseInt(v, 10);
+    // AI_SCOPE-121: step < 1 means a decimal value (the electricity price); parseInt would have read 0.16 as 0.
+    const step = parseFloat(el.getAttribute('step'));
+    const n = step > 0 && step < 1 ? parseFloat(v) : parseInt(v, 10);
     if (!isFinite(n) || n < (+el.min) || n > (+el.max)) return null;      // typed but out of range
     return n;
   }

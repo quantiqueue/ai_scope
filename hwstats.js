@@ -712,5 +712,16 @@ function peakBetween(t0, t1) {
 }
 function oldestSample() { return history.length ? history[0].t : null; }
 
-module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, cardKeys: cardKeys, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample,
+// AI_SCOPE-121: the live board power of every card, in watts, in the same order as info.gpus / the samples'
+// gpus[] / cardKeys(). A card that reports no power (AMD / Intel on Windows, macOS) is null. The whole answer
+// is null when the Hardware sampler is stale - a stalled loop must never price old watts as current (092:
+// absence of a number is never a number).
+function powerNow() {
+  if (!history.length) return null;
+  const s = history[history.length - 1];
+  if (Date.now() - s.t > 4 * INTERVAL_MS) return null;
+  return s.gpus.map(function (g) { return g && g.power != null ? g.power : null; });
+}
+
+module.exports = { start: start, getStats: getStats, cardLuids: cardLuids, cardKeys: cardKeys, vramInfo: vramInfo, vramFit: vramFit, peakBetween: peakBetween, oldestSample: oldestSample, powerNow: powerNow,
                    _test: { parseCounterBlock: parseCounterBlock, luidOf: luidOf, pickCards: pickCards, parseNvLine: parseNvLine, nvRejected: nvRejected } };
