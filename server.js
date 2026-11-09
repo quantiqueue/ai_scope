@@ -333,6 +333,13 @@ http.createServer((req, res) => {
       // AI_SCOPE-084 (item 7): ?since=<t> narrows it to the new points (see the /api/strata route).
       body.processHistory = procstats.history('bionic', since);
       body.processCards = hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; });
+      // AI_SCOPE-127: the GPU cost pair (bionic.costact / bionic.costtotal) rides the SAME per-family accrual
+      // /api/strata sends (121) - procstats has been charging the 'bionic' key since then; the mirror history
+      // above already carries 122's gpus[i].w. Days buckets are built over at most the last 1000 log rows
+      // read (the same cap as Strata's ring), each row keeping the energy attached while it was inside the
+      // session's one-hour trail (lmstats.attachEnergy).
+      body.cost = procstats.cost('bionic');
+      body.costDays = lmstats.costDayBuckets(lmstats.getLatestRequests(1000).rows);
     }
     catch (e) { body = { rows: [], error: String(e && e.message || e) }; }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

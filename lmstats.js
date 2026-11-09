@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
 const hwstats = require('./hwstats');              // AI_SCOPE-094 slice 4: peakBetween for each request
+const procstats = require('./procstats');          // AI_SCOPE-127: energyBetween - the family's energy trail (121)
 const os = require('os');
 
 // Where the logs are: <data folder>/apps/bionic/server-logs (Bionic), else <data folder>/server-logs (LM Studio desktop).
@@ -15,7 +16,7 @@ function start(settings) {
   const home = (settings && settings.home) || path.join(os.homedir(), '.lmstudio');
   CANDIDATE_DIRS = [path.join(home, 'apps', 'bionic', 'server-logs'), path.join(home, 'server-logs')];
 }
-function stop() { CANDIDATE_DIRS = []; for (const k in perfRings) delete perfRings[k]; }   // AI_SCOPE-103: an uninstalled scope drops its rings too (like procstats' unattest)
+function stop() { CANDIDATE_DIRS = []; for (const k in perfRings) delete perfRings[k]; energyCache.clear(); }   // AI_SCOPE-103: an uninstalled scope drops its rings too (like procstats' unattest); 127: and its energy cache - keys belong to the old log folder
 
 function findLogDir() {
   for (const d of CANDIDATE_DIRS) {
@@ -172,6 +173,62 @@ function attachPeak(r) {
   r.peak = p;
 }
 
+// AI_SCOPE-127: the energy each request asked of the cards, same fields, same rules and the same D9
+// version stamp as the Strata rows (121) - but ATTACHED AT READ TIME, because Bionic has no request
+// store of its own: its rows ARE its server log, re-parsed (cached) on every read. One integration
+// per row key, taken once the request is >= 3 s past its end so the 2 s samples covering it have
+// landed (stratastats' save-wait, same reason), then final in a Map like attachPeak above. Rows whose
+// window sits outside the session's one-hour energy trail (procstats.costLog) read a gap - never a
+// zero, never an average. The cache outlives a row's stay in the read window, so the last 1000 rows
+// keep their figures for the whole server session; the cap only guards a runaway log.
+const ENERGY_VER = 2;                    // the 121 D9 stamp: which measurement produced the joules
+const ENERGY_CACHE_MAX = 20000;
+const energyCache = new Map();           // row key -> {ws, partial} | null (null = final "nothing measured inside")
+function attachEnergy(r) {
+  if (!r || r.energyWs !== undefined) return;
+  if (energyCache.has(r.key)) {
+    const e = energyCache.get(r.key);
+    if (e) applyEnergy(r, e);
+    return;
+  }
+  if (r.start == null || r.end == null) return;                       // no closed window yet - retry on the next read
+  if (Date.now() - r.end < 3000) return;                              // the samples covering the end may not have landed
+  const en = procstats.energyBetween('bionic', r.start, r.end);
+  if (!en) return;                                                    // no trail at all yet (server just booted) - retry
+  if (en.n > 0) {
+    const e = { ws: Math.round(en.ws * 10) / 10, partial: en.partial };
+    if (energyCache.size > ENERGY_CACHE_MAX) energyCache.delete(energyCache.keys().next().value);
+    energyCache.set(r.key, e);
+    applyEnergy(r, e);
+  } else {
+    if (energyCache.size > ENERGY_CACHE_MAX) energyCache.delete(energyCache.keys().next().value);
+    energyCache.set(r.key, null);                                     // the window closed with nothing measured inside: a gap, forever
+  }
+}
+function applyEnergy(r, e) {
+  r.energyWs = e.ws;
+  if (e.partial) r.energyPartial = true;
+  r.energyVer = ENERGY_VER;
+  reqstats.setProv(r, 'energyWs', reqstats.PROV.ESTIMATED);
+}
+
+// The 121 costDays shape over the log rows (for bionic.costtotal's Days range): one bucket per LOCAL
+// calendar day, oldest first { d, ws, n, miss } - n rows carry energy, miss rows count as nothing (a gap
+// in the two Requests columns); the client picks the window and applies the price.
+function costDayBuckets(rows) {
+  const b = {};
+  rows.forEach(function (r) {
+    if (r.end == null) return;
+    const x = new Date(r.end); x.setHours(0, 0, 0, 0);
+    const k = x.getTime();
+    const day = b[k] || (b[k] = { d: k, ws: 0, n: 0, miss: 0 });
+    if (r.energyWs != null) { day.ws += r.energyWs; day.n++; } else day.miss++;
+  });
+  return Object.keys(b).map(Number).sort(function (a, c) { return a - c; }).map(function (k) {
+    const day = b[k]; day.ws = Math.round(day.ws * 10) / 10; return day;
+  });
+}
+
 // Returns the newest `limit` requests, newest first.
 function getLatestRequests(limit) {  limit = limit || 100;
   const dir = findLogDir();
@@ -183,7 +240,7 @@ function getLatestRequests(limit) {  limit = limit || 100;
   for (let i = files.length - 1; i >= 0 && rows.length < limit; i--) {
     const c = parseFile(files[i]);
     if (!c) continue;
-    for (let j = c.rows.length - 1; j >= 0 && rows.length < limit; j--) { attachPeak(c.rows[j]); rows.push(c.rows[j]); }
+    for (let j = c.rows.length - 1; j >= 0 && rows.length < limit; j--) { attachPeak(c.rows[j]); attachEnergy(c.rows[j]); rows.push(c.rows[j]); }
   }
   return { logDir: dir, rows: rows };
 }
@@ -327,4 +384,5 @@ function getPromptAverage(rows) {
   return a ? { model: model, promptTps: a.value, requests: a.requests } : null;
 }
 
-module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage, getPromptAverage: getPromptAverage, samplePerf: samplePerf, tpsHistorySince: tpsHistorySince, tsToMs: tsToMs };
+module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage, getPromptAverage: getPromptAverage, samplePerf: samplePerf, tpsHistorySince: tpsHistorySince, tsToMs: tsToMs,
+  costDayBuckets: costDayBuckets, _test: { attachEnergy: attachEnergy, energyCache: energyCache, ENERGY_VER: ENERGY_VER } };   // AI_SCOPE-127: the route reads costDayBuckets(getLatestRequests(1000).rows); the probe drives attachEnergy

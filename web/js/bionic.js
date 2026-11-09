@@ -12,6 +12,25 @@ defineSource('bionic.models', '/api/bionic/models', 'bionic');
 // 'b' prefixes (bgp*/ bram_* / bcpu / bio), so each tile hovers over Bionic's own history.
 const BIONIC_MIRROR = defineMirror({ key: 'bionic', name: 'Bionic', letter: 'b' });
 
+// ---------- GPU cost lenses (AI_SCOPE-127) ----------
+// The pair 121 shipped for Strata, re-homed onto the shared defineGpuCost helper. The energy rides the SAME
+// server-side accrual keyed to the 'bionic' family (procstats ran it for Bionic since 121 - the mirror
+// history already carries gpus[i].w from 122); the /api/bionic route adds cost / costDays like /api/strata.
+// Only the wording differs from Strata's: Bionic has no request STORE of its own - its Requests rows are
+// parsed from Bionic's server log files (lmstats.js), and energy is attached to a row once, while the
+// request is still inside the session's one-hour trail (the 094 attachPeak pattern). After a restart, log
+// rows older than the fresh trail count as gaps - which is exactly what these tips say, never a hidden hole.
+defineGpuCost({
+  key: 'bionic', name: 'Bionic', letter: 'b',
+  stateWords: { off: 'Bionic Offline', idle: 'No Model Loaded', loading: 'Loading\u2026',
+    unloading: 'Unloading\u2026', failed: 'Load failed' },
+  online: () => !bionicOffline(), downSub: () => 'Bionic Offline',
+  daysClause: 'Cost Range "Days" sums the Bionic requests AI_SCOPE has read from its server log whose end falls in the window - the log reaches back as far as Bionic writes it, but a row carries energy only for a request AI_SCOPE was running and measuring while it ended (at most the last 1000 rows read) - so it counts request energy and nothing else, and rows whose window nothing was measured inside count as nothing.',
+  daysShort: 'the Bionic requests AI_SCOPE read from the log in the last N days',
+  rangeTip: 'Session start: every measured GPU watt this AI_SCOPE server has attributed to Bionic since it booted. Days: the Bionic log rows ending within the last N days that carry measured energy (the log rows persist across restarts, energy figures do not; GPU work outside a request is not in that sum).',
+  daysNumTip: 'How many days back to sum (calendar days, today included), from the Bionic log rows AI_SCOPE has read this session. It looks back over at most the last 1000 logged requests, and only rows whose window was measured while AI_SCOPE ran carry energy - after a restart, older rows count as gaps.',
+});
+
 // ---------- Current request (AI_SCOPE-100: the shared card engine) ----------
 // Four boxes: Bionic's log answers speed / generated / prompt-read / elapsed; it reports no live
 // context use, so there is NO Context box on this card (D2 - never a box kept to be empty).
@@ -114,7 +133,7 @@ defineLens({
 // engine's own slot release line and derives Cached from it (both `derived`, so plain per 094's
 // marker rule); the titles below say where each number comes from, since the marker no longer does.
 const BIONIC_REQ = {
-  title: 'Requests', pager: true, keyOf: r => r.key, hint: '',
+  title: 'Requests', pager: true, app: 'Bionic', extra: ['energy', 'cost'], keyOf: r => r.key, hint: '',
   foot: '\n      <div class="err" data-k="err" hidden></div>',
   titleOf: (key, r) => key === 'finished' ? r.timestamp
     : key === 'duration' ? 'from Bionic\'s log: total time for the task'
@@ -131,7 +150,7 @@ const BIONIC_REQ = {
 defineLens({
   id: 'bionic.requests', scope: 'bionic', size: 'full',
   name: 'Requests',
-  description: 'Finished requests from Bionic\'s server logs: tokens, speeds, first token, duration, peak load.',
+  description: 'Finished requests from Bionic\'s server logs: tokens, speeds, first token, duration, peak load, and the GPU energy each one cost with its price (measured only for rows that ran while AI_SCOPE was).',
   settings: [PER_PAGE_FIELD],
   markup: reqTableMarkup(BIONIC_REQ),
   render(L, data) {
@@ -311,4 +330,5 @@ MIRROR_HOVER.push({ prefix: 'bctx', fn: (spark, f, guide, tip) => {   // nearest
 // Bionic CPU · Bionic RAM (Working) · Bionic RAM (Committed) · Bionic I/O on every OS) close the page.
 // AI_SCOPE-107: default = the user's saved page (2026-11-04): the requests table leads below the card
 // (its Saved-columns setting cols:"10" rides too), then loaded and installed, the token row last above the mirror tail.
-defineScopeLayout('bionic', () => layoutOf([{ lens: 'bionic.current', settings: { width: 'full' } }, { lens: 'bionic.requests', settings: { perPage: 5, cols: '10' }, row: true }, { lens: 'bionic.loaded', settings: {}, row: true }, { lens: 'bionic.installed', settings: {}, row: true }, { lens: 'bionic.tps', settings: {}, row: true }, 'bionic.ptps', 'bionic.ctx']).concat(BIONIC_MIRROR.layout()));
+// AI_SCOPE-127: the cost row after the token row, mirroring Strata (the 123 power tiles will take its left end).
+defineScopeLayout('bionic', () => layoutOf([{ lens: 'bionic.current', settings: { width: 'full' } }, { lens: 'bionic.requests', settings: { perPage: 5, cols: '10' }, row: true }, { lens: 'bionic.loaded', settings: {}, row: true }, { lens: 'bionic.installed', settings: {}, row: true }, { lens: 'bionic.tps', settings: {}, row: true }, 'bionic.ptps', 'bionic.ctx', { lens: 'bionic.costact', settings: {}, row: true }, 'bionic.costtotal']).concat(BIONIC_MIRROR.layout()));

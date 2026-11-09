@@ -376,3 +376,120 @@ function defineMirror(spec) {
     },
   };
 }
+
+// ---------- The GPU cost lens PAIR (AI_SCOPE-127; the shape AI_SCOPE-121 shipped for Strata) ----------
+// defineGpuCost({ key, name, letter, stateWords, online, downSub, daysClause, daysShort, rangeTip, daysNumTip })
+// builds <key>.costact (live hourly rate: big number, 5-minute board, meter, hover) and <key>.costtotal
+// (range total: one number, Session start | Days with a cascaded days field, no chart), riding the scope's
+// procstats family accrual (d.cost ring + session total, d.costDays per-day buckets) and the global $/kWh
+// from Settings → General priced at DRAW time (D5) - the joules were measured regardless of the price.
+// Everything here is an ESTIMATE (board power is a device measurement): every face wears ≈ and the tooltips
+// name the formula (121 D7/D8). The energy rules - attested zeros read 0 W / ≈$0.00, a used card with no
+// watts or no same-source denominator voids the moment to n/a, Days sums only rows that carry energy, and
+// rows measured by a superseded formula count as nothing (D9) - are 121's, settled once for every scope;
+// the per-scope arguments are only WORDING (state words, the offline sub, and how the Days range describes
+// that app's request history - Strata sums its SAVED requests, Bionic sums the log rows AI_SCOPE measured
+// this session). Strata's shipped lens ids, tile ids (scostact / scosttot), settings fields and strings are
+// passed through verbatim; a scope opts in by calling this (127 does Bionic; 128-130 follow).
+function defineGpuCost(spec) {
+  const key = spec.key, name = spec.name, p = spec.letter;
+  const CHIST = [];   // {t, every, w} - estimated watts attributed to this app's family, newest last
+  let CT1 = Date.now();   // the board time of the last render (hover parity) - the 093 lesson
+  subscribeSource(key, d => {
+    const add = (d && d.cost && d.cost.hist) || [];
+    if (add.length) {
+      const last = CHIST.length ? CHIST[CHIST.length - 1].t : 0;
+      for (const q of add) if (q && q.t > last) CHIST.push(q);
+      sparkPrune(CHIST);
+      if (CHIST.length > 240) CHIST.splice(0, CHIST.length - 240);
+    }
+  });
+  const COST_STATE = spec.stateWords;   // the mirror tiles' state wording (080 vocabulary), in this app's words
+  const COST_TIP = 'Active GPU Usage Cost: what a whole hour of GPU work at THIS moment would cost ' + name + '. Per card: the card\'s live power draw × ' + name + '\'s share of that card\'s GPU usage, summed over the cards — so a card that is also busy with something else is only charged for the part ' + name + ' is asking of it. Share of what, measured how: on an NVIDIA card both sides come from nvidia-smi\'s per-process SM (shader) time — ' + name + '\'s processes\' SM % over the SM % of every process on that card, from one 1 Hz stream averaged over the moment being priced. On Windows that replaces the GPU Engine performance counters Task Manager uses, which never report CUDA work on a second graphics card: on the machine this was measured on, a card drawing 60 W with ' + name + ' as the only process on it read 0 % there. Where nvidia-smi cannot speak for a card (AMD / Intel, macOS, or that stream dying) the counters\' numbers and the card\'s own device usage are used instead, and one card is never measured by both at once. Board power is a whole-device measurement, so this is an estimate and every face wears ≈. The chart is the same rate over the last five minutes. The price per kWh comes from Settings → General; the total spent is the other lens ("' + name + ' GPU Total Cost"). ' + name + ' holding a model resident on a card without using it is not charged — this prices work, not occupancy. Where a card ' + name + ' is using reports no power, or no same-source usage to divide by, nothing is recorded for that moment rather than guessed - the tile says so.';
+  defineLens({
+    id: key + '.costact', scope: key, size: 'tile',
+    name: 'GPU Cost Activity',
+    description: "Active GPU Usage Cost — the live hourly rate for " + name + "'s GPU work (each card's watts × " + name + "'s share of that card's GPU usage, measured per process by nvidia-smi on NVIDIA cards, priced at the Settings electricity rate), with the last five minutes of that rate.",
+    markup: () => tileHtml({ id: p + 'costact', label: name + ' GPU Cost Activity' }),
+    render(L, d) {
+      const box = L.el.querySelector('[data-tile="' + p + 'costact"]'); if (!box) return;
+      box.querySelector('.ltitle').title = COST_TIP;
+      const price = kwhPrice();
+      const now = Date.now(); CT1 = now;   // remember the board this render drew
+      const pts = sparkFresh(CHIST);
+      const maxW = Math.max(10, 1.25 * pts.reduce(function (a, x) { return Math.max(a, x.w || 0); }, 0));   // on-board only: "top of the chart" is what you SEE
+      const clk = sparkClockSegs(CHIST, now, h => h.w == null ? null : Math.min(100, 100 * h.w / maxW));
+      // Do these cards report board power at all? nvidia-smi (both OSes) and Linux's amdgpu sysfs do;
+      // Windows' own GPU counters do not (the source field mirrors hwstats card.source, as the GPU tiles' do).
+      const powered = (d.processCards || []).some(x => x.source === 'nvidia' || x.source === 'amd');
+      const last = pts.length ? pts[pts.length - 1] : null;
+      // The rate face follows the mirror family's value rule (077/080): an attested zero point is an honest 0
+      // ("≈$0.00 /h · Offline", exactly like the GPU tiles' zeros - live or idle, the user asked);
+      // a FRESH real point is the apportioned watts; a stale real point (a lookup hiccup while a model is
+      // loaded) is n/a, never a false 0. Absence of a number is not a number.
+      let rate = null;
+      if (last) {
+        if (last.attest) rate = 0;                         // attested zero heartbeat point (off / idle / …)
+        else if (now - last.t <= Math.min(120000, Math.max(1500, 3 * (last.every || 2000))))   // 092 break window
+          rate = last.w / 1000 * price;                    // wattage per hour = Wh/h
+      }
+      const big = !powered || rate == null ? NA_HTML : '\u2248' + fmtUsd(rate) + '<small> /h</small>';
+      const meter = rate == null ? null : Math.min(100, 100 * last.w / maxW);
+      let sub;
+      if (!powered) sub = (d.processCards || []).length ? 'power not reported for these cards' : 'detecting cards\u2026';
+      else if (!last) sub = spec.online(d) ? 'no GPU use in the last 5 min' : spec.downSub(d);
+      else if (last.attest) sub = COST_STATE[last.attest] || 'Inactive';
+      else if (rate == null) sub = 'Inactive';   // the newest point is a stale real reading
+      else sub = Math.round(last.w) + ' W asked of the cards \u00b7 $' + price + '/kWh';
+      sparkTile(box, meter, big, sub, clk.segs, clk.caps);
+      box.querySelector('.spark').title = 'Top of the chart = \u2248' + fmtUsd(maxW / 1000 * price) + ' /h (5-minute board max)';
+    },
+  });
+  MIRROR_HOVER.push({ prefix: p + 'costact', fn: (spark, f, guide, tip) => {   // nearest sample to the cursor's BOARD time: the rate at that moment
+    sparkClockHover(spark, f, guide, tip, CHIST, hs => (hs.w != null
+      ? '\u2248' + fmtUsd(hs.w / 1000 * kwhPrice()) + '/h \u00b7 ' + Math.round(hs.w) + ' W \u00b7 ' + new Date(hs.t).toLocaleTimeString()
+      : 'n/a'), CT1);
+  } });
+
+  const TOTAL_TIP = 'Total electric cost of ' + name + '\'s GPU work over a range, from the same per-card estimate as the activity lens (each card\'s live power draw × ' + name + '\'s share of that card\'s GPU usage, summed — per-process usage measured by nvidia-smi on an NVIDIA card, the Windows GPU counters where it cannot speak): every face wears ≈ because board power is a whole-device measurement. Cost Range "Session start" is everything AI_SCOPE has measured since it booted, requests and GPU work between them alike. ' + spec.daysClause + ' Rows also count as nothing when their energy was measured by a superseded version of this formula: each saved figure carries which measurement produced it, so a corrected model never leaves the old numbers mixed into the total. Money is computed from the Settings → General price every time the tile draws, never stored, so a corrected price re-prices the whole range.';
+  defineLens({
+    id: key + '.costtotal', scope: key, size: 'tile',
+    name: 'GPU Total Cost',
+    description: "Total GPU electric cost over a range: since AI_SCOPE started, or " + spec.daysShort + ". One number, priced at the Settings electricity rate; no chart.",
+    markup: () => '<div class="tilebox" data-tile="' + p + 'costtot">' + lensHeadMarkup(name + ' GPU Total Cost') +
+      '<div class="tile bignum"><div class="v">\u2014</div><div class="sub">&nbsp;</div></div></div>',
+    settings: [
+      { id: 'costRange', label: 'Cost range', type: 'choice', default: 'session',
+        options: [['session', 'Session start'], ['days', 'Days']],
+        tip: spec.rangeTip },
+      { id: 'days', label: 'Days', type: 'number', default: 30, min: 1, max: 365, cascade: true,
+        when: cur => cur.costRange === 'days',
+        tip: spec.daysNumTip },
+    ],
+    render(L, d) {
+      const box = L.el.querySelector('[data-tile="' + p + 'costtot"]'); if (!box) return;
+      box.querySelector('.ltitle').title = TOTAL_TIP;
+      const price = kwhPrice();
+      let ws = null, sub;
+      if (L.settings.costRange === 'days') {
+        const n = Math.max(1, Math.min(365, +L.settings.days || 30));
+        const from = dayStart(Date.now()) - (n - 1) * 864e5;   // calendar days, today included
+        const b = (d.costDays || []).filter(x => x.d >= from);
+        const have = b.reduce(function (a, x) { return a + x.n; }, 0);
+        const gone = b.reduce(function (a, x) { return a + (x.miss || 0); }, 0);
+        if (!have && !gone) sub = 'no saved requests in the last ' + n + ' day' + (n > 1 ? 's' : '');
+        else {
+          if (have) ws = b.reduce(function (a, x) { return a + x.ws; }, 0);
+          sub = (have ? fmtWh(ws) + ' \u00b7 ' : 'no energy recorded \u00b7 ') + have + ' of ' + (have + gone) +
+            ' requests since ' + fmtDay(from);
+        }
+      } else {
+        const c = d.cost;
+        if (c) { ws = c.ws; sub = fmtWh(ws) + ' \u00b7 since AI_SCOPE started, ' + fmtWhen(c.t0); }
+        else sub = spec.online(d) ? 'no GPU use recorded yet' : spec.downSub(d);
+      }
+      box.querySelector('.v').innerHTML = ws == null ? NA_HTML : '\u2248' + fmtUsd(ws / 3.6e6 * price);   // watt-seconds -> kWh: /3.6e6
+      box.querySelector('.sub').textContent = sub;
+    },
+  });
+}

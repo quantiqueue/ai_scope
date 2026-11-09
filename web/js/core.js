@@ -160,6 +160,17 @@ function fmtUsd(n) {
   if (n >= 0.01) return '$' + n.toFixed(3);
   return n > 0 ? '$' + parseFloat(n.toPrecision(2)) : '$0.00';
 }
+// AI_SCOPE-127: day-range helpers moved out of strata.js (the shared cost-lens helper in mirror.js needs them
+// for every scope, same reasoning as kwhPrice / fmtUsd / fmtWh moving out for the Requests columns in 121).
+// The range a day number means: local midnight N days back through now, which is what the server's per-day
+// buckets are keyed by (same machine, same clock - the dashboard is local by design, ARCHITECTURE.md).
+const dayStart = ms => { const x = new Date(ms); x.setHours(0, 0, 0, 0); return x.getTime(); };
+function fmtDay(ms) {
+  if (!ms) return '—';
+  const x = new Date(ms), now = new Date();
+  const s = x.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return x.getFullYear() === now.getFullYear() ? s : s + ', ' + x.getFullYear();
+}
 // AI_SCOPE-094 slice 4: where a number came from (the server writes `src` per field; see reqstats.js).
 // exact / derived need no marker; estimated and substitute do - they are not measurements.
 const provOf = (r, f) => (r && r.src && r.src[f]) || 'exact';

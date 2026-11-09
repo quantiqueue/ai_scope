@@ -373,9 +373,11 @@ function reqTip(o, key, r, fallback) {
   return t != null ? t : (typeof fallback === 'function' ? fallback(r) : fallback);
 }
 // AI_SCOPE-121: the honesty notes behind the two energy columns (the reqTip rule still holds - a scope that
-// writes its own titleOf for these keys adds to them, it can never silence what they are).
-function energyNote(r) {
-  return 'Electricity this request asked of the GPUs: each card\u2019s live board power \u00d7 Strata\u2019s share of that card\u2019s GPU usage, summed and integrated across the request window (prompt read + generation \u2014 the model load before it is not included). On an NVIDIA card that share is measured per process by nvidia-smi (its SM time on that card, over the SM time of every process on it); where nvidia-smi cannot speak for a card, Windows\u2019 GPU counters and the card\u2019s own usage figure are used instead. Board power is a whole-device measurement, so this is an estimate and wears \u2248; it is stored as energy, so the price never changes it. A row with no figure was saved before this measurement existed, or under a version of it that has since been corrected \u2014 the two are never mixed in one number.'
+// writes its own titleOf for these keys adds to them, it can never silence what they are). AI_SCOPE-127: the
+// note names THIS scope (REQ config o.app) - the columns are shared machinery now, the sentence is not.
+function energyNote(r, o) {
+  const app = (o && o.app) || 'the app';
+  return 'Electricity this request asked of the GPUs: each card\u2019s live board power \u00d7 ' + app + '\u2019s share of that card\u2019s GPU usage, summed and integrated across the request window (prompt read + generation \u2014 the model load before it is not included). On an NVIDIA card that share is measured per process by nvidia-smi (its SM time on that card, over the SM time of every process on it); where nvidia-smi cannot speak for a card, Windows\u2019 GPU counters and the card\u2019s own usage figure are used instead. Board power is a whole-device measurement, so this is an estimate and wears \u2248; it is stored as energy, so the price never changes it. A row with no figure was saved before this measurement existed, or under a version of it that has since been corrected \u2014 the two are never mixed in one number.'
     + (r.energyPartial ? ' Only the part of this request inside AI_SCOPE\u2019s one-hour energy trail was covered, so the number is a floor.' : '')
     + (r.energyWs == null ? ' A row saved before this column existed, or one with no measurement inside its window, is a gap - never a zero.' : '');
 }
@@ -403,12 +405,13 @@ const REQ_COLS = {
   loadMs:     { th: 'Load Time',   td: (r) => '<td title="Model load time, included in Duration">' + (r.loadMs != null ? fmtSec(r.loadMs) : ONONE) + '</td>' },
   thinking:   { th: 'Thinking',    td: (r) => '<td title="Reasoning tokens, counted inside Generated">' + (r.thinkTokens ? fmtNum(r.thinkTokens) : ONONE) + '</td>' },
   slot:       { th: 'Slot',        td: (r) => '<td>' + (r.slot != null ? r.slot : ONONE) + '</td>' },
-  // AI_SCOPE-121 (D5 / D6, Strata only): what one request cost the cards. The ENERGY is the same per-card
-  // apportionment the Cost lenses show, integrated over the request's own window and stored in watt-seconds;
-  // it is displayed in Wh and priced at draw time, so a corrected Settings price re-prices the whole table
-  // rather than leaving rows silently carrying the price they were saved under. A row saved before this
-  // existed, or one whose window nothing was measured inside, stays a gap - never a zero, never an average.
-  energy:     { th: 'Power Usage', td: (r, o) => '<td' + tattr(reqTip(o, 'energy', r, energyNote(r))) + '>' + (r.energyWs != null ? (provMarked(r, 'energyWs') ? '\u2248 ' : '') + fmtWh(r.energyWs) : ONONE) + '</td>' },
+  // AI_SCOPE-121 (D5 / D6; Strata) and 127 (Bionic, then every cost scope): what one request cost the cards.
+  // The ENERGY is the same per-card apportionment the Cost lenses show, integrated over the request's own
+  // window and stored in watt-seconds; it is displayed in Wh and priced at draw time, so a corrected Settings
+  // price re-prices the whole table rather than leaving rows silently carrying the price they were saved
+  // under. A row saved before this existed, or one whose window nothing was measured inside, stays a gap -
+  // never a zero, never an average.
+  energy:     { th: 'Power Usage', td: (r, o) => '<td' + tattr(reqTip(o, 'energy', r, energyNote(r, o))) + '>' + (r.energyWs != null ? (provMarked(r, 'energyWs') ? '\u2248 ' : '') + fmtWh(r.energyWs) : ONONE) + '</td>' },
   cost:       { th: 'Total Cost',  td: (r, o) => '<td' + tattr(reqTip(o, 'cost', r, costNote(r))) + '>' + (r.energyWs != null ? (provMarked(r, 'energyWs') ? '\u2248 ' : '') + fmtUsd(r.energyWs / 3.6e6 * kwhPrice()) : ONONE) + '</td>' },
   // AI_SCOPE-109 (Strata only): which face of Strata answered - the desktop app or a headless CLI launch.
   // A number the app never reports stays a gap, and so does a row saved before this column existed.
