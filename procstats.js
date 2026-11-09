@@ -9,7 +9,9 @@
 // 3.3 % because re-resolving a family meant a second CreateToolhelp32Snapshot (125-240 ms) every 4 s for apps
 // that are simply not running. That script is gone: Windows now does what the Linux / macOS path has done since
 // 052 - resolve families from the sample's own process table - so both platforms share one mechanism, and the
-// only external call left is a netstat.exe port table on the re-resolve clock (18 ms).
+// external calls left are a netstat.exe port table on the re-resolve clock (18 ms) and, only when netstat names
+// no owner for an armed watched port, ONE Get-NetTCPConnection -LocalPort lookup (~1.5 s, off the clock, at most
+// once per re-resolve period - see portOwnersCim).
 // The rules themselves are unchanged: the port owner + its children, or with the 080 tree flag the app-named
 // anchors + their descendants + ancestry chains, never attributing a shared runner (llama-server / python / node)
 // to an app without a port to prove it (077 batch 3, 052's GENERIC list).
@@ -294,7 +296,9 @@ function attest(key, state) {
 // 084: taking an app out of the resolution (or putting it back). get() must answer null at once, so the tiles
 // fall back to the attested zeros instead of freezing on the last real reading.
 function refreshWatch(key) {
-  if (!armed(key)) { delete results[key]; delete fams[key]; }
+  // 2026-11-09 (rule 4 follow-up): an app that attests off / idle / failed also loses the port owner remembered
+  // for it, so the pid of an app that closed can never come back through a recycled PID.
+  if (!armed(key)) { delete results[key]; delete fams[key]; dropPortOwners((watches[key] || {}).ports); }
   resolveAt = 0;   // look the app up (or drop it) on the next sample
   syncPace();
 }
@@ -351,22 +355,27 @@ const STOP_PARENTS = ['explorer.exe', 'services.exe', 'svchost.exe', 'wininit.ex
 const lname = r => String((r && r.name) || '').toLowerCase();
 let owners = {}, resolveAt = 0, ownersBusy = false;
 // port -> pid. netstat.exe is the cheap way in (18 ms; the old script shelled out the same way, and
-// Get-NetTCPConnection took 1.5 s - 059's note). Only asked when an armed app actually declares ports.
+// Get-NetTCPConnection took 1.5 s - 059's note, which is why that one is only the fallback below, never the
+// first call). Only asked when an armed app actually declares ports.
 // 2026-11-09 (user's diagnosis + spec, snow): after a Windows 11 update, netstat's LISTENING rows on this
-// machine began reporting the owner as PID 0 (the CIM table reports the same socket inconsistently too -
-// it returns State 0 where a listener belongs). Bionic/Ollama-style port-keyed watches died with it: the
-// old `pid > 0` guard threw away the only row the port had. Fix inside the SAME one call:
+// machine began reporting the owner as PID 0, and the port's row goes missing entirely even while the app
+// answers on it (the CIM table reports the same socket inconsistently too - it returns State 0 where a
+// listener belongs). Bionic/Ollama-style port-keyed watches died with it: the old `pid > 0` guard threw away
+// the only row the port had. Fix inside the SAME one call:
 //  1. a LISTENING row with a real pid is the owner (as before), and a pid-0 row can never overwrite one;
 //  2. when a port's ONLY listener evidence is pid 0, fall back to the real pid on ESTABLISHED rows whose
 //     LOCAL port is that port - the server side of an accepted connection names the owning process right;
-//  3. no real pid from either source: no owner, exactly as today.
-//  4. follow-up (user's spec, 2026-11-09): rules 1-2 only speak WHILE a connection is open, so a pid-0
-//     listener went ownerless between requests and Bionic's mirror tiles flipped back to "Inactive" - the
-//     table is rebuilt from scratch on every call. When a port is still marked by a pid-0 LISTENING row and
-//     rules 1-2 found no pid, carry over the pid the PREVIOUS table had for it. Only while that row is
-//     present: an app that closes stops listening and its remembered owner is dropped as before. A pid that
-//     died or restarted in the meantime is filtered in windowsFamilies(), which ignores a root missing from
-//     the process table - that also keeps the family code off `rows[pid].name` for a pid that is not there.
+//  3. no real pid from either source and nothing remembered: no owner from this table - the second source
+//     (portOwnersCim, below) is asked once, off this callback;
+//  4. follow-up (user's spec, 2026-11-09, replacing the first version of this rule): rules 1-2 only speak
+//     WHILE a connection is open, so a pid-0 listener went ownerless between requests and Bionic's mirror
+//     tiles flipped back to "Inactive" - the table is rebuilt from scratch on every call. A port an ARMED app
+//     watches keeps the owner the previous table had for it until rules 1-2 see a fresher pid. NO pid-0 row
+//     is required any more: on this machine the row itself comes and goes, so its absence is not evidence
+//     that the app stopped listening. A pid that died or restarted in the meantime is filtered in
+//     windowsFamilies(), which ignores a root proctop no longer has a row for; and the memory is DROPPED when
+//     the app is unwatched or disarmed (it attests off / idle / failed), so a closed app never leaves a stale
+//     pid in the table for a recycled PID to name.
 // TIME_WAIT and every other state are ignored, and a port seen only as the REMOTE end (our side of a
 // client connection) is never used - the port is read from the LOCAL address column only.
 function portOwners(cb) {
@@ -396,13 +405,62 @@ function portOwners(cb) {
       }
     });
     Object.keys(zero).forEach(function (k) {
-      if (!zero[k] || m[k] != null) return;
-      if (est[k] != null) m[k] = est[k];                                        // rule 2: pid-0 listener, rescued by the connection it accepted
-      else if (owners[k] > 0) m[k] = owners[k];                                 // rule 4: still listening, nothing connected right now - keep the remembered owner
+      if (zero[k] && m[k] == null && est[k] != null) m[k] = est[k];            // rule 2: pid-0 listener, rescued by the connection it accepted
+    });
+    // Rule 4: an armed watch still names this port, so it is ours to keep - carry over the owner the previous
+    // table had for it, whether or not netstat printed anything for that port (rules 1-2 already replaced it as
+    // soon as a fresher pid showed up). A port nobody armed-watches is not carried at all.
+    const missing = [];
+    ports.forEach(function (p) {
+      if (m[p] != null) return;
+      if (owners[p] > 0) m[p] = owners[p];
+      else missing.push(p);                                                    // rule 3: the slow source below, at most once per clock
     });
     owners = m;
     cb(owners);
+    if (missing.length) portOwnersCim(missing);
   });
+}
+// The second source (user's spec B, 2026-11-09): CIM (`Get-NetTCPConnection`) names the owner of a listener that
+// netstat reports as PID 0, or has no row for at all - measured on snow, :1234 came back RemotePort 0 /
+// OwningProcess 29668 with State 0 (not 2/Listen). It costs ~1.5 s (059's note), so it never rides the netstat
+// callback above: the answer is merged into `owners` and the next resolve carries it by rule 4. Asked at most
+// once per resolve clock (RESOLVE_MS) and never while a previous call is still running, so the 2 s sampler and
+// the wake clock never stack PowerShell processes. State is NOT consulted (this machine reports 0 for a real
+// listener); a row counts when its REMOTE end is 0 - the listening side, never our side of a client connection.
+// PowerShell here cannot call .NET static methods (GOTCHAS), so the cmdlet prints its own three fields as plain
+// text lines and Node parses them.
+let cimAt = 0, cimBusy = false;
+function portOwnersCim(ports) {
+  if (cimBusy || Date.now() - cimAt < RESOLVE_MS) return;
+  cimAt = Date.now(); cimBusy = true;
+  const cmd = "$ErrorActionPreference='SilentlyContinue'; Get-NetTCPConnection -LocalPort " + ports.join(',') +
+    " -ErrorAction SilentlyContinue | ForEach-Object { '{0} {1} {2}' -f $_.LocalPort, $_.RemotePort, $_.OwningProcess }";
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true, encoding: 'utf8', timeout: 8000 }, function (err, out) {
+    cimBusy = false;
+    if (err || !out) return;                        // helper stderr is discarded: no trace, and the clock asks again
+    let found = 0;
+    String(out).split(/\r?\n/).forEach(function (l) {
+      const p = l.trim().split(/\s+/);
+      if (p.length < 3) return;
+      const port = +p[0], remote = +p[1], pid = +p[2];
+      if (ports.indexOf(port) < 0 || remote !== 0 || !(pid > 0)) return;   // watched ports only, listening end only, real pids only
+      if (owners[port] > 0) return;                 // a netstat owner (or a carried one) is never overwritten by the slow source
+      owners[port] = pid; found++;
+    });
+    if (!found) return;
+    resolveAt = 0;                                  // the next proctop sample resolves the family with the owner it now has
+    syncPace();                                     // and needsFastPace() wakes up, which judges the pace off this same table
+  });
+}
+// Rule 4's memory only exists while an armed watch asks for the port, so it goes away with the watch. Dropping it
+// (rather than only letting the carry-over stop) matters: the pid would otherwise sit in the table after the app
+// closed, and Windows recycles pids. A port another armed watch still names is kept.
+function dropPortOwners(ports) {
+  if (!ports || !ports.length) return;
+  const wanted = {};
+  armedKeys().forEach(function (k) { watches[k].ports.forEach(function (p) { wanted[p] = 1; }); });
+  ports.forEach(function (p) { if (!wanted[p]) delete owners[p]; });
 }
 // root + descendants. The C# this replaces scanned the whole parent table for every queued process; an index
 // makes it linear and it runs on every re-resolve.
@@ -443,9 +501,10 @@ function windowsFamilies(rows, kids, tb) {
   let claimed = [];
   Object.keys(watches).filter(armed).sort().forEach(function (key) {
     const w = watches[key];
-    // Rule 4 can hand over a pid that has since died or restarted, so a port owner only becomes a root when
-    // proctop still has a row for it. (familyOf / the name at the bottom read rows[pid], which throws on a
-    // missing pid; rules 1-2 replace the remembered owner as soon as a fresher pid shows up.)
+    // Rule 4 hands over a pid remembered from an earlier table (including one the CIM second source named), and
+    // it can have died or restarted since, so a port owner only becomes a root when proctop still has a row for
+    // it. (familyOf / the name at the bottom read rows[pid], which throws on a missing pid; rules 1-2 replace
+    // the remembered owner as soon as a fresher pid shows up, and disarm / unwatch drop it outright.)
     let root = 0;
     w.ports.forEach(function (p) { const o = tb[p]; if (!root && o && rows[o]) root = o; });
     let fam = root ? familyOf(root, kids) : [];
@@ -609,11 +668,14 @@ function watch(key, ports, names, opts) {
   const w = watches[key];
   if (w && w.ports.join(',') === ports.join(',') && w.names.join(',') === names.join(',') && !!w.tree === tree) return;
   watches[key] = { ports: ports, names: names, tree: tree };
+  if (w) dropPortOwners(w.ports);   // a port this app no longer declares loses its remembered owner (rule 4)
   refreshWatch(key);   // 084: the resolution and the sampling only follow while the app's state asks for numbers
 }
 function unwatch(key) {
   if (!watches[key]) return;
+  const ports = watches[key].ports;
   delete watches[key]; delete results[key]; delete fams[key];
+  dropPortOwners(ports);   // rule 4: the memory goes with the watch
   resolveAt = 0;
   syncPace();
 }
@@ -651,4 +713,7 @@ module.exports = { supported: supported, watch: watch, unwatch: unwatch, get: ge
   attest: attest, unattest: unattest,   // AI_SCOPE-077 review: offline attestation drives the zero heartbeat
   _test: { aggregate: aggregate, windowsFamilies: windowsFamilies, nixResolve: nixResolve, results: results, fams: fams,
     familyOf: familyOf, ancestryOf: ancestryOf, kidsIndex: kidsIndex,
-    accrueCost: accrueCost, cost: cost, costLog: costLog, zeroTick: zeroTick } };   // AI_SCOPE-121: the energy accumulator, probeable with a stubbed hwstats
+    accrueCost: accrueCost, cost: cost, costLog: costLog, zeroTick: zeroTick,
+    // 2026-11-09 port-owner follow-up: the lookup and its table for replay probes (a getter, because the
+    // owners map is rebuilt as a new object on every call).
+    portOwners: portOwners, owners: function () { return owners; } } };   // AI_SCOPE-121: the energy accumulator, probeable with a stubbed hwstats
