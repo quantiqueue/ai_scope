@@ -352,6 +352,16 @@ const lname = r => String((r && r.name) || '').toLowerCase();
 let owners = {}, resolveAt = 0, ownersBusy = false;
 // port -> pid. netstat.exe is the cheap way in (18 ms; the old script shelled out the same way, and
 // Get-NetTCPConnection took 1.5 s - 059's note). Only asked when an armed app actually declares ports.
+// 2026-11-09 (user's diagnosis + spec, snow): after a Windows 11 update, netstat's LISTENING rows on this
+// machine began reporting the owner as PID 0 (the CIM table reports the same socket inconsistently too -
+// it returns State 0 where a listener belongs). Bionic/Ollama-style port-keyed watches died with it: the
+// old `pid > 0` guard threw away the only row the port had. Fix inside the SAME one call:
+//  1. a LISTENING row with a real pid is the owner (as before), and a pid-0 row can never overwrite one;
+//  2. when a port's ONLY listener evidence is pid 0, fall back to the real pid on ESTABLISHED rows whose
+//     LOCAL port is that port - the server side of an accepted connection names the owning process right;
+//  3. no real pid from either source: no owner, exactly as today.
+// TIME_WAIT and every other state are ignored, and a port seen only as the REMOTE end (our side of a
+// client connection) is never used - the port is read from the LOCAL address column only.
 function portOwners(cb) {
   const ports = [];
   armedKeys().forEach(function (k) { watches[k].ports.forEach(function (p) { if (ports.indexOf(p) < 0) ports.push(p); }); });
@@ -360,12 +370,26 @@ function portOwners(cb) {
   execFile('netstat.exe', ['-ano'], { windowsHide: true, encoding: 'utf8' }, function (err, out) {
     ownersBusy = false;
     if (err || !out) return cb(owners);          // keep the previous table; the clock will ask again
-    const m = {};
+    const m = {};      // port -> owner pid: a real listener, or the accepted-connection fallback below
+    const zero = {};   // port -> true when its ONLY listener evidence so far is a pid-0 LISTENING row
+    const est = {};    // port -> real pid on an ESTABLISHED row whose LOCAL end is that port
     String(out).split(/\r?\n/).forEach(function (l) {
       const p = l.trim().split(/\s+/);
-      if (p[0] !== 'TCP' || p.length < 5 || String(p[3]).toUpperCase() !== 'LISTENING') return;
+      if (p[0] !== 'TCP' || p.length < 5) return;
+      const st = String(p[3]).toUpperCase();
+      if (st !== 'LISTENING' && st !== 'ESTABLISHED') return;   // TIME_WAIT, CLOSE_WAIT, ...: never consulted
       const ip = p[1] || '', i = ip.lastIndexOf(':'), port = i > 0 ? +ip.slice(i + 1) : 0, pid = +p[4];
-      if (port > 0 && port < 65536 && pid > 0) m[port] = pid;
+      if (port > 0 && port < 65536) {
+        if (st === 'LISTENING') {
+          if (pid > 0) { m[port] = pid; zero[port] = false; }           // a real listener wins the port, whichever order the rows come in
+          else if (zero[port] !== false) zero[port] = true;             // pid 0 only MARKS the port; it never owns anything
+        } else if (pid > 0) {
+          est[port] = pid;                                              // LOCAL end only: the REMOTE column is the client's view
+        }
+      }
+    });
+    Object.keys(zero).forEach(function (k) {
+      if (zero[k] && m[k] == null && est[k] != null) m[k] = est[k];     // rule 2: pid-0 listener, rescued by the connection it accepted
     });
     owners = m;
     cb(owners);
