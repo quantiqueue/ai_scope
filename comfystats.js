@@ -8,6 +8,7 @@ const path = require('path');
 const hwstats = require('./hwstats');
 const vramFit = hwstats.vramFit;  // VRAM fit vs the largest card
 const procstats = require('./procstats');   // ComfyUI's own GPU/VRAM/CPU/RAM (Windows; AI_SCOPE-038)
+const reqstats = require('./reqstats');      // AI_SCOPE-130: the shared provenance vocabulary + the Days buckets (128's shape)
 
 const AUTO_URLS = ['http://127.0.0.1:8188', 'http://127.0.0.1:8000'];
 let CANDIDATES = AUTO_URLS;   // set from the scope's install settings in start()
@@ -17,6 +18,10 @@ const MAX_RUNS_IN_MEMORY = 1000;
 
 let base = null;            // detected ComfyUI URL
 let online = false;
+// AI_SCOPE-130 (128's D2, applied to this scope by 129 for Ollama): is that ComfyUI on THIS PC? Only a local one
+// has processes AI_SCOPE can measure, so a reachable server on another machine is worded "on another PC - not
+// measurable here" by the GPU cost lenses instead of "ComfyUI Offline" - and never shows a number.
+let local = false;
 let lastError = null;
 let current = null;         // in-flight job
 let pending = 0;
@@ -38,16 +43,34 @@ function getJson(url, timeout, cb) {
   req.on('error', function (e) { cb(e); });
 }
 
+// AI_SCOPE-121 (D9), carried to this scope by AI_SCOPE-130: energyVer stamps WHICH measurement produced an energy
+// figure, so a corrected apportionment can never leave half-numbers mixed into history. Every saved line whose
+// stamp is not the current one loses its energy fields on read (the jsonl is never rewritten - 094's append-only
+// rule), so raising the version retires yesterday's figures without a migration. Same number as Strata's (121),
+// Bionic's (127) and llama.cpp's (128): the measurement is the same accrual, keyed to this scope's family.
+const ENERGY_VER = 2;
+// Read-side map for every line in comfy-runs.jsonl. ComfyUI's store predates reqstore (094) and never renamed a
+// field, so today this map is the D9 retirement alone; it is NAMED anyway (the 121 / 128 / 129 precedent) so a
+// probe can put saved lines through the shipped read path without the app, its routes or its file.
+function mapRunRow(r) {
+  if (r.energyWs != null && r.energyVer !== ENERGY_VER) { delete r.energyWs; delete r.energyPartial; }
+  return r;
+}
+
 function loadRuns() {
   paths.ensure();
   let text = '';
   try { text = fs.readFileSync(RUNS_FILE, 'utf8'); } catch (e) { return; }
   text.split(/\r?\n/).forEach(function (l) {
     if (!l.trim()) return;
-    try { const r = JSON.parse(l); if (!known[r.id]) { known[r.id] = true; runs.push(r); } } catch (e) { /* skip bad line */ }
+    // 130: the line goes through the named map before the identity check, so the D9 retirement runs on the
+    // shipped load path for every scope that reads this file.
+    try { const r = mapRunRow(JSON.parse(l)); if (!known[r.id]) { known[r.id] = true; runs.push(r); } } catch (e) { /* skip bad line */ }
   });
   runs.sort(function (a, b) { return (a.end || 0) - (b.end || 0); });
-  if (runs.length > MAX_RUNS_IN_MEMORY) runs = runs.slice(-MAX_RUNS_IN_MEMORY);
+  // 130: trimmed IN PLACE, never re-assigned, so the array handed to a probe by the _test surface stays the live
+  // ring - the same identity rule the shared 094 store follows. Keeps the newest rows, as the old slice did.
+  if (runs.length > MAX_RUNS_IN_MEMORY) runs.splice(0, runs.length - MAX_RUNS_IN_MEMORY);
 }
 
 function saveRun(r) {
@@ -57,6 +80,39 @@ function saveRun(r) {
   runs.push(r);
   if (runs.length > MAX_RUNS_IN_MEMORY) runs.shift();
   try { fs.appendFileSync(RUNS_FILE, JSON.stringify(r) + '\n'); } catch (e) { lastError = 'save failed: ' + e.message; }
+}
+
+// AI_SCOPE-130 (121's save-time stamping, the 128 / 129 shape - not 127's read-time attach): the energy this run
+// asked of the cards, integrated over the WHOLE run [start, end] (ComfyUI's own execution_start / execution_success
+// stamps: sampling and every other node, never the checkpoint load that happened before the job was queued), from
+// the SAME accrual the two Cost lenses and the mirror tiles ride, keyed to the app family 'comfyui'. 083's watch is
+// one family (the python.exe owner of ComfyUI's port + its whole descendant tree), so there is no per-model split to
+// choose - as in 129's Ollama note, one accrual prices the tiles, the two lenses and every Runs row.
+// Stored as JOULES, priced at draw time; a run whose window no accrued chunk covers gets no field (a gap, never a
+// zero); one reaching back past the trail is a floor and says so; provenance estimated (board power is a device
+// measurement). A history item with no execution_start message has no window to integrate, so it stays a gap too.
+function attachEnergy(row) {
+  if (!row || row.start == null || row.end == null) return;
+  const en = procstats.energyBetween('comfyui', row.start, row.end);
+  if (!en || en.n <= 0) return;                     // nothing measured inside the window: no fields, a gap
+  row.energyWs = Math.round(en.ws * 10) / 10;
+  if (en.partial) row.energyPartial = true;
+  row.energyVer = ENERGY_VER;                       // 121 D9: which measurement produced these joules
+  reqstats.setProv(row, 'energyWs', reqstats.PROV.ESTIMATED);
+}
+// Save a few seconds after the run reaches /history so the 2 s samples covering its tail exist (the 121/128/129
+// save rule). The wait is load-bearing here, not inherited decoration: a chunk is charged when procstats
+// AGGREGATES the sample that ends it, which can land after ComfyUI wrote the history entry - integrating at that
+// moment would lose up to one 2 s pace of the tail. ComfyUI has no save wait of its own today (fetchHistory used
+// to append synchronously), so this adds one, exactly as 129's D3 did for Ollama. Accepted consequence: a finished
+// run appears in the Runs table (and in the Installed models lens's Runs / Last used / Avg columns) about 3 s later
+// than before. Equal-delay FIFO timers fire in creation order and fetchHistory schedules runs already sorted by end,
+// so the ring still receives them in end order.
+function later(row) {
+  setTimeout(function () {
+    attachEnergy(row);   // AI_SCOPE-130
+    saveRun(row);
+  }, 3000);
 }
 
 // ---------- workflow summary (model, sampler, size...) from the API-format graph ----------
@@ -177,7 +233,7 @@ function detect(cb) {
     if (i >= CANDIDATES.length) return cb(false);
     const url = CANDIDATES[i++].replace(/\/$/, '');
     getJson(url + '/queue', 2000, function (err) {
-      if (!err) { base = url; procstats.watch('comfyui', portsOf([url])); return cb(true); }
+      if (!err) { base = url; applyLocal(url); procstats.watch('comfyui', portsOf([url])); return cb(true); }   // 130: local follows the URL actually chosen
       next();
     });
   })();
@@ -241,7 +297,10 @@ function fetchHistory() {
     const items = Object.keys(h).map(function (id) { return historyToRun(id, h[id]); })
       .filter(function (r) { return !known[r.id] && r.end; })
       .sort(function (a, b) { return a.end - b.end; });
-    items.forEach(saveRun);
+    // AI_SCOPE-130: the run is claimed (known) BEFORE the 3 s wait is started, otherwise the 10 s /history timer
+    // would schedule a second copy of the same run while the first is still waiting - saveRun used to be the only
+    // place this id was claimed. Then each run goes through the shipped save wait.
+    items.forEach(function (r) { known[r.id] = true; later(r); });
   });
 }
 
@@ -338,6 +397,15 @@ function portsOf(urls) {
     .filter(function (n) { return n > 0; });
 }
 
+// AI_SCOPE-130 (128's D2 rule, verbatim): is the URL we are talking to on this machine? Checked where `base` is
+// chosen, so the flag can never disagree with the server a run came from. The same regex llamacppstats.js and
+// ollamastats.js ship. (Named applyLocal, not setLocal: the _test setter at the foot of this file is setLocal.)
+function applyLocal(url) {
+  let host = '';
+  try { host = new URL(url).hostname; } catch (e) { /* ignore */ }
+  local = /^(127\.|localhost$|\[?::1\]?$)/.test(host);
+}
+
 // settings: { url (empty = auto-detect 8188, then 8000) }
 let timers = [];
 let runsLoaded = false;
@@ -356,7 +424,7 @@ function stop() {
   timers = [];
   procstats.unwatch('comfyui');
   procstats.unattest('comfyui');   // AI_SCOPE-083: an uninstalled scope stops claiming history (like 081 / 082)
-  base = null; online = false; current = null; pending = 0; lastError = null;
+  base = null; online = false; current = null; pending = 0; lastError = null; local = false;   // 130: no base, no claim about where it was
 }
 
 // state for the page
@@ -376,6 +444,7 @@ function getState(limit, since) {
   return {
     online: online,
     url: base,
+    local: local,          // AI_SCOPE-130 (the 128 D2 rule, as 129 applied it): another PC is reachable but unmeasurable
     error: lastError,
     pending: pending,
     current: current ? {
@@ -391,6 +460,12 @@ function getState(limit, since) {
     // Hardware card names / totals, the shape ollamastats.js / llamacppstats.js send (081 / 082).
     processHistory: procstats.history('comfyui', since || 0),
     processCards: hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; }),
+    // AI_SCOPE-130 (121's shape, as 128 / 129 send it): the session accrual for this family (the Activity tile's
+    // live rate and the Total lens's "Session start") plus the per-day buckets built over the SAVED runs (the Total
+    // lens's "Days"). Joules only - the $/kWh price is applied at draw time (121 D5), and the buckets count a run
+    // with no energy as a miss, never as 0 Wh. This route has no offline early return, so both ride every payload.
+    cost: procstats.cost('comfyui'),
+    costDays: reqstats.costDayBuckets(runs),
     totalRuns: runs.length,
     runs: runs.slice(-limit).reverse(),
   };
@@ -412,4 +487,14 @@ function proxyImage(query, res) {
 }
 
 module.exports = { start: start, stop: stop, getState: getState, getModels: getModels, proxyImage: proxyImage,
-                   _test: { summarize: summarize, historyToRun: historyToRun, RE_TQDM: RE_TQDM, parseLogTime: parseLogTime } };
+  _test: { summarize: summarize, historyToRun: historyToRun, RE_TQDM: RE_TQDM, parseLogTime: parseLogTime,
+    // AI_SCOPE-130 (the 128 / 129 precedent): the energy stamp, the saved-run read map (the D9 retirement path),
+    // the shipped save wait, the store and the live ring, plus the local flag - so a probe can put lines through
+    // the real read/write path with no server, no ComfyUI and no timers left running. ComfyUI's store predates
+    // reqstore (094) and its rows are RUNS, so the shipped names differ; mapReqRow / saveRequest are the aliases
+    // the shared cost-shape suites drive.
+    attachEnergy: attachEnergy, mapReqRow: mapRunRow, mapRunRow: mapRunRow, later: later, saveRequest: saveRun, saveRun: saveRun,
+    loadRuns: loadRuns, energyVer: function () { return ENERGY_VER; },
+    store: { load: loadRuns, append: saveRun, rows: function () { return runs; }, file: RUNS_FILE, max: MAX_RUNS_IN_MEMORY },
+    requests: runs, runs: runs,
+    isLocal: function () { return local; }, setLocal: function (v) { local = !!v; } } };

@@ -21,6 +21,34 @@ defineSource('comfyui', '/api/comfy?limit=100', null, null, null, 'processHistor
 const COMFYUI_MIRROR = defineMirror({ key: 'comfyui', name: 'ComfyUI', letter: 'c' });
 defineSource('comfyui.models', '/api/comfy/models', 'comfyui', 5000);
 
+// ---------- GPU cost lenses (AI_SCOPE-130) ----------
+// The pair 121 shipped for Strata, 127 for Bionic, 128 for llama.cpp and 129 for Ollama, on the shared
+// defineGpuCost helper: comfyui.costact / comfyui.costtotal, riding the SAME server-side accrual keyed to the
+// 'comfyui' family (procstats has charged that key since 083's history ran for it; the mirror tiles above already
+// carry 122's gpus[i].w). ComfyUI keeps a real saved run history (comfy-runs.jsonl), so the per-run energy is
+// stamped when the row is SAVED (121's way, not 127's read-time attach) and the figures outlive a restart:
+// /api/comfy sends cost + costDays built over the saved 1000-run ring.
+// Family choice needs no decision here the way 128's D1 did: 083's watch is one family (the python.exe owner of
+// ComfyUI's port plus its whole descendant tree), so one accrual prices the tiles, the two lenses and every Runs row.
+// The 'local' flag (128's D2, carried to a second scope by 129): the scope's url setting can point at another PC,
+// whose processes this AI_SCOPE can never measure, so that reads "on another PC - not measurable here" honestly
+// instead of calling a reachable server "ComfyUI Offline".
+// stateWords carries only 'off', and that is not an oversight: 083's decision 2A attests live / off and nothing
+// else - an idle-but-reachable ComfyUI keeps its last checkpoint resident in VRAM, so an 'idle' attestation would
+// paint heartbeat zeros over a real holding, 'loading' sits inside a job that is already live, and 'unloading' /
+// 'failed' have no honest signal in ComfyUI's API. All recorded absent, not invented (081 / 082's precedent), so
+// the two states that can appear on this tile are the two that are worded here.
+defineGpuCost({
+  key: 'comfyui', name: 'ComfyUI', letter: 'c',
+  stateWords: { off: 'ComfyUI Offline' },
+  online: d => d.online && d.local !== false,
+  downSub: d => d.online ? 'on another PC \u2014 not measurable here' : 'ComfyUI Offline',
+  daysClause: 'Cost Range "Days" sums the SAVED ComfyUI runs whose end falls in the window - the only energy record that outlives a restart, and no more complete than the 1000-run ring AI_SCOPE keeps (a run becomes a row only when ComfyUI reports it in its own history) - so it counts run energy and nothing else, and rows whose window nothing was measured inside count as nothing.',
+  daysShort: 'the saved ComfyUI runs of the last N days',
+  rangeTip: 'Session start: every measured GPU watt this AI_SCOPE server has attributed to ComfyUI (its python.exe process tree) since it booted. Days: the saved ComfyUI runs within the last N days (runs persist across restarts; GPU work outside a run - a checkpoint held resident in VRAM between jobs - is not in that sum).',
+  daysNumTip: 'How many days back to sum (calendar days, today included), from the saved ComfyUI runs AI_SCOPE still holds. Its ring keeps the last 1000 runs, so a long range can only reach back as far as they do.',
+});
+
 // ---------- Current run ----------    (AI_SCOPE-088: the user's label rename - "Current job" → "Current run")
 defineLens({
   id: 'comfyui.current', scope: 'comfyui', size: 'wide',
@@ -78,6 +106,21 @@ defineLens({
 });
 
 // ---------- Runs ----------
+// AI_SCOPE-130: the two cost columns. The CELLS are the shared ones (lens.js REQ_COLS.energy / .cost), not a
+// ComfyUI copy - same ≈ marker from the row's own provenance, same Wh / $ formatting priced at draw time, same
+// honesty note - with this spec object naming the scope (127's o.app) and the subject (130's o.unit / o.span:
+// a diffusion run, not a token request). The Runs table keeps its own columns, because a workflow run has no
+// tokens to sit in the 094 uniform block, so only these two cells are borrowed and the note is never written twice.
+// A ComfyUI row always closes its own window when ComfyUI stamps execution_start; the one gap reason that is NOT
+// the shared note's is a history item without that stamp, so titleOf names only that (the reqTip rule: a scope's
+// own title adds to the honesty notes, it can never silence them).
+const COMFY_RUNS = {
+  app: 'ComfyUI', unit: 'run',
+  span: 'ComfyUI\u2019s own execution_start \u2192 execution_success stamps, steps and every other node alike \u2014 a checkpoint loaded before the job was queued is not included',
+  titleOf: (key, r) => key === 'energy' && r.energyWs == null && r.start == null
+    ? energyNote(r, COMFY_RUNS) + ' This run carries no execution_start stamp in ComfyUI\u2019s history, so its window is not known and nothing was integrated.'
+    : null
+};
 defineLens({
   id: 'comfyui.runs', scope: 'comfyui', size: 'full',
   name: 'Runs',
@@ -85,7 +128,7 @@ defineLens({
   settings: [PER_PAGE_FIELD],
   markup: tableLensMarkup({ title:'Runs', hint:'', pager:true,
     foot: '\n      <div class="err" data-k="err" hidden></div>',
-    cols:['Finished', 'Model', 'Size', 'Steps', 'Sampler', 'Run time', 'Peak load', 'Status', 'Images'] }),
+    cols:['Finished', 'Model', 'Size', 'Steps', 'Sampler', 'Run time', 'Peak load', 'Status', 'Images', 'Power Usage', 'Total Cost'] }),
   render(L, d) {
     const $ = L.$;
     $('err').hidden = d.runs.length > 0;
@@ -104,7 +147,9 @@ defineLens({
         '<td class="tps">' + fmtDur(r.durationMs) + '</td>' +
         peakCell(r.peak) +
         '<td><span class="status ' + escH(r.status) + '" title="' + escH(r.error || '') + '">' + escH(r.status) + '</span></td>' +
-        '<td><div class="thumbs">' + (thumbs || '<span class="more">—</span>') + '</div></td></tr>';
+        '<td><div class="thumbs">' + (thumbs || '<span class="more">—</span>') + '</div></td>' +
+        // AI_SCOPE-130: the two shared cost cells, last, exactly as 127-129 place them in their tables
+        REQ_COLS.energy.td(r, COMFY_RUNS) + REQ_COLS.cost.td(r, COMFY_RUNS) + '</tr>';
     }), $('pager'), L.settings.perPage).join('');
     rowsDrawn(L);
   },
@@ -168,4 +213,6 @@ defineLens({
 });
 
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
-defineScopeLayout('comfyui', () => layoutOf([{ lens: 'comfyui.current', settings: { width: 'full' } }, 'comfyui.runs', 'comfyui.installed']).concat(COMFYUI_MIRROR.layout()));   // AI_SCOPE-083: mirror family tail
+// AI_SCOPE-130 (user, 2026-11-10): the cost pair takes a NEW ROW after the Installed models lens, not a place at
+// the end of an existing one - the mirror tail keeps breaking after it, as 083 left it.
+defineScopeLayout('comfyui', () => layoutOf([{ lens: 'comfyui.current', settings: { width: 'full' } }, 'comfyui.runs', 'comfyui.installed', { lens: 'comfyui.costact', settings: {}, row: true }, 'comfyui.costtotal']).concat(COMFYUI_MIRROR.layout()));   // AI_SCOPE-083: mirror family tail

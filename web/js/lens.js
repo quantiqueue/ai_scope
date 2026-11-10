@@ -377,8 +377,14 @@ function reqTip(o, key, r, fallback) {
 // note names THIS scope (REQ config o.app) - the columns are shared machinery now, the sentence is not.
 function energyNote(r, o) {
   const app = (o && o.app) || 'the app';
-  return 'Electricity this request asked of the GPUs: each card\u2019s live board power \u00d7 ' + app + '\u2019s share of that card\u2019s GPU usage, summed and integrated across the request window (prompt read + generation \u2014 the model load before it is not included). On an NVIDIA card that share is measured per process by nvidia-smi (its SM time on that card, over the SM time of every process on it); where nvidia-smi cannot speak for a card, Windows\u2019 GPU counters and the card\u2019s own usage figure are used instead. Board power is a whole-device measurement, so this is an estimate and wears \u2248; it is stored as energy, so the price never changes it. A row with no figure was saved before this measurement existed, or under a version of it that has since been corrected \u2014 the two are never mixed in one number.'
-    + (r.energyPartial ? ' Only the part of this request inside AI_SCOPE\u2019s one-hour energy trail was covered, so the number is a floor.' : '')
+  // AI_SCOPE-130: the two words that name WHAT the figure covers come from the scope as well (the 127 rule: the
+  // columns are shared machinery, the sentence is not). An LLM scope integrates a request window; the ComfyUI
+  // rows are diffusion runs, so "prompt read + generation" would be a false description of one. Both defaults
+  // keep the four shipped scopes word for word.
+  const unit = (o && o.unit) || 'request';
+  const win = (o && o.span) || 'prompt read + generation \u2014 the model load before it is not included';
+  return 'Electricity this ' + unit + ' asked of the GPUs: each card\u2019s live board power \u00d7 ' + app + '\u2019s share of that card\u2019s GPU usage, summed and integrated across the ' + unit + ' window (' + win + '). On an NVIDIA card that share is measured per process by nvidia-smi (its SM time on that card, over the SM time of every process on it); where nvidia-smi cannot speak for a card, Windows\u2019 GPU counters and the card\u2019s own usage figure are used instead. Board power is a whole-device measurement, so this is an estimate and wears \u2248; it is stored as energy, so the price never changes it. A row with no figure was saved before this measurement existed, or under a version of it that has since been corrected \u2014 the two are never mixed in one number.'
+    + (r.energyPartial ? ' Only the part of this ' + unit + ' inside AI_SCOPE\u2019s one-hour energy trail was covered, so the number is a floor.' : '')
     + (r.energyWs == null ? ' A row saved before this column existed, or one with no measurement inside its window, is a gap - never a zero.' : '');
 }
 function costNote(r) {
