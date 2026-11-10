@@ -32,46 +32,64 @@ const MAX_BODY_CAPTURE = 4 * 1024 * 1024;                // request bodies bigge
 const TRACKED = /^\/(api\/(generate|chat)|v1\/(chat\/)?completions)$/;
 
 let online = false;
+// AI_SCOPE-129 (128's D2, applied to this scope): is that Ollama on THIS PC? Only a local one has processes
+// AI_SCOPE can measure, so a reachable server on another machine is worded "not measurable here" by the GPU cost
+// lenses (and by 124's power tiles when they land) instead of "Ollama Offline" - and never shows a number.
+let local = false;
 let version = null;
 let lastError = null;
 let loaded = [];
 let installed = [];
 let tagsAt = 0;
 let proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null };
+// AI_SCOPE-121 (D9), carried to this scope by 129: energyVer stamps WHICH measurement produced an energy figure,
+// so a corrected apportionment can never leave half-numbers mixed into history. Every saved line whose stamp is
+// not the current one loses its energy fields on read (the file is never rewritten - 094's append-only rule), so
+// raising the version retires yesterday's figures without a migration. Same number as Strata's (121), Bionic's
+// (127) and llama.cpp's (128): the measurement is the same accrual, keyed to this scope's family.
+const ENERGY_VER = 2;
+// Read-side field map for every line in the history file (094: never rewritten, so this map is permanent).
+// Named (129, the 121/128 precedent) so a probe can put saved lines through the shipped read path without the
+// app, its routes or its file.
+// AI_SCOPE-094 slice 2: the saved lines from before the rename carry the old names; map them on read.
+function mapReqRow(r) {
+  const hadSrc = r.src !== undefined;                 // rows written after slice 4 need no back-fill
+  if (r.genTokens !== undefined) { r.outputTokens = r.genTokens; delete r.genTokens; }
+  if (r.totalMs !== undefined) { r.durationMs = r.totalMs; delete r.totalMs; }
+  if (r.ttftMs !== undefined) { r.firstTokenMs = r.ttftMs; delete r.ttftMs; }
+  // slice 4: the old boolean dialects become provenance entries on read.
+  const P = reqstats.PROV;
+  if (r.measured) {
+    reqstats.setProv(r, 'genMs', P.DERIVED); reqstats.setProv(r, 'promptMs', P.DERIVED);
+    reqstats.setProv(r, 'durationMs', P.DERIVED);
+  }
+  if (r.genDerived) reqstats.setProv(r, 'genTps', P.DERIVED);
+  if (r.promptDerived) reqstats.setProv(r, 'promptTps', P.DERIVED);
+  if (r.firstTokenDerived) reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
+  ['measured', 'genDerived', 'promptDerived', 'firstTokenDerived'].forEach(k => { delete r[k]; });
+  // And lines saved before any of those flags existed: Ollama never reported a speed or a
+  // first-token time, so every one of those numbers on an old line is ours.
+  if (!hadSrc) {
+    if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
+    if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
+    if (r.firstTokenMs != null) reqstats.setProv(r, 'firstTokenMs', P.DERIVED);
+  }
+  // AI_SCOPE-121 D9 (via 129): energy measured by a superseded apportionment is not history, it is a wrong
+  // measurement. Drop the fields and the row reads as "no energy recorded" - a dash in the two Requests
+  // columns, nothing summed in the Days range - rather than a number nobody can defend.
+  if (r.energyWs != null && r.energyVer !== ENERGY_VER) { delete r.energyWs; delete r.energyPartial; }
+  return r;
+}
 // One store, one file, this scope's own 1000-row ring. Ollama reports cached prompt tokens natively
 // since 0.33.3 (prompt_eval_cached_count - AI_SCOPE-102 fills the 094 Cached/Prompt-read fields from it;
 // there is no row-identity map to keep), so its store takes the default accept; the load only reseeds nextId.
 const store = reqstore.createStore({
   file: REQ_FILE,
   accept: function (r) { return !isEmptyCall(r); },      // load filter: skip Ollama load/unload calls
-  resortOnAppend: false,                                 // Ollama appends in arrival order (unchanged)
+  resortOnAppend: false,                                 // Ollama appends in arrival order (unchanged; see later())
   onError: function (msg) { lastError = msg; },
   onLoaded: function (rows) { rows.forEach(function (r) { if (r.id >= nextId) nextId = r.id + 1; }); },
-  // AI_SCOPE-094 slice 2: the saved lines from before the rename carry the old names; map them on read.
-  mapRow: function (r) {
-    const hadSrc = r.src !== undefined;                 // rows written after slice 4 need no back-fill
-    if (r.genTokens !== undefined) { r.outputTokens = r.genTokens; delete r.genTokens; }
-    if (r.totalMs !== undefined) { r.durationMs = r.totalMs; delete r.totalMs; }
-    if (r.ttftMs !== undefined) { r.firstTokenMs = r.ttftMs; delete r.ttftMs; }
-    // slice 4: the old boolean dialects become provenance entries on read.
-    const P = reqstats.PROV;
-    if (r.measured) {
-      reqstats.setProv(r, 'genMs', P.DERIVED); reqstats.setProv(r, 'promptMs', P.DERIVED);
-      reqstats.setProv(r, 'durationMs', P.DERIVED);
-    }
-    if (r.genDerived) reqstats.setProv(r, 'genTps', P.DERIVED);
-    if (r.promptDerived) reqstats.setProv(r, 'promptTps', P.DERIVED);
-    if (r.firstTokenDerived) reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
-    ['measured', 'genDerived', 'promptDerived', 'firstTokenDerived'].forEach(k => { delete r[k]; });
-    // And lines saved before any of those flags existed: Ollama never reported a speed or a
-    // first-token time, so every one of those numbers on an old line is ours.
-    if (!hadSrc) {
-      if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
-      if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
-      if (r.firstTokenMs != null) reqstats.setProv(r, 'firstTokenMs', P.DERIVED);
-    }
-    return r;
-  }
+  mapRow: mapReqRow
 });
 const requests = store.rows();   // newest last — the store mutates this array in place
 const inflight = {};
@@ -108,6 +126,33 @@ function isEmptyCall(r) {
   return r.status === 'ok' && !r.outputTokens && !r.promptTokens && !r.thinkTokens;
 }
 function saveRequest(r) { store.append(r); }
+// AI_SCOPE-129 (121's save-time stamping, the 128 shape - not 127's read-time attach): the energy this request
+// asked of the cards, integrated over the WHOLE request [start, end] - prompt read and generation, never the
+// model load before it - from the SAME accrual the two Cost lenses and the mirror tiles ride, keyed to the app
+// family 'ollama'. Ollama has no per-model procstats keys (081's watch is the model runners under the port
+// owner, one family), so one accrual prices the tiles, the two lenses and every row with no split to choose.
+// Stored as JOULES, priced at draw time; a row whose window no accrued chunk covers gets no field (a gap, never
+// a zero); one reaching back past the trail is a floor and says so; provenance estimated (board power is a
+// device measurement).
+function attachEnergy(row) {
+  if (!row || row.start == null || row.end == null) return;
+  const en = procstats.energyBetween('ollama', row.start, row.end);
+  if (!en || en.n <= 0) return;                     // nothing measured inside the window: no fields, a gap
+  row.energyWs = Math.round(en.ws * 10) / 10;
+  if (en.partial) row.energyPartial = true;
+  row.energyVer = ENERGY_VER;                       // 121 D9: which measurement produced these joules
+  reqstats.setProv(row, 'energyWs', reqstats.PROV.ESTIMATED);
+}
+// Save a few seconds after the end so the 2 s samples covering it exist (the 121/128 save rule). The wait is
+// load-bearing here, not inherited decoration: a chunk is charged when procstats AGGREGATES the sample that
+// ends it, which can land after the request finished - integrating at finish time would miss that tail. Equal-
+// delay timers fire in creation order, so rows still reach the store in end order (resortOnAppend stays false).
+function later(row) {
+  setTimeout(function () {
+    attachEnergy(row);   // AI_SCOPE-129
+    saveRequest(row);
+  }, 3000);
+}
 
 // ---------- polling Ollama's API ----------
 function poll() {
@@ -330,7 +375,9 @@ function finish(rec, aborted) {
   r.promptTps = pDiv && r.promptMs ? pDiv / (r.promptMs / 1000) : null;
   if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
   r.peak = hwstats.peakBetween(r.start, end + 2000);   // whole-PC peak GPU/VRAM/CPU/RAM while it ran
-  if ((r.status === 'ok' || rec.tokens || r.error) && !isEmptyCall(r)) saveRequest(r);
+  // AI_SCOPE-129 (D3): the save goes through later(), which stamps the row's energy first (121/128's rule), so a
+  // finished request reaches the table about 3 s after it ends - as the llama.cpp scope already behaves.
+  if ((r.status === 'ok' || rec.tokens || r.error) && !isEmptyCall(r)) later(r);
   if (r.model !== 'unknown' && !installed.some(function (m) { return m.name === r.model; })) tagsAt = 0;
 }
 
@@ -486,6 +533,16 @@ function getState(limit, vram, since, cur) {
     // AI_SCOPE-081: the Hardware Mirror Lens family (web/js/mirror.js) also needs the 5-minute process history
     // and the Hardware card names / totals, like stratastats / the /api/bionic route send for Strata / Bionic.
     processHistory: procstats.history('ollama', since || 0),
+    // AI_SCOPE-129 (128's D2, applied here): is that Ollama on THIS PC? Only a local one has processes AI_SCOPE
+    // can measure, so the cost lenses word a reachable remote server as unmeasurable rather than offline.
+    local: local,
+    // AI_SCOPE-129: the GPU cost pair (ollama.costact / ollama.costtotal) rides the SAME per-family accrual
+    // /api/strata (121), /api/bionic (127) and /api/llamacpp (128) send, keyed to 'ollama'. Days buckets are
+    // built over the SAVED rows - Ollama keeps a request store, so those figures outlive a restart, which is
+    // what Bionic's log rows cannot do. There is no offline early return on this route (getState answers whole),
+    // so the family fields ride every payload, the 082/093 rule satisfied by construction.
+    cost: procstats.cost('ollama'),
+    costDays: reqstats.costDayBuckets(requests),
     processCards: hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; }),
     totalRequests: requests.length, rows: requests.slice(-(limit || 100)).reverse(),
   };
@@ -498,6 +555,9 @@ function start(settings) {
   settings = settings || {};
   OLLAMA_URL = String(settings.url || 'http://127.0.0.1:11434').replace(/\/+$/, '');
   UP = new URL(OLLAMA_URL);
+  // AI_SCOPE-129 (128's D2): the same loopback test llamacppstats.js uses - anything else is another machine's
+  // Ollama, whose processes this AI_SCOPE can never measure.
+  local = /^(127\.|localhost$|\[?::1\]?$)/.test(UP.hostname);
   PROXY_PORT = parseInt(settings.proxyPort, 10) || 11435;
   proxy = { host: PROXY_HOST, port: PROXY_PORT, listening: false, error: null };
   tagsAt = 0;
@@ -517,4 +577,10 @@ function stop() {
   online = false; loaded = []; lastError = null;
 }
 
-module.exports = { start: start, stop: stop, getState: getState, currentRequest: currentRequest, samplePerf: samplePerf, tpsHistorySince: tpsHistorySince, getPromptAverage: getPromptAverage };
+module.exports = { start: start, stop: stop, getState: getState, currentRequest: currentRequest, samplePerf: samplePerf, tpsHistorySince: tpsHistorySince, getPromptAverage: getPromptAverage,
+  // AI_SCOPE-129 (the 121/128 precedent): the energy stamp, the saved-row read map (the D9 retirement path), the
+  // shipped save wait and the store itself, so a probe can put lines through the real read/write path with no
+  // server, no relay and no timers waiting; plus the local flag, so a payload probe can set it deterministically.
+  _test: { attachEnergy: attachEnergy, mapReqRow: mapReqRow, later: later, saveRequest: saveRequest,
+    energyVer: function () { return ENERGY_VER; }, store: store, requests: requests,
+    isLocal: function () { return local; }, setLocal: function (v) { local = !!v; } } };
