@@ -12,23 +12,23 @@ defineSource('bionic.models', '/api/bionic/models', 'bionic');
 // 'b' prefixes (bgp*/ bram_* / bcpu / bio), so each tile hovers over Bionic's own history.
 const BIONIC_MIRROR = defineMirror({ key: 'bionic', name: 'Bionic', letter: 'b' });
 
-// ---------- GPU cost lenses (AI_SCOPE-127) ----------
+// ---------- GPU cost lenses (AI_SCOPE-127, the store from 131) ----------
 // The pair 121 shipped for Strata, re-homed onto the shared defineGpuCost helper. The energy rides the SAME
 // server-side accrual keyed to the 'bionic' family (procstats ran it for Bionic since 121 - the mirror
 // history already carries gpus[i].w from 122); the /api/bionic route adds cost / costDays like /api/strata.
-// Only the wording differs from Strata's: Bionic has no request STORE of its own - its Requests rows are
-// parsed from Bionic's server log files (lmstats.js), and energy is attached to a row once, while the
-// request is still inside the session's one-hour trail (the 094 attachPeak pattern). After a restart, log
-// rows older than the fresh trail count as gaps - which is exactly what these tips say, never a hidden hole.
+// Only the wording differs from Strata's: Bionic feeds its store from its own server log (lmstats.js,
+// AI_SCOPE-131) and energy is stamped once at SAVE, 128-style. The saved figures survive a restart - only
+// a request that closed while AI_SCOPE was not measuring stays a gap forever, which is exactly what these
+// tips say, never a hidden hole.
 defineGpuCost({
   key: 'bionic', name: 'Bionic', letter: 'b',
   stateWords: { off: 'Bionic Offline', idle: 'No Model Loaded', loading: 'Loading\u2026',
     unloading: 'Unloading\u2026', failed: 'Load failed' },
   online: () => !bionicOffline(), downSub: () => 'Bionic Offline',
-  daysClause: 'Cost Range "Days" sums the Bionic requests AI_SCOPE has read from its server log whose end falls in the window - the log reaches back as far as Bionic writes it, but a row carries energy only for a request AI_SCOPE was running and measuring while it ended (at most the last 1000 rows read) - so it counts request energy and nothing else, and rows whose window nothing was measured inside count as nothing.',
-  daysShort: 'the Bionic requests AI_SCOPE read from the log in the last N days',
-  rangeTip: 'Session start: every measured GPU watt this AI_SCOPE server has attributed to Bionic since it booted. Days: the Bionic log rows ending within the last N days that carry measured energy (the log rows persist across restarts, energy figures do not; GPU work outside a request is not in that sum).',
-  daysNumTip: 'How many days back to sum (calendar days, today included), from the Bionic log rows AI_SCOPE has read this session. It looks back over at most the last 1000 logged requests, and only rows whose window was measured while AI_SCOPE ran carry energy - after a restart, older rows count as gaps.',
+  daysClause: 'Cost Range "Days" sums the Bionic requests AI_SCOPE has saved in its own request store whose end falls in the window - the store is fed from Bionic\'s server log, at most the last 1000 requests AI_SCOPE has read - but a row carries energy only for a request AI_SCOPE was running and measuring while it ended (a saved figure survives restarts; a row it never measured never gets one) - so it counts request energy and nothing else, and rows whose window nothing was measured inside count as nothing.',
+  daysShort: 'the saved Bionic requests ending within the last N days',
+  rangeTip: 'Session start: every measured GPU watt this AI_SCOPE server has attributed to Bionic since it booted. Days: the saved Bionic request rows ending within the last N days that carry measured energy (the rows and their figures persist across restarts; GPU work outside a request is not in that sum).',
+  daysNumTip: 'How many days back to sum (calendar days, today included), from the Bionic requests AI_SCOPE has saved. It looks back over at most the last 1000 saved rows, and only rows whose window was measured while AI_SCOPE ran carry energy - rows it never measured are and stay gaps.',
 });
 
 // ---------- Current request (AI_SCOPE-100: the shared card engine) ----------
@@ -150,7 +150,7 @@ const BIONIC_REQ = {
 defineLens({
   id: 'bionic.requests', scope: 'bionic', size: 'full',
   name: 'Requests',
-  description: 'Finished requests from Bionic\'s server logs: tokens, speeds, first token, duration, peak load, and the GPU energy each one cost with its price (measured only for rows that ran while AI_SCOPE was).',
+  description: 'Finished requests, saved by AI_SCOPE from Bionic\'s server logs: tokens, speeds, first token, duration, peak load, and the GPU energy each one cost with its price (measured once, when the request was saved, and only if AI_SCOPE was running then; saved figures persist across restarts).',
   settings: [PER_PAGE_FIELD],
   markup: reqTableMarkup(BIONIC_REQ),
   render(L, data) {
