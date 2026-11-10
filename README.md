@@ -20,7 +20,7 @@ AI_SCOPE is a dashboard for the AI apps on your own PC. It shows what your local
 - **Live and after the fact.** While something runs you see its speed, tokens and progress. Afterwards, every request and run is in a table with its speed, peak load, and — since 0.5.8 — the GPU energy it used and what that cost.
 - **Each app's own hardware use.** GPU %, VRAM per graphics card, CPU and RAM for the app's own process, plus an estimated **GPU Power** wattage per card, as tiles on every app page next to whole-PC **Hardware** and **Processes** scopes.
 - **Token speed and context, per app.** Gen / prompt tok/s and context tiles on the LLM scopes (Strata also a prompt-cache hit rate), beside each app's current-request card and request table.
-- **What the GPUs cost.** Two money tiles per app — the live hourly rate of its GPU work and a total over the session or the last days — and a **Power Usage** / **Total Cost** pair on every saved request and run. The energy is measured while it runs (estimated per card: board watts × the app's share); the $/kWh price lives in Settings and is applied at draw time, so correcting it re-prices the history.
+- **Realtime energy costs.** Monitor how much an app is costing you when it uses your GPU, and keep an eye on daily and monthly energy costs.
 - **Your own views.** Custom scopes put lenses from any app side by side, and every page can be rearranged.
 - **Light and private.** One install line, no admin rights, no account, no cloud, no telemetry. Settings and history are plain JSON files in `~/.ai_scope` ([where the data comes from](manual/DATA_SOURCE.md)).
 
