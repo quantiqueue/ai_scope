@@ -11,7 +11,10 @@ defineSource('ollama', '/api/ollama?limit=100', null, null, null, 'processHistor
 // not-yet-loaded model (decision 2C2) - Ollama's API has no 'unloading' / 'failed' signal, recorded not invented.
 // Tile-id letter 'o' (<letter>gp / <letter>ram_ / <letter>cpu / <letter>io), kept free of 's' (Strata) / 'b'
 // (Bionic) so saved layouts resolve.
-const OLLAMA_MIRROR = defineMirror({ key: 'ollama', name: 'Ollama', letter: 'o' });
+// AI_SCOPE-124: Ollama opts into the GPU Power mirror ({ power: true }, the 122/123 pattern) — lens
+// ollama.power, tiles opw<card>, hover prefix opw. The watts are already stamped on Ollama's history points by
+// procstats for every family (122), so nothing on the server changes; this is the wiring, the wording and the row.
+const OLLAMA_MIRROR = defineMirror({ key: 'ollama', name: 'Ollama', letter: 'o', power: true });
 
 // ---------- GPU cost lenses (AI_SCOPE-129) ----------
 // The pair 121 shipped for Strata, 127 for Bionic and 128 for llama.cpp, on the shared defineGpuCost helper:
@@ -401,6 +404,17 @@ document.getElementById('oHeadHelpBtn').addEventListener('click', e => {
 // AI_SCOPE-107: default = the user's saved page (2026-11-04): requests, loaded and installed rows
 // below the card, then the token row (102) above the mirror tail (081) - no extra saved settings on these rows.
 // AI_SCOPE-129 (D2 of 121, the 127/128 placement): the cost row sits where Strata's, Bionic's and llama.cpp's
-// does - after the token-performance row, GPU Cost Activity leading and GPU Total Cost beside it - and 124's
-// power tiles will later take the left end of that row. The mirror tail follows, unchanged.
-defineScopeLayout('ollama', () => layoutOf([{ lens: 'ollama.current', settings: { width: 'full' } }, { lens: 'ollama.requests', settings: {}, row: true }, { lens: 'ollama.loaded', settings: {}, row: true }, { lens: 'ollama.installed', settings: {}, row: true }, { lens: 'ollama.tps', settings: {}, row: true }, 'ollama.ptps', 'ollama.ctx', { lens: 'ollama.costact', settings: {}, row: true }, 'ollama.costtotal']).concat(OLLAMA_MIRROR.layout()));
+// does - after the token-performance row, GPU Cost Activity leading and GPU Total Cost beside it. The mirror
+// tail follows, unchanged.
+// AI_SCOPE-124 (2026-11-10): one GPU Power tile PER DETECTED CARD now leads that row, left of Cost Activity, and
+// the row-start flag moves to the first power tile (the user's placement: the same pattern as 122 / 123). The
+// lens itself lives in mirror.js behind defineMirror's { power: true }; the default carries it in the cost row,
+// NOT in the mirror tail.
+defineScopeLayout('ollama', () => {
+  const cards = ((SOURCES.ollama && SOURCES.ollama.data) || {}).processCards || [];
+  const items = [{ lens: 'ollama.current', settings: { width: 'full' } }, { lens: 'ollama.requests', settings: {}, row: true }, { lens: 'ollama.loaded', settings: {}, row: true }, { lens: 'ollama.installed', settings: {}, row: true }, { lens: 'ollama.tps', settings: {}, row: true }, 'ollama.ptps', 'ollama.ctx'];
+  for (let i = 0; i < Math.max(1, cards.length); i++)
+    items.push({ lens: 'ollama.power', settings: { card: i }, row: i === 0 });   // machine-dependent entries loop over detected hardware, never literal indices (107's rule)
+  items.push({ lens: 'ollama.costact' }, 'ollama.costtotal');
+  return layoutOf(items).concat(OLLAMA_MIRROR.layout());   // layoutOf ONCE over the complete list (122's bug: pushing raw strings after it kills the render)
+});
