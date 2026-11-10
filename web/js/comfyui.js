@@ -18,7 +18,13 @@ defineSource('comfyui', '/api/comfy?limit=100', null, null, null, 'processHistor
 // over a real holding; 'loading' sits inside an already-live running job, and 'unloading' / 'failed' have no
 // honest signal - all recorded absent, not invented. Tile-id letter 'c', distinct from 's' / 'b' / 'o' / 'l' so
 // saved layouts resolve.
-const COMFYUI_MIRROR = defineMirror({ key: 'comfyui', name: 'ComfyUI', letter: 'c' });
+// AI_SCOPE-126: ComfyUI opts into the GPU Power mirror ({ power: true }, the 122/123/124/125 pattern) — lens
+// comfyui.power, tiles cpw<card>, hover prefix cpw (checked beside the registered 'c' prefixes: cgp, ccpu,
+// cram_, cio, ccostact, ccosttot — no first-prefix collision with cpw/cpw0/cpw1). The watts are already stamped
+// on ComfyUI's history points by 122's pushHist; only the attested-zero face differs by scope: ComfyUI attests
+// live / off only (083 D2A), so 0 W with state wording rides 'off' ("ComfyUI Offline · <card>"), and a
+// reachable idle ComfyUI is live and carries real readings (080: a found family reads 0 on an unused card).
+const COMFYUI_MIRROR = defineMirror({ key: 'comfyui', name: 'ComfyUI', letter: 'c', power: true });
 defineSource('comfyui.models', '/api/comfy/models', 'comfyui', 5000);
 
 // ---------- GPU cost lenses (AI_SCOPE-130) ----------
@@ -215,4 +221,15 @@ defineLens({
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 // AI_SCOPE-130 (user, 2026-11-10): the cost pair takes a NEW ROW after the Installed models lens, not a place at
 // the end of an existing one - the mirror tail keeps breaking after it, as 083 left it.
-defineScopeLayout('comfyui', () => layoutOf([{ lens: 'comfyui.current', settings: { width: 'full' } }, 'comfyui.runs', 'comfyui.installed', { lens: 'comfyui.costact', settings: {}, row: true }, 'comfyui.costtotal']).concat(COMFYUI_MIRROR.layout()));   // AI_SCOPE-083: mirror family tail
+// AI_SCOPE-126 (2026-11-10): one GPU Power tile PER DETECTED CARD now leads that row, left of Cost Activity, and
+// the row-start flag moves to the first power tile (the user's placement: the same pattern as 122 / 123 / 124 / 125).
+// The lens itself lives in mirror.js behind defineMirror's { power: true }; the default carries it in the cost row,
+// NOT in the mirror tail.
+defineScopeLayout('comfyui', () => {
+  const cards = ((SOURCES.comfyui && SOURCES.comfyui.data) || {}).processCards || [];
+  const items = [{ lens: 'comfyui.current', settings: { width: 'full' } }, 'comfyui.runs', 'comfyui.installed'];
+  for (let i = 0; i < Math.max(1, cards.length); i++)
+    items.push({ lens: 'comfyui.power', settings: { card: i }, row: i === 0 });   // machine-dependent entries loop over detected hardware, never literal indices (107's rule)
+  items.push({ lens: 'comfyui.costact' }, 'comfyui.costtotal');
+  return layoutOf(items).concat(COMFYUI_MIRROR.layout());   // layoutOf ONCE over the complete list (122's bug: pushing raw strings after it kills the render)
+});
