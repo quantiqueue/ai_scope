@@ -6,7 +6,7 @@
 // picker, RAM with Show (Working / Committed, each with its own ceiling), CPU with no settings, I/O without a
 // disk picker (one number per process, not per drive) — and no PCIe mirror, which has no per-process equivalent.
 // A GPU Power mirror exists since AI_SCOPE-122 but is OPT-IN per scope ({ power: true } in the spec; Strata in
-// 122, Bionic in 123, Ollama in 124) - it shows 121's measured per-card apportionment (board watts x the family's share of that
+// 122, Bionic in 123, Ollama in 124, llama.cpp in 125) - it shows 121's measured per-card apportionment (board watts x the family's share of that
 // card), an estimate that wears ≈; TERMINOLOGY's mirror-family section was revised for it. The spec for this
 // family is ~/ai-scope-terminology.md ("Hardware Mirror Lenses"); it moved out of the release docs on
 // 2026-10-29, so the old pointer to "the v0.4 tasks doc" was stale - fixed under 092.

@@ -25,7 +25,12 @@ defineSource('llamacpp', '/api/llamacpp?limit=100', 'llamacpp', 1000, null, 'pro
 // as far as AI_SCOPE can see them without making a router load something, so they are recorded, not invented.
 // Tile-id letter 'l' (<letter>gp / <letter>ram_ / <letter>cpu / <letter>io), kept clear of 's' (Strata), 'b'
 // (Bionic) and 'o' (Ollama) so saved layouts resolve.
-const LLAMACPP_MIRROR = defineMirror({ key: 'llamacpp', name: 'llama.cpp', letter: 'l' });
+// AI_SCOPE-125: llama.cpp opts into the GPU Power mirror ({ power: true }, the 122/123/124 pattern) — lens
+// llamacpp.power, tiles lpw<card>, hover prefix lpw (checked beside the registered 'l' prefixes: it shares only
+// 'lp' with 'lptps' and neither starts the other, so the first-prefix dispatch stays safe). The watts are already
+// stamped on llama.cpp's history points by procstats for every family (122), so nothing on the server changes;
+// this is the wiring, the wording and the row.
+const LLAMACPP_MIRROR = defineMirror({ key: 'llamacpp', name: 'llama.cpp', letter: 'l', power: true });
 
 // ---------- GPU cost lenses (AI_SCOPE-128) ----------
 // The pair 121 shipped for Strata and 127 for Bionic, on the shared defineGpuCost helper. The energy rides the
@@ -412,4 +417,15 @@ MIRROR_HOVER.push({ prefix: 'lctx', fn: (spark, f, guide, tip) => {   // nearest
 // AI_SCOPE-128 (D2 of 121, the 127 placement): the cost row sits where Strata's and Bionic's does - after the
 // token-performance row, GPU Cost Activity leading and GPU Total Cost beside it - and 123's power tiles will
 // later take the left end of that row. The mirror tail follows, unchanged.
-defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, { lens: 'llamacpp.requests', settings: {}, row: true }, { lens: 'llamacpp.slots', settings: {}, row: true }, { lens: 'llamacpp.loaded', settings: {}, row: true }, { lens: 'llamacpp.installed', settings: {}, row: true }, { lens: 'llamacpp.tps', settings: {}, row: true }, 'llamacpp.ptps', 'llamacpp.ctx', { lens: 'llamacpp.costact', settings: {}, row: true }, 'llamacpp.costtotal']).concat(LLAMACPP_MIRROR.layout()));
+// AI_SCOPE-125 (2026-11-10): one GPU Power tile PER DETECTED CARD now leads that row, left of Cost Activity, and
+// the row-start flag moves to the first power tile (the user's placement: the same pattern as 122 / 123 / 124). The
+// lens itself lives in mirror.js behind defineMirror's { power: true }; the default carries it in the cost row,
+// NOT in the mirror tail.
+defineScopeLayout('llamacpp', () => {
+  const cards = ((SOURCES.llamacpp && SOURCES.llamacpp.data) || {}).processCards || [];
+  const items = [{ lens: 'llamacpp.current', settings: { width: 'full' } }, { lens: 'llamacpp.requests', settings: {}, row: true }, { lens: 'llamacpp.slots', settings: {}, row: true }, { lens: 'llamacpp.loaded', settings: {}, row: true }, { lens: 'llamacpp.installed', settings: {}, row: true }, { lens: 'llamacpp.tps', settings: {}, row: true }, 'llamacpp.ptps', 'llamacpp.ctx'];
+  for (let i = 0; i < Math.max(1, cards.length); i++)
+    items.push({ lens: 'llamacpp.power', settings: { card: i }, row: i === 0 });   // machine-dependent entries loop over detected hardware, never literal indices (107's rule)
+  items.push({ lens: 'llamacpp.costact' }, 'llamacpp.costtotal');
+  return layoutOf(items).concat(LLAMACPP_MIRROR.layout());   // layoutOf ONCE over the complete list (122's bug: pushing raw strings after it kills the render)
+});
