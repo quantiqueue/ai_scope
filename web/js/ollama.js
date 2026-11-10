@@ -11,7 +11,34 @@ defineSource('ollama', '/api/ollama?limit=100', null, null, null, 'processHistor
 // not-yet-loaded model (decision 2C2) - Ollama's API has no 'unloading' / 'failed' signal, recorded not invented.
 // Tile-id letter 'o' (<letter>gp / <letter>ram_ / <letter>cpu / <letter>io), kept free of 's' (Strata) / 'b'
 // (Bionic) so saved layouts resolve.
-const OLLAMA_MIRROR = defineMirror({ key: 'ollama', name: 'Ollama', letter: 'o' });
+// AI_SCOPE-124: Ollama opts into the GPU Power mirror ({ power: true }, the 122/123 pattern) — lens
+// ollama.power, tiles opw<card>, hover prefix opw. The watts are already stamped on Ollama's history points by
+// procstats for every family (122), so nothing on the server changes; this is the wiring, the wording and the row.
+const OLLAMA_MIRROR = defineMirror({ key: 'ollama', name: 'Ollama', letter: 'o', power: true });
+
+// ---------- GPU cost lenses (AI_SCOPE-129) ----------
+// The pair 121 shipped for Strata, 127 for Bionic and 128 for llama.cpp, on the shared defineGpuCost helper:
+// ollama.costact / ollama.costtotal, riding the SAME server-side accrual keyed to the 'ollama' family
+// (procstats has charged that key since 081's history ran for it; the mirror tiles above already carry 122's
+// gpus[i].w). Ollama has a real saved request store (the relay writes ollama-requests.jsonl), so the per-request
+// energy is stamped when the row is SAVED (121's way, not 127's read-time attach) and the figures outlive a
+// restart: /api/ollama sends cost + costDays built over the saved 1000-row ring.
+// Family choice needs no decision here the way 128's D1 did: 081's watch is one family (the model runners under
+// the app's own port owner), so the tiles, the two lenses and every row are priced from one trail.
+// The 'local' flag (128's D2): an Ollama URL can point at another PC, whose processes this AI_SCOPE can never
+// measure, so the sub words that honestly instead of calling a reachable server "offline".
+// 'unloading' / 'failed' are deliberately absent from stateWords: Ollama's API reports neither (081's recorded
+// decision - absent, not invented), so the three states it attests are the three that are worded.
+defineGpuCost({
+  key: 'ollama', name: 'Ollama', letter: 'o',
+  stateWords: { off: 'Ollama Offline', idle: 'No Model Loaded', loading: 'Loading\u2026' },
+  online: d => d.online && d.local !== false,
+  downSub: d => d.online ? 'on another PC \u2014 not measurable here' : 'Ollama Offline',
+  daysClause: 'Cost Range "Days" sums the SAVED Ollama requests whose end falls in the window - the only energy record that outlives a restart, and no more complete than the 1000-request ring AI_SCOPE keeps (a request becomes a row only when it went through the AI_SCOPE relay) - so it counts request energy and nothing else, and rows whose window nothing was measured inside count as nothing.',
+  daysShort: 'the saved Ollama requests of the last N days',
+  rangeTip: 'Session start: every measured GPU watt this AI_SCOPE server has attributed to Ollama (its model-runner processes) since it booted. Days: the saved Ollama requests within the last N days (requests persist across restarts; GPU work outside a request is not in that sum, and neither is a request that skipped the relay).',
+  daysNumTip: 'How many days back to sum (calendar days, today included), from the saved Ollama requests AI_SCOPE still holds. Its ring keeps the last 1000 requests, so a long range can only reach back as far as they do.',
+});
 const ollamaProxyUrl = d => 'http://127.0.0.1:' + d.proxy.port;
 // Ollama answered requests that didn't go through the relay (seen by the server: a model loaded or its unload time
 // renewed while the relay was idle). Shown for 15 minutes, or until a request comes through the relay again.
@@ -146,7 +173,10 @@ function ollamaReqTitle(key, r) {
   return null;
 }
 const OLLAMA_REQ = {
-  title: 'Requests', pager: true, extra: ['loadMs'], keyOf: r => r.id, titleOf: ollamaReqTitle,
+  // AI_SCOPE-129: `app` names this scope in the two shared energy-column notes (127's rule), and the energy pair
+  // joins Ollama's own exclusives. No titleOf clauses for 'energy' / 'cost': unlike llama.cpp's quick rows,
+  // every Ollama row has a start and an end, so the only gap reason is the shared note's own.
+  title: 'Requests', pager: true, app: 'Ollama', extra: ['loadMs', 'energy', 'cost'], keyOf: r => r.id, titleOf: ollamaReqTitle,
   headExtra: '\n      <button class="helpbtn" data-k="helpBtn" type="button" title="Why only these requests? How to set it up" aria-expanded="false">?</button>',
   before: '\n      <div class="relaywarn" data-k="warn" hidden><span data-k="warnText"></span> <button type="button" class="linkbtn" data-k="warnHelp">How to set up the relay</button></div>' +
     '\n      <div class="helpcard" data-k="help" hidden></div>',
@@ -373,4 +403,18 @@ document.getElementById('oHeadHelpBtn').addEventListener('click', e => {
 });
 // AI_SCOPE-107: default = the user's saved page (2026-11-04): requests, loaded and installed rows
 // below the card, then the token row (102) above the mirror tail (081) - no extra saved settings on these rows.
-defineScopeLayout('ollama', () => layoutOf([{ lens: 'ollama.current', settings: { width: 'full' } }, { lens: 'ollama.requests', settings: {}, row: true }, { lens: 'ollama.loaded', settings: {}, row: true }, { lens: 'ollama.installed', settings: {}, row: true }, { lens: 'ollama.tps', settings: {}, row: true }, 'ollama.ptps', 'ollama.ctx']).concat(OLLAMA_MIRROR.layout()));
+// AI_SCOPE-129 (D2 of 121, the 127/128 placement): the cost row sits where Strata's, Bionic's and llama.cpp's
+// does - after the token-performance row, GPU Cost Activity leading and GPU Total Cost beside it. The mirror
+// tail follows, unchanged.
+// AI_SCOPE-124 (2026-11-10): one GPU Power tile PER DETECTED CARD now leads that row, left of Cost Activity, and
+// the row-start flag moves to the first power tile (the user's placement: the same pattern as 122 / 123). The
+// lens itself lives in mirror.js behind defineMirror's { power: true }; the default carries it in the cost row,
+// NOT in the mirror tail.
+defineScopeLayout('ollama', () => {
+  const cards = ((SOURCES.ollama && SOURCES.ollama.data) || {}).processCards || [];
+  const items = [{ lens: 'ollama.current', settings: { width: 'full' } }, { lens: 'ollama.requests', settings: {}, row: true }, { lens: 'ollama.loaded', settings: {}, row: true }, { lens: 'ollama.installed', settings: {}, row: true }, { lens: 'ollama.tps', settings: {}, row: true }, 'ollama.ptps', 'ollama.ctx'];
+  for (let i = 0; i < Math.max(1, cards.length); i++)
+    items.push({ lens: 'ollama.power', settings: { card: i }, row: i === 0 });   // machine-dependent entries loop over detected hardware, never literal indices (107's rule)
+  items.push({ lens: 'ollama.costact' }, 'ollama.costtotal');
+  return layoutOf(items).concat(OLLAMA_MIRROR.layout());   // layoutOf ONCE over the complete list (122's bug: pushing raw strings after it kills the render)
+});

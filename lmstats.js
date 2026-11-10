@@ -6,6 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const reqstats = require('./reqstats');            // AI_SCOPE-094 slice 3: the shared average builder
 const hwstats = require('./hwstats');              // AI_SCOPE-094 slice 4: peakBetween for each request
+const procstats = require('./procstats');          // AI_SCOPE-127: energyBetween - the family's energy trail (121)
+const reqstore = require('./reqstore');            // AI_SCOPE-131: the saved request store (the 121/128 shape)
+const paths = require('./paths');                  // AI_SCOPE-131: bionic-requests.jsonl lives in the data folder
 const os = require('os');
 
 // Where the logs are: <data folder>/apps/bionic/server-logs (Bionic), else <data folder>/server-logs (LM Studio desktop).
@@ -15,7 +18,7 @@ function start(settings) {
   const home = (settings && settings.home) || path.join(os.homedir(), '.lmstudio');
   CANDIDATE_DIRS = [path.join(home, 'apps', 'bionic', 'server-logs'), path.join(home, 'server-logs')];
 }
-function stop() { CANDIDATE_DIRS = []; for (const k in perfRings) delete perfRings[k]; }   // AI_SCOPE-103: an uninstalled scope drops its rings too (like procstats' unattest)
+function stop() { CANDIDATE_DIRS = []; for (const k in perfRings) delete perfRings[k]; }   // AI_SCOPE-103: an uninstalled scope drops its rings too (like procstats' unattest). 131: nothing else to clear - the saved store IS the memory, and its keys are namespaced by log folder, so a reinstall over a different home can never inherit the old one's figures.
 
 function findLogDir() {
   for (const d of CANDIDATE_DIRS) {
@@ -147,43 +150,109 @@ function forgetGone(files) {
   Object.keys(parsed).forEach(function (f) { if (!keep[f]) delete parsed[f]; });
 }
 
-// AI_SCOPE-094 slice 4: the whole-PC peak per Bionic request lives here, like every other scope
-// (Strata / Ollama / llama.cpp / Comfy all attach it in their own module). It used to be done in
-// server.js, which is why it needed a key of its own and an inferred window start.
-// The log lines are stamped only when a request ends, so Bionic's `end` is a whole-second stamp:
-// the cache keeps a computed peak across the re-reads, and a row younger than 4 s is left without
-// one so the 2 s samples covering its end have had time to arrive.
-const PEAK_CACHE_MAX = 5000;
-const peakCache = new Map();
-function attachPeak(r) {
-  if (!r || r.peak !== undefined) return;
-  const end = r.end;
-  if (end == null || r.durationMs == null) return;
-  const key = r.key;
-  if (peakCache.has(key)) { r.peak = peakCache.get(key); return; }
-  if (Date.now() - end < 4000) return;                       // not final yet - retry on the next poll
-  const from = r.start != null ? r.start - 1000 : end - r.durationMs - 1000;
-  const p = hwstats.peakBetween(from, end + 2000);
-  const oldest = hwstats.oldestSample();
-  if (p || oldest == null || end < oldest) {                 // final: found, or too old to ever find
-    peakCache.set(key, p);
-    if (peakCache.size > PEAK_CACHE_MAX) peakCache.delete(peakCache.keys().next().value);
-  }
-  r.peak = p;
+// AI_SCOPE-094 slice 4 / 127 / 131: the saved request store.
+//
+// Bionic's rows ARE its server log - every other scope builds rows from its app's API and saves
+// them (121/128); Bionic re-parses them on every read (094/057). Until 131 the figures the reads
+// derived - the whole-PC peak (094 slice 4) and the per-request energy (127) - lived only in
+// memory: procstats' one-hour trail plus read-time cache Maps. An ai_scope restart therefore
+// blanked Peak / Power Usage / Total Cost on rows that had carried real numbers (the user's
+// report). Bionic now keeps a saved store of its own, and the parse FEEDS it: every CLOSED row
+// (its total line arrived, so it has a start) is appended exactly ONCE, with the peak and the
+// energy stamped at save - 128's shape, not 127's read-time attach.
+//   - the save waits 4 s past the row's end so the 2 s samples covering it have landed (094's
+//     stricter peak wait covers 127's 3 s energy wait too); a waiting row rides the payload, it
+//     is just not saved yet;
+//   - an UNCLOSED row (in flight, or the engine died before its total line) rides the payload
+//     from the parse and is never saved - once it closes it enters like any other;
+//   - what was never measured stays unmeasured: no chunk inside the window -> no energy fields
+//     (a gap, never a zero), and rows backfilled from before this session save peak: null exactly
+//     as the read-time cache used to finalize them;
+//   - row keys are Bionic's own `ts|task`: stable across reads and restarts, but unique only
+//     inside one log folder, so the STORE key is <logDir>|<key> (`sk`): two Bionic homes can
+//     repeat a timestamp. A response shows only the current folder's saved lines;
+//   - the caps come with reqstore (1000 in memory, 5x on disk) - the same 1000-row bound the
+//     Days buckets already name. The first scan backfills, so requests that closed before this
+//     build entered the store too (measured only where this session can still measure them).
+const REQ_FILE = paths.file('bionic-requests.jsonl');
+const ENERGY_VER = 2;                    // the 121 D9 stamp: which measurement produced the joules
+const known = {};                        // store key -> true (094's dedupe, fed by reqstore's `remember`)
+let activeDir = null;                    // the log folder the current scan reads; the store-key namespace
+function mapReqRow(r) {
+  // 121 D9 (via 128): energy measured by a superseded apportionment is not history, it is a wrong
+  // measurement - drop the fields and the row reads as a gap.
+  if (r.energyWs != null && r.energyVer !== ENERGY_VER) { delete r.energyWs; delete r.energyPartial; }
+  return r;
 }
+const store = reqstore.createStore({
+  file: REQ_FILE,
+  accept: function (r) { return !!r.sk && !known[r.sk]; },   // dedupe what the file already holds
+  remember: function (r) { if (r.sk) known[r.sk] = true; },
+  mapRow: mapReqRow,
+  onError: function (msg) { console.log('[bionic] request store: ' + msg); }   // a failed write shows where it is honest: the server console
+});
+const requests = store.rows();           // saved closed requests, oldest first - the store mutates this array in place
 
-// Returns the newest `limit` requests, newest first.
+// The 094 slice 4 window, unchanged: the log's `end` is a whole-second stamp and the inferred start
+// can sit a beat before it, so the peak is asked over [start-1000, end+2000]. One shot at save.
+function attachPeak(r) {
+  r.peak = hwstats.peakBetween(r.start - 1000, r.end + 2000);
+}
+// 127's rules, 128's shape: the energy over the WHOLE request [start, end] from the family's trail;
+// no chunk inside -> no fields (a gap, never a zero); reaching past coverage -> a floor that says
+// so; provenance estimated (board power is a device measurement). The store keeps the answer forever.
+function attachEnergy(r) {
+  const en = procstats.energyBetween('bionic', r.start, r.end);
+  if (!en || en.n <= 0) return;
+  r.energyWs = Math.round(en.ws * 10) / 10;
+  if (en.partial) r.energyPartial = true;
+  r.energyVer = ENERGY_VER;
+  reqstats.setProv(r, 'energyWs', reqstats.PROV.ESTIMATED);
+}
+function saveRequest(r) { r.sk = activeDir + '|' + r.key; store.append(r); }
+
+// The 121 costDays shape over the stored rows (for bionic.costtotal's Days range): one bucket per LOCAL
+// calendar day, oldest first { d, ws, n, miss } - n rows carry energy, miss rows count as nothing (a gap
+// in the two Requests columns); the client picks the window and applies the price. The builder itself is the
+// shared one (AI_SCOPE-128 settled it in reqstats.js, the same shape llama.cpp now uses); this stays as the
+// name the /api/bionic route calls.
+function costDayBuckets(rows) { return reqstats.costDayBuckets(rows); }
+
+// Returns the newest `limit` requests, newest first: the saved store, fed from the log.
 function getLatestRequests(limit) {  limit = limit || 100;
   const dir = findLogDir();
   if (!dir) return { logDir: null, rows: [], error: 'Bionic server log folder not found. Looked in: ' + CANDIDATE_DIRS.join(', ') };
+  if (activeDir !== dir) { activeDir = dir; store.load(); }   // the file is read once; switching log folder only re-marks the keys
   const files = listLogFiles(dir);
   forgetGone(files);
-  const rows = [];
-  // Newest files first until we have enough rows (each file parsed once, see parseFile).
-  for (let i = files.length - 1; i >= 0 && rows.length < limit; i--) {
+  // Feed the store. The scan runs to the store's memory cap whatever the caller asked, so the Days
+  // bound keeps its "last 1000 rows" shape; parseFile caches whole files, so this is a loop over kept
+  // rows, not fresh disk reads (057).
+  const riding = [];   // shown from the parse, not saved: unclosed rows + closed rows inside the 4 s wait
+  const fresh = [];
+  let seen = 0;
+  for (let i = files.length - 1; i >= 0 && seen < store.memCap(); i--) {
     const c = parseFile(files[i]);
     if (!c) continue;
-    for (let j = c.rows.length - 1; j >= 0 && rows.length < limit; j--) { attachPeak(c.rows[j]); rows.push(c.rows[j]); }
+    for (let j = c.rows.length - 1; j >= 0 && seen < store.memCap(); j--) {
+      const r = c.rows[j]; seen++;
+      if (r.start == null) { riding.push(r); continue; }             // no total line yet (or ever)
+      if (known[activeDir + '|' + r.key]) continue;                  // already in the store
+      if (Date.now() - r.end < 4000) { riding.push(r); continue; }   // the samples covering the end may not have landed - retry on the next read
+      attachPeak(r); attachEnergy(r); fresh.push(r);
+    }
+  }
+  for (let i = fresh.length - 1; i >= 0; i--) saveRequest(fresh[i]);  // oldest first, so rows land in end order (129's save-order note)
+  const mark = activeDir + '|';
+  const rows = [];
+  for (let i = requests.length - 1; i >= 0 && rows.length < limit; i--) {
+    const r = requests[i];
+    if (r.sk.slice(0, mark.length) === mark) rows.push(r);           // only the current log folder's saved lines
+  }
+  if (riding.length) {
+    const all = rows.concat(riding);
+    all.sort(function (a, b) { return (b.end || 0) - (a.end || 0); });   // newest first, whatever the source
+    return { logDir: dir, rows: all.slice(0, limit) };
   }
   return { logDir: dir, rows: rows };
 }
@@ -327,4 +396,10 @@ function getPromptAverage(rows) {
   return a ? { model: model, promptTps: a.value, requests: a.requests } : null;
 }
 
-module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage, getPromptAverage: getPromptAverage, samplePerf: samplePerf, tpsHistorySince: tpsHistorySince, tsToMs: tsToMs };
+module.exports = { start: start, stop: stop, getLatestRequests: getLatestRequests, getCurrentRequest: getCurrentRequest, getAverage: getAverage, getPromptAverage: getPromptAverage, samplePerf: samplePerf, tpsHistorySince: tpsHistorySince, tsToMs: tsToMs,
+  costDayBuckets: costDayBuckets,
+  // AI_SCOPE-131: the route reads costDayBuckets(getLatestRequests(1000).rows); the suites/probes drive the
+  // 128 surface (attachEnergy / mapReqRow / saveRequest / energyVer / store / requests). Bionic has no later()
+  // (the log feed saves on the next read) and no local flag, so those two names stay absent on purpose.
+  _test: { attachEnergy: attachEnergy, attachPeak: attachPeak, mapReqRow: mapReqRow, saveRequest: saveRequest,
+    store: store, requests: requests, known: known, energyVer: function () { return ENERGY_VER; } } };

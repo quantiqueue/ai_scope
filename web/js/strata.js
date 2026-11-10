@@ -138,7 +138,7 @@ function strataReqTitle(key, r) {
 // One option object drives BOTH the header and the rows, so the two can never drift apart
 // (the probe caught exactly that class of bug: 11 headers over 10 cells).
 const STRATA_REQ = {
-  title: 'Requests', pager: true, extra: ['source', 'hitRate'],
+  title: 'Requests', pager: true, app: 'Strata', extra: ['source', 'hitRate', 'energy', 'cost'],
   keyOf: r => r.key,
   titleOf: strataReqTitle,
   statusOf: r => r.finish && r.finish !== 'stop' && r.finish !== 'length'
@@ -147,7 +147,7 @@ const STRATA_REQ = {
 defineLens({
   id: 'strata.requests', scope: 'strata', size: 'full',
   name: 'Requests',
-  description: 'Finished requests: tokens, cached prompt, speeds, first token, duration, peak load, which Strata answered the request, expert hit rate.',
+  description: 'Finished requests: tokens, cached prompt, speeds, first token, duration, peak load, which Strata answered the request, expert hit rate, and the GPU energy each one cost with its price.',
   settings: [PER_PAGE_FIELD],
   markup: reqTableMarkup(STRATA_REQ),
   render(L, d) {
@@ -199,7 +199,9 @@ defineLens({
 // The four process tiles (strata.gpu / strata.ram / strata.cpu / strata.io) are the family's first members;
 // since AI_SCOPE-077 they come from defineMirror() in web/js/mirror.js, which every app scope shares. The
 // lens ids and tile ids are unchanged ('s' prefixes), so saved layouts and the hover keep working.
-const STRATA_MIRROR = defineMirror({ key: 'strata', name: 'Strata', letter: 's' });
+// AI_SCOPE-122: { power: true } opts Strata into the GPU Power mirror tile (id strata.power, tile spw<card>) -
+// the first scope to have one; the other four scopes wait for their own tickets (123-126).
+const STRATA_MIRROR = defineMirror({ key: 'strata', name: 'Strata', letter: 's', power: true });
 
 // ---------- Strata Gen tok/s (AI_SCOPE-093 slice 1) ----------
 // Big value (user spec 2026-11-01 17:50, = D2 extended): live tok/s while Strata reports one on this refresh;
@@ -405,6 +407,26 @@ MIRROR_HOVER.push({ prefix: 'shrate', fn: (spark, f, guide, tip) => {   // neare
   tip.textContent = (p.v != null ? fmtPct(p.v) + ' · ended ' + fmtWhen(p.end) : 'n/a') + (p.m ? ' · ' + cutName(p.m) : '');
 } });
 
+// ---------- Strata GPU cost lenses (AI_SCOPE-121, split 2026-11-09; re-homed onto the shared 127 helper) ----------
+// The pair now lives once in web/js/mirror.js defineGpuCost(); this call passes Strata's shipped wording
+// through UNCHANGED (the ids, the tile prefixes scostact / scosttot, the settings fields, every sentence of
+// the tooltips and descriptions are the 121 ones - the strings below are copied from the block this replaced,
+// and a probe re-renders both faces to prove it). The energy rules themselves (121 D5/D6/D7/D8/D9) are the
+// server's: procstats accrueCost keyed to the 'strata' family, the saved rows' energyWs + energyVer stamps,
+// the per-day costDays buckets. The 121 section comment's split story:
+// "GPU work is the row's subject, so the rate tile leads and the range tile follows - the user's numbering."
+defineGpuCost({
+  key: 'strata', name: 'Strata', letter: 's',
+  // The mirror tiles' state wording (mirror.js keeps its own copy inside defineMirror), in Strata's words.
+  stateWords: { off: 'Strata Offline', idle: 'No Model Loaded', loading: 'Loading\u2026',
+    unloading: 'Unloading\u2026', failed: 'Load failed' },
+  online: d => d.online, downSub: strataDownSub,
+  daysClause: 'Cost Range "Days" sums the SAVED Strata requests whose end falls in the window - the only energy record that outlives a restart, and no more complete than the 1000-request ring AI_SCOPE keeps - so it counts request energy and nothing else, and rows whose window nothing was measured inside count as nothing.',
+  daysShort: 'the saved Strata requests of the last N days',
+  rangeTip: 'Session start: every measured GPU watt this AI_SCOPE server has attributed to Strata since it booted. Days: the saved Strata requests within the last N days (requests persist across restarts; GPU work outside a request is not in that sum).',
+  daysNumTip: 'How many days back to sum (calendar days, today included), from the saved Strata requests AI_SCOPE still holds. Its ring keeps the last 1000 requests, so a long range can only reach back as far as they do.',
+});
+
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 // AI_SCOPE-072: default gets one row of Strata GPU + VRAM tiles per card after Installed Models; on macOS the
 // tiles stay out of the default (no per-process GPU stats there) but remain addable - they answer
@@ -413,7 +435,19 @@ MIRROR_HOVER.push({ prefix: 'shrate', fn: (spark, f, guide, tip) => {   // neare
 // since per-process RAM exists on Linux / macOS too. AI_SCOPE-075: "Strata CPU" leads that same row, also on
 // every OS (procstats reports CPU % on Windows, Linux and macOS). AI_SCOPE-076: "Strata I/O" closes that row
 // (the tile answers "Windows only for now" where the counters do not exist).
-// AI_SCOPE-077: the mirror rows come from the shared family helper - same items, same order, same ids.
 // AI_SCOPE-107: default = the user's saved page (2026-11-04): requests first below the card, loaded
 // (cols "3,8") and installed (cols "3") after it, then the 093 token row (tps ptps ctx hit) above the mirror tail.
-defineScopeLayout('strata', () => layoutOf([{ lens: 'strata.current', settings: { width: 'full' } }, { lens: 'strata.requests', settings: {}, row: true }, { lens: 'strata.loaded', settings: { perPage: 5, cols: '3,8' }, row: true }, { lens: 'strata.installed', settings: { perPage: 5, cols: '3' }, row: true }, { lens: 'strata.tps', settings: {}, row: true }, 'strata.ptps', 'strata.ctx', 'strata.hit']).concat(STRATA_MIRROR.layout()));
+// AI_SCOPE-121: "Strata Cost" starts its own row after the token row (the 093/107 rows stay untouched); the
+// 2026-11-09 split puts the two cost lenses side by side on it (GPU work is the row's subject, so the rate
+// tile leads and the range tile follows - the user's numbering).
+// AI_SCOPE-122 (2026-11-09): one GPU Power tile PER DETECTED CARD leads that row, left of the Cost Activity
+// tile (the user's placement); the row-start flag moves to the first power tile. The lens lives in mirror.js
+// behind defineMirror's { power: true } opt-in - the default carries it in the cost row, NOT in the mirror tail.
+defineScopeLayout('strata', () => {
+  const cards = ((SOURCES.strata && SOURCES.strata.data) || {}).processCards || [];
+  const items = [{ lens: 'strata.current', settings: { width: 'full' } }, { lens: 'strata.requests', settings: {}, row: true }, { lens: 'strata.loaded', settings: { perPage: 5, cols: '3,8' }, row: true }, { lens: 'strata.installed', settings: { perPage: 5, cols: '3' }, row: true }, { lens: 'strata.tps', settings: {}, row: true }, 'strata.ptps', 'strata.ctx', 'strata.hit'];
+  for (let i = 0; i < Math.max(1, cards.length); i++)
+    items.push({ lens: 'strata.power', settings: { card: i }, row: i === 0 });   // machine-dependent entries loop over detected hardware, never literal indices (107's rule)
+  items.push({ lens: 'strata.costact' }, 'strata.costtotal');
+  return layoutOf(items).concat(STRATA_MIRROR.layout());   // layoutOf ONCE over the whole list: pushing raw strings after it strands item.lens undefined and kills the render (122's caught bug)
+});

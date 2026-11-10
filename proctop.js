@@ -49,7 +49,60 @@ let every = SLOW_MS, failures = 0, restartTimer = null, history = [];   // histo
 // Start-up timings of the current sampler (AI_SCOPE-059): Node's spawn / first output / first blocks + the script's T lines
 let startup = null;
 
-// One block of P / G lines -> { at, procs: [{ pid, name, cpu, ram, luids: { luid: { vram, shared, util } } }] }
+// AI_SCOPE-121 (D8): stamp every card's per-process GPU % and its card-wide total from ONE source, before
+// anything reads this sample - the mirror tiles, the Processes 'Top GPU' lens and the cost math all come off
+// these numbers, so they cannot disagree about who was using the 3060 Ti.
+//  - Windows: nvidia-smi pmon (hwstats keeps the stream), averaged over this sample's own pace. Where pmon has
+//    no number for a process on a card it reported, that process asked for 0 % of that card's SMs in this
+//    window - the counters' 0 is not kept alongside it. When the stream is stale, dead or given up on, pmonUtil
+//    returns null and the Windows counters stand (decision 2), exactly as before.
+//  - Linux: pmon is already the source of these numbers (procnix.js), so the sample's own rows are the total.
+//  - A card pmon does not speak for (AMD / Intel, macOS, or a card with no LUID to key it by) keeps the
+//    counters' numbers, and accrueCost divides them by the device gauge as before (D7).
+// gpuSrc[cardKey] = 'pmon' marks which cards those numbers came from, and cardTotals[cardKey] is that card's
+// total from the SAME passes (sum of every process pmon saw on it) - the cost share is family divided by that,
+// never by a differently-scaled device percentage. pmon's 'sm' and the counters' engine-busy % are different
+// measurements (measured on the same seconds: 40 % vs 59 % vs the device's 67 %), so one ratio never mixes them.
+// vram / shared are untouched: pmon's memory columns are 0 for every process on Windows, so memory stays on
+// the counters (which do report it correctly).
+function applyGpuSource(sample) {
+  sample.gpuSrc = {};
+  sample.cardTotals = {};
+  const pm = NIX ? nixPmonMap(sample) : hwstats.pmonUtil(Math.max(2000, sample.every || 2000));
+  if (!pm) return;
+  Object.keys(pm).forEach(function (cardKey) {
+    let total = 0;
+    Object.keys(pm[cardKey]).forEach(function (pid) { total += pm[cardKey][pid]; });
+    sample.gpuSrc[cardKey] = 'pmon';
+    sample.cardTotals[cardKey] = Math.round(total * 10) / 10;
+  });
+  if (NIX) return;
+  sample.procs.forEach(function (r) {
+    Object.keys(pm).forEach(function (cardKey) {
+      const v = pm[cardKey][r.pid];
+      const g = r.luids[cardKey];
+      if (g) g.util = v == null ? 0 : Math.min(100, v);
+      // pmon saw this process working on a card the counters never reported it on (the strata.exe / 3060 Ti
+      // case). No vram or shared figures for it - the counters had none - but the utilisation is real.
+      else if (v != null && v > 0) r.luids[cardKey] = { vram: 0, shared: 0, util: Math.min(100, v) };
+    });
+  });
+}
+// Linux: the per-process GPU % this sample already carries comes from pmon, so the per-card total is the sum of
+// the rows the sample has. null when nothing in it is a pmon number (no pmon on this driver - no share to take).
+function nixPmonMap(sample) {
+  const out = {};
+  sample.procs.forEach(function (r) {
+    Object.keys(r.luids).forEach(function (cardKey) {
+      const g = r.luids[cardKey];
+      if (g.util == null || !/^nv\d+/.test(cardKey)) return;
+      (out[cardKey] || (out[cardKey] = {}))[r.pid] = g.util;
+    });
+  });
+  return Object.keys(out).length ? out : null;
+}
+
+// One block of P / G lines -> { at, procs: [{ pid, name, cpu, ram, luids: { luid -> { vram, shared, util } } }] }
 function handleBlock(lines) {
   const byPid = {};
   let partial = false;
@@ -80,6 +133,7 @@ function handleBlock(lines) {
   if (startup && partial && !startup.partialAt) startup.partialAt = Date.now();
   if (startup && !partial && !startup.fullAt) startup.fullAt = Date.now();
   latest = { at: Date.now(), every: every, partial: partial, procs: Object.keys(byPid).map(function (k) { return byPid[k]; }).filter(function (r) { return r.pid > 0; }) };   // 092: every sample carries the pace it was taken at
+  applyGpuSource(latest);   // AI_SCOPE-121 D8: one GPU-% source per card (pmon on Windows) before anything reads it
   if (!partial) {
     history.push(latest);
     while (history.length > 1 && history[1].at < latest.at - HIST_MS) history.shift();   // 092: prune by TIME, keeping the one sample older than the window
@@ -299,4 +353,5 @@ module.exports = { start: start, get: get, history: getHistory, icon: icon, supp
   everyMs: function () { return every; },   // AI_SCOPE-092: the pace the mirror rings stamp their points with
   onSample: onSample, demand: demand, release: release,   // AI_SCOPE-084 item 3: shared samples and the shared pace
   snapshot: function () { return NIX ? nixSnap : null; },   // the procnix snapshot behind the last sample (family resolving)
-  _test: { handleBlock: handleBlock, latest: function () { return latest; } } };
+  // 121 D8: the source-stamping step, probeable on a hand-built sample (it reads hwstats' live pmon stream)
+  _test: { handleBlock: handleBlock, latest: function () { return latest; }, applyGpuSource: applyGpuSource } };

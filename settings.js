@@ -19,6 +19,10 @@ const SECTIONS = [
   { id: 'general', label: 'General', keys: [
     { key: 'landing', label: 'Default Page', type: 'scope', def: 'home',
       info: 'Which page opens when starting AI_SCOPE. The tabs stay in the same order.' },
+    // AI_SCOPE-121: the price the Strata Cost lens puts on a kilowatt-hour. 'number' with a step is the
+    // decimal form: it saves as given (0.16 is not a whole number) and the dialog draws a decimal box.
+    { key: 'kwhPrice', label: 'Electricity price', type: 'number', def: 0.16, min: 0, max: 2, step: 0.01, unit: ' $/kWh',
+      info: 'What one kilowatt-hour costs you, in US dollars. The Strata Cost lens multiplies its estimate of Strata\'s GPU watts by this. Changing it re-prices the session - the energy itself is recorded regardless.' },
   ] },
   { id: 'appearance', label: 'Appearance', keys: [
     { key: 'theme', label: 'Theme', type: 'choice', def: 'default',
@@ -98,7 +102,7 @@ function describe() {
       const v = current(f);
       return { key: f.key, label: f.label, type: f.type, unit: f.unit || null, info: f.info || null,
                local: !!f.local, options: f.options || null,
-               min: f.min, max: f.max, value: v, savedValue: (saved[s.id] || {})[f.key],
+               min: f.min, max: f.max, step: f.step != null ? f.step : null, value: v, savedValue: (saved[s.id] || {})[f.key],
                restartPending: pending.indexOf(f.section + '.' + f.key) >= 0 || needsRestart(f, v) };
     }) };
   });
@@ -133,6 +137,10 @@ function prepare(f, v) {
   if (f.type === 'bool') return { value: v === true || v === 1 || v === 'true' || v === 'on', error: null };
   if (f.type === 'number') {
     const n = typeof v === 'number' ? v : parseFloat(String(v));
+    if (f.step) {   // decimal setting (AI_SCOPE-121, kwhPrice): rounds to the step, keeps the money wording out
+      if (!(n >= f.min && n <= f.max)) return { value: null, error: 'Pick a number from ' + f.min + ' to ' + f.max };
+      return { value: +(Math.round(n / f.step) * f.step).toPrecision(12), error: null };
+    }
     if (!(n >= f.min && n <= f.max)) return { value: null, error: 'Pick a whole number from ' + f.min + ' to ' + f.max + ' seconds' };
     return { value: Math.round(n), error: null };
   }

@@ -100,7 +100,7 @@ function renderPage(pg) {
     f.dataset.i = i;
     if (pg.editing) {
       f.innerHTML = '<div class="ltools"><span class="lgrip" title="Drag to reorder">&#8942;&#8942;</span><span class="lname">' + escH(lensLabel(item)) + '</span>' +
-        (def && lensFields(def).length ? '<button type="button" class="lbtn" data-lgear="' + i + '" title="Lens settings">' + GEAR_ICON + '</button>' : '') +
+        (def && lensFields(def, lensSettings(def, item.settings)).length ? '<button type="button" class="lbtn" data-lgear="' + i + '" title="Lens settings">' + GEAR_ICON + '</button>' : '') +
         '<button type="button" class="lbtn" data-lremove="' + i + '" title="Remove lens">&times;</button></div>' +
         '<button type="button" class="lplus left" data-add="' + i + '" data-left title="Add a lens to the left">+</button>' +
         '<button type="button" class="lplus right" data-add="' + (i + 1) + '" title="Add a lens to the right">+</button>';
@@ -273,6 +273,20 @@ document.body.appendChild(lensDlg);
 const lensForm = lensDlg.querySelector('form');
 let lensSubmit = null, lensPage = null;
 lensForm.addEventListener('submit', e => { e.preventDefault(); if (lensSubmit) lensSubmit(); });
+// AI_SCOPE-121: a cascaded field (a field's when(cur) reads another field's value) has to appear and disappear
+// WHILE the dialog is open, not only after a reopen - choose Cost Range: Days and the days box is there, switch
+// back and it is gone. The values in the form are read back before the field block is replaced, so nothing that
+// was typed is lost, and the focus goes back where it was. lensDef is null unless a lens-settings form is open
+// (the Add-lens picker below is not one, and must not be re-rendered by this listener).
+let lensDef = null, lensCur = null;
+lensForm.addEventListener('change', () => {
+  if (!lensDef) return;
+  const box = lensForm.querySelector('.lfields'); if (!box) return;
+  const focus = document.activeElement, name = focus && focus.name;
+  lensCur = lensFieldsRead(lensDef, lensCur);
+  box.innerHTML = lensFieldsHtml(lensDef, lensCur);
+  if (name) { const el = lensForm.querySelector('[name="' + name + '"]'); if (el) el.focus(); }
+});
 
 // pos = index in the draft where the new lens goes (0 = first on the page).
 function addLens(pg, item) {
@@ -305,6 +319,7 @@ function openAddLens(pg, pos) {
     }).join('') +
     '<div class="actions"><button type="button" class="btn" data-lcancel>Cancel</button></div>';
   lensSubmit = null;
+  lensDef = null;             // AI_SCOPE-121: not a lens-settings form - the cascade listener must ignore this one
   lensPage = pg;              // which page the picked lens goes to, and where
   lensDlg.dataset.pos = pos;
   if (!lensDlg.open) lensDlg.showModal();
@@ -315,14 +330,15 @@ lensForm.addEventListener('click', e => {
   const p = e.target.closest('[data-pick]');
   if (!p) return;
   const def = LENSES[p.dataset.pick];
-  if (ownFields(def).length) openLensSettings(lensPage, def.id, null);   // its own settings first (Width can wait for the cog)
+  if (ownFields(def, lensSettings(def, {})).length) openLensSettings(lensPage, def.id, null);   // its own settings first (Width can wait for the cog)
   else addLens(lensPage, { lens: def.id, settings: {} });
 });
-// Fields that apply here: a field with when() shows only when it returns true (e.g. only on Windows, AI_SCOPE-023),
-// plus Width for every lens (AI_SCOPE-020).
-function ownFields(def) { return (def.settings || []).filter(f => !f.when || f.when()); }
-function lensFields(def) {
-  const f = ownFields(def).concat([{ id: 'width', label: 'Width', type: 'choice', options: LENS_WIDTHS }]);
+// Fields that apply here: a field with when(cur) shows only when it returns true - AI_SCOPE-023's OS test
+// ignores cur, AI_SCOPE-121's cascade reads it (the Cost Range picker decides whether the days box exists at
+// all). Plus Width for every lens (AI_SCOPE-020).
+function ownFields(def, cur) { return (def.settings || []).filter(f => !f.when || f.when(cur || {})); }
+function lensFields(def, cur) {
+  const f = ownFields(def, cur).concat([{ id: 'width', label: 'Width', type: 'choice', options: LENS_WIDTHS }]);
   if (def.columns && def.columns.length > 1) f.push({ id: 'cols', label: 'Columns', type: 'columns' });   // table lenses
   return f;
 }
@@ -352,20 +368,22 @@ function lensFieldsHtml(def, cur) {
       if (cur[f.id] && !disks.some(x => x.id === cur[f.id])) opts.push([cur[f.id], 'Disk ' + cur[f.id] + ' (not found)']);
     }
     const val = String(f.id === 'width' ? lensWidth(def, cur) : cur[f.id]);
-    return '<div class="field"><label for="lf-' + f.id + '">' + escH(f.label) + '</label>' +
+    // f.tip shows as a hover on the label (AI_SCOPE-121: the cascaded days box needs to say what it counts);
+    // f.cascade indents the field under the choice it hangs off.
+    return '<div class="field' + (f.cascade ? ' cascade' : '') + '"><label for="lf-' + f.id + '"' + (f.tip ? ' title="' + escH(f.tip) + '"' : '') + '>' + escH(f.label) + '</label>' +
       (opts ? '<select id="lf-' + f.id + '" name="' + f.id + '" data-type="' + f.type + '">' +
         opts.map(o => '<option value="' + escH(o[0]) + '"' + (String(o[0]) === val ? ' selected' : '') + '>' + escH(o[1]) + '</option>').join('') + '</select>'
         : '<input id="lf-' + f.id + '" name="' + f.id + '" data-type="' + f.type + '" type="' + (f.type === 'number' ? 'number' : 'text') + '"' +
           (f.min != null ? ' min="' + f.min + '"' : '') + (f.max != null ? ' max="' + f.max + '"' : '') + ' value="' + escH(val) + '">') +
       '</div>';
   };
-  return lensFields(def).map(field).join('');
+  return lensFields(def, cur).map(field).join('');
 }
 // Values from the form; fields not shown keep their current value (cur).
 function lensFieldsRead(def, cur) {
   const vals = {};
   (def.settings || []).forEach(f => { if (cur && f.id in cur) vals[f.id] = cur[f.id]; });
-  lensFields(def).forEach(f => {
+  lensFields(def, cur).forEach(f => {
     if (f.type === 'toggle') { vals[f.id] = lensForm.querySelector('input[name="' + f.id + '"]').checked; return; }
     if (f.type === 'columns') {
       const off = [...lensForm.querySelectorAll('input[name="col"]')].filter(c => !c.checked && !c.disabled).map(c => c.value);
@@ -386,12 +404,15 @@ function lensFieldsRead(def, cur) {
 function openLensSettings(pg, lensId, index) {
   const def = LENSES[lensId];
   const cur = lensSettings(def, index == null ? {} : pg.draft[index].settings);
+  // The fields live in their own block: that is what the cascade listener replaces when a choice changes
+  // (AI_SCOPE-121), leaving the heading, the description and the buttons alone.
   lensForm.innerHTML = '<h2>' + GEAR_ICON + '<span>' + escH(scopeName(def.scope) + ' · ' + def.name) + '</span></h2>' +
-    '<p class="lead">' + escH(def.description) + '</p>' + lensFieldsHtml(def, cur) +
+    '<p class="lead">' + escH(def.description) + '</p><div class="lfields">' + lensFieldsHtml(def, cur) + '</div>' +
     '<div class="actions">' + (index == null ? '<button type="button" class="btn" data-lback>Back</button>' : '<button type="button" class="btn" data-lcancel>Cancel</button>') +
     '<button type="submit" class="btn primary">' + (index == null ? 'Add lens' : 'Save') + '</button></div>';
+  lensDef = def; lensCur = cur;   // what the cascade listener re-renders from
   lensSubmit = () => {
-    const vals = lensFieldsRead(def, cur);
+    const vals = lensFieldsRead(def, lensCur);   // lensCur: the values as the form last showed them, not as they opened
     if (index == null) addLens(pg, { lens: def.id, settings: vals });
     else { pg.draft[index].settings = vals; lensDlg.close(); renderPage(pg); }
   };
