@@ -5,11 +5,11 @@
 // style, 5-minute server-side history from procstats, hover from that history, Width on all, GPU with a card
 // picker, RAM with Show (Working / Committed, each with its own ceiling), CPU with no settings, I/O without a
 // disk picker (one number per process, not per drive) — and no PCIe mirror, which has no per-process equivalent.
-// A GPU Power mirror exists since AI_SCOPE-122 but is OPT-IN per scope ({ power: true } in the spec; Strata
-// first) - it shows 121's measured per-card apportionment (board watts x the family's share of that card),
-// an estimate that wears ≈; TERMINOLOGY's mirror-family section was revised for it. The spec for this family
-// is ~/ai-scope-terminology.md ("Hardware Mirror Lenses"); it moved out of the release docs on 2026-10-29, so
-// the old pointer to "the v0.4 tasks doc" was stale - fixed under 092.
+// A GPU Power mirror exists since AI_SCOPE-122 but is OPT-IN per scope ({ power: true } in the spec; Strata in
+// 122, Bionic in 123) - it shows 121's measured per-card apportionment (board watts x the family's share of that
+// card), an estimate that wears ≈; TERMINOLOGY's mirror-family section was revised for it. The spec for this
+// family is ~/ai-scope-terminology.md ("Hardware Mirror Lenses"); it moved out of the release docs on
+// 2026-10-29, so the old pointer to "the v0.4 tasks doc" was stale - fixed under 092.
 // State rules, set by 077 REVIEW BATCH (user decisions, 2026-10-28), extended by 080, and re-axied by 092:
 //   - **Time-mapped chart and hover**: x spans the samples actually held - oldest kept to newest - so points age out of
 //     the left edge, the board is full at any pace, and the axis stays honest even when the app stopped producing samples.
