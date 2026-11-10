@@ -27,6 +27,32 @@ defineSource('llamacpp', '/api/llamacpp?limit=100', 'llamacpp', 1000, null, 'pro
 // (Bionic) and 'o' (Ollama) so saved layouts resolve.
 const LLAMACPP_MIRROR = defineMirror({ key: 'llamacpp', name: 'llama.cpp', letter: 'l' });
 
+// ---------- GPU cost lenses (AI_SCOPE-128) ----------
+// The pair 121 shipped for Strata and 127 for Bionic, on the shared defineGpuCost helper. The energy rides the
+// SAME server-side accrual keyed to the 'llamacpp' family (procstats has charged that key since 084's history
+// ran for it; the mirror tiles above already carry 122's gpus[i].w), and the per-request figures are stamped
+// when the row is SAVED (121's way), so unlike Bionic they outlive a restart: /api/llamacpp sends cost +
+// costDays built over the saved 1000-row ring.
+// D1 (user, 2026-11-09): one request is priced from the APP family, not 105's per-model 'llamacpp-<id>' trails.
+// That family is the server process plus every model child it owns (the name filter of the same watch the
+// mirror tiles use), so the tiles, the two lenses and the columns all answer for the same set of processes -
+// and in router mode two requests generating at once each charge the app's draw over their window.
+// D2 (user, 2026-11-09): a server on another PC has no measurable processes at all, so the payload says which
+// it is (d.local) and the sub words that honestly instead of calling a reachable server "offline".
+// 'loading' / 'unloading' / 'failed' are deliberately absent from stateWords: llama.cpp's own API never attests
+// them (082 decision 2B - a router cannot be asked about an unloaded model without loading it), so the two
+// states that exist are the two that are worded.
+defineGpuCost({
+  key: 'llamacpp', name: 'llama.cpp', letter: 'l',
+  stateWords: { off: 'llama.cpp Offline', idle: 'No Model Loaded' },
+  online: d => d.online && d.local !== false,
+  downSub: d => d.online ? 'on another PC \u2014 not measurable here' : 'llama.cpp Offline',
+  daysClause: 'Cost Range "Days" sums the SAVED llama.cpp requests whose end falls in the window - the only energy record that outlives a restart, and no more complete than the 1000-request ring AI_SCOPE keeps - so it counts request energy and nothing else, and rows whose window nothing was measured inside count as nothing.',
+  daysShort: 'the saved llama.cpp requests of the last N days',
+  rangeTip: 'Session start: every measured GPU watt this AI_SCOPE server has attributed to llama.cpp (its server process and the model processes it owns) since it booted. Days: the saved llama.cpp requests within the last N days (requests persist across restarts; GPU work outside a request is not in that sum). In router mode the Session face covers every model instance at once.',
+  daysNumTip: 'How many days back to sum (calendar days, today included), from the saved llama.cpp requests AI_SCOPE still holds. Its ring keeps the last 1000 requests, so a long range can only reach back as far as they do.',
+});
+
 // ---------- Current request (AI_SCOPE-100: the shared card engine) ----------
 // The one scope whose current is a LIST (one per busy slot): o.cur picks the youngest starter and
 // hands the rest to the normal tail as othersRunning, and slot K rides the detail line. --no-slots
@@ -195,10 +221,16 @@ function llamacppReqTitle(key, r) {
   if (key === 'generated') return r.quick ? 'this server saw the request start and finish between two looks: only its combined prompt + generation token count is known' : (pv('outputTokens') === 'estimated' ? 'From the slot\u2019s token count after it finished' : null);
   if (key === 'genTps') return pv('genTps') === 'derived' ? LC_EXACT : LC_EST;
   if (key === 'firstToken') return pv('firstTokenMs') === 'substitute' ? 'Substituted: the server\u2019s metrics give the prompt-eval time, not a first-token time' : null;
+  // AI_SCOPE-128: the two energy columns keep the shared honesty note (lens.js energyNote / costNote) and add
+  // llama.cpp's own reason only where a row can never carry a figure: a `quick` row has no start time, so there
+  // is no window to integrate - the returned string EXTENDS the shared note (the built-in fallback would
+  // otherwise be replaced by it, which the reqTip rule forbids).
+  if (key === 'energy') return r.quick ? energyNote(r, LLAMACPP_REQ) + ' This row came from a request AI_SCOPE saw start and finish between two looks, so its window is not known and nothing was integrated.' : null;
+  if (key === 'cost') return r.quick ? costNote(r) + ' No Power Usage figure in this row, so there is nothing to price: its window is not known.' : null;
   return null;
 }
 const LLAMACPP_REQ = {
-  title: 'Requests', pager: true, extra: ['slot'], keyOf: r => r.key, titleOf: llamacppReqTitle,
+  title: 'Requests', pager: true, app: 'llama.cpp', extra: ['slot', 'energy', 'cost'], keyOf: r => r.key, titleOf: llamacppReqTitle,
   tagOf: r => r.quick ? '<span class="tag" title="Started and finished between two looks at the server, so only its size is known (prompt + output tokens together)">quick</span>' : ''
 };
 defineLens({
@@ -377,4 +409,7 @@ MIRROR_HOVER.push({ prefix: 'lctx', fn: (spark, f, guide, tip) => {   // nearest
 // AI_SCOPE-088: the scope-header helper text is gone - the header shows only the title (user direction 2026-10-31).
 // AI_SCOPE-107: default = the user's saved page (2026-11-04): requests and slots lead below the card,
 // then loaded and installed, then the 101 token row (tps ptps ctx) above the mirror tail (082).
-defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, { lens: 'llamacpp.requests', settings: {}, row: true }, { lens: 'llamacpp.slots', settings: {}, row: true }, { lens: 'llamacpp.loaded', settings: {}, row: true }, { lens: 'llamacpp.installed', settings: {}, row: true }, { lens: 'llamacpp.tps', settings: {}, row: true }, 'llamacpp.ptps', 'llamacpp.ctx']).concat(LLAMACPP_MIRROR.layout()));
+// AI_SCOPE-128 (D2 of 121, the 127 placement): the cost row sits where Strata's and Bionic's does - after the
+// token-performance row, GPU Cost Activity leading and GPU Total Cost beside it - and 123's power tiles will
+// later take the left end of that row. The mirror tail follows, unchanged.
+defineScopeLayout('llamacpp', () => layoutOf([{ lens: 'llamacpp.current', settings: { width: 'full' } }, { lens: 'llamacpp.requests', settings: {}, row: true }, { lens: 'llamacpp.slots', settings: {}, row: true }, { lens: 'llamacpp.loaded', settings: {}, row: true }, { lens: 'llamacpp.installed', settings: {}, row: true }, { lens: 'llamacpp.tps', settings: {}, row: true }, 'llamacpp.ptps', 'llamacpp.ctx', { lens: 'llamacpp.costact', settings: {}, row: true }, 'llamacpp.costtotal']).concat(LLAMACPP_MIRROR.layout()));

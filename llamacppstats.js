@@ -59,38 +59,52 @@ let order = [];             // model ids in the server's order
 let modelsAt = 0;
 const slotState = {};       // model id + '#' + slot id -> { busy, task, seenAt, rec, model }
 // One store, one file, this scope's own 1000-row ring (AI_SCOPE-094 slice 1).
+// AI_SCOPE-121 (D9), carried to this scope by 128: energyVer stamps WHICH measurement produced an energy figure,
+// so a corrected apportionment can never leave half-numbers mixed into history. Every saved line whose stamp is
+// not the current one loses its energy fields on read (the file is never rewritten - 094's append-only rule), so
+// raising the version retires yesterday's figures without a migration. Same number as Strata's (121) and
+// Bionic's (127): the measurement is the same accrual, keyed to this scope's family.
+const ENERGY_VER = 2;
+// Read-side field map for every line in the history file (094: never rewritten, so this map is permanent).
+// Named (128, the 121 precedent) so a probe can put saved lines through the shipped read path without the app,
+// its routes or its file.
+function mapReqRow(r) {
+  // AI_SCOPE-094 slice 2: rows saved before the explicit flags carried no `exact` at all, and the
+  // old client read "absent" as estimated. Say so on read so those lines keep their ≈.
+  // slice 4: the 59 lines saved before this change carry the old boolean dialect. Read them as
+  // provenance instead, so the ≈ on an estimated line and the plain counter numbers on a settled
+  // line both survive - the files themselves are never rewritten.
+  const P = reqstats.PROV;
+  if (r.exact === undefined && r.genExact === undefined && r.src === undefined) r.exact = false;
+  if (r.src === undefined) {
+    const settled = r.exact === true;
+    if (settled) {
+      reqstats.setProv(r, 'outputTokens', P.EXACT);
+      if (r.genMs != null) reqstats.setProv(r, 'genMs', P.EXACT);
+      if (r.promptMs != null) reqstats.setProv(r, 'promptMs', P.EXACT);
+      if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
+      if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
+      if (r.durationMs != null) reqstats.setProv(r, 'durationMs', P.DERIVED);
+      if (r.cachedTokens != null) reqstats.setProv(r, 'cachedTokens', P.EXACT);
+    } else {
+      if (r.genTps != null) reqstats.setProv(r, 'genTps', P.ESTIMATED);
+      if (r.firstTokenMs != null) reqstats.setProv(r, 'firstTokenMs', P.ESTIMATED);
+      if (r.durationMs != null) reqstats.setProv(r, 'durationMs', P.ESTIMATED);
+    }
+    if (r.outputEstimated) reqstats.setProv(r, 'outputTokens', P.ESTIMATED);
+    if (r.firstTokenDerived) reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
+  }
+  ['exact', 'genExact', 'outputEstimated', 'firstTokenDerived'].forEach(k => { delete r[k]; });
+  // AI_SCOPE-121 D9 (via 128): energy measured by a superseded apportionment is not history, it is a wrong
+  // measurement. Drop the fields and the row reads as "no energy recorded" - a dash in the two Requests
+  // columns, nothing summed in the Days range - rather than a number nobody can defend.
+  if (r.energyWs != null && r.energyVer !== ENERGY_VER) { delete r.energyWs; delete r.energyPartial; }
+  return r;
+}
 const store = reqstore.createStore({
   file: REQ_FILE,
   accept: function (r) { return !!r.end; },        // load filter: rows without an end time are unusable
-  // AI_SCOPE-094 slice 2: rows saved before the explicit flags carried no `exact` at all, and the
-  // old client read "absent" as estimated. Say so on read so those lines keep their ≈.
-  mapRow: function (r) {
-    // slice 4: the 59 lines saved before this change carry the old boolean dialect. Read them as
-    // provenance instead, so the ≈ on an estimated line and the plain counter numbers on a settled
-    // line both survive - the files themselves are never rewritten.
-    const P = reqstats.PROV;
-    if (r.exact === undefined && r.genExact === undefined && r.src === undefined) r.exact = false;
-    if (r.src === undefined) {
-      const settled = r.exact === true;
-      if (settled) {
-        reqstats.setProv(r, 'outputTokens', P.EXACT);
-        if (r.genMs != null) reqstats.setProv(r, 'genMs', P.EXACT);
-        if (r.promptMs != null) reqstats.setProv(r, 'promptMs', P.EXACT);
-        if (r.genTps != null) reqstats.setProv(r, 'genTps', P.DERIVED);
-        if (r.promptTps != null) reqstats.setProv(r, 'promptTps', P.DERIVED);
-        if (r.durationMs != null) reqstats.setProv(r, 'durationMs', P.DERIVED);
-        if (r.cachedTokens != null) reqstats.setProv(r, 'cachedTokens', P.EXACT);
-      } else {
-        if (r.genTps != null) reqstats.setProv(r, 'genTps', P.ESTIMATED);
-        if (r.firstTokenMs != null) reqstats.setProv(r, 'firstTokenMs', P.ESTIMATED);
-        if (r.durationMs != null) reqstats.setProv(r, 'durationMs', P.ESTIMATED);
-      }
-      if (r.outputEstimated) reqstats.setProv(r, 'outputTokens', P.ESTIMATED);
-      if (r.firstTokenDerived) reqstats.setProv(r, 'firstTokenMs', P.SUBSTITUTE);
-    }
-    ['exact', 'genExact', 'outputEstimated', 'firstTokenDerived'].forEach(k => { delete r[k]; });
-    return r;
-  },
+  mapRow: mapReqRow,
   onError: function (msg) { lastError = msg; }
 });
 const requests = store.rows();   // saved finished requests, oldest first — mutated in place by the store
@@ -199,10 +213,31 @@ function quick(model, slotId, n, prevSeenAt, now) {
           start: null, end: Math.round((prevSeenAt + now) / 2), durationMs: null, promptTokens: null, cachedTokens: null,
           outputTokens: null, totalTokens: n.total, genTps: null, firstTokenMs: null, quick: true });
 }
-// Save a few seconds after the end so the 2 s system samples covering it exist (peak load).
+// AI_SCOPE-128 (D5 of 121, save-time like Strata's collectRequests rather than 127's read-time attach): the
+// energy this request asked of the cards, integrated over the WHOLE request [start, end] - prompt read and
+// generation, never the model load before it - from the SAME accrual the two Cost lenses and the mirror tiles
+// ride, keyed to the app family 'llamacpp' (the user's D1: that family's name filter already covers the router
+// process AND its model children, so one trail prices everything; in router mode two requests generating at the
+// same moment each charge the app's draw over their window, and that is the accepted trade). Stored as
+// JOULES, priced at draw time; a row whose window no accrued chunk covers gets no field (a gap, never a zero);
+// one reaching back past the trail is a floor and says so; provenance estimated (board power is a device
+// measurement). Rows made by quick() have no start at all - a gap, never a guess.
+// It rides `later()` (below) because that wait is exactly the 121 save rule: the 2 s samples covering the end
+// must exist before the window is integrated.
+function attachEnergy(row) {
+  if (!row || row.start == null || row.end == null) return;
+  const en = procstats.energyBetween('llamacpp', row.start, row.end);
+  if (!en || en.n <= 0) return;                     // nothing measured inside the window: no fields, a gap
+  row.energyWs = Math.round(en.ws * 10) / 10;
+  if (en.partial) row.energyPartial = true;
+  row.energyVer = ENERGY_VER;                       // 121 D9: which measurement produced these joules
+  reqstats.setProv(row, 'energyWs', reqstats.PROV.ESTIMATED);
+}
+// Save a few seconds after the end so the 2 s system samples covering it exist (peak load, and the energy above).
 function later(row) {
   setTimeout(function () {
     row.peak = row.start != null ? hwstats.peakBetween(row.start, row.end + 2000) : null;
+    attachEnergy(row);   // AI_SCOPE-128
     saveRequest(row);
   }, 3000);
 }
@@ -748,6 +783,16 @@ function getState(limit, since) {
                 process: procstats.get('llamacpp'), processSupported: procstats.supported(),
                 // the Hardware Mirror Lens family: the 5-minute per-process ring and the Hardware card names / totals
                 processHistory: procstats.history('llamacpp', since || 0),
+                // AI_SCOPE-128 (D2): is that server on THIS PC? Only a local one has processes AI_SCOPE can
+                // measure, so a reachable server elsewhere is worded "not measurable here" rather than
+                // "offline" - by the cost lenses now, and by 123's power tiles when they land.
+                local: local,
+                // AI_SCOPE-128: the GPU cost pair (llamacpp.costact / llamacpp.costtotal) rides the SAME
+                // per-family accrual /api/strata (121) and /api/bionic (127) send, keyed to 'llamacpp' (D1).
+                // Days buckets are built over the SAVED rows - llama.cpp keeps a request store, so these figures
+                // outlive a restart, which is what Bionic's log rows cannot do.
+                cost: procstats.cost('llamacpp'),
+                costDays: reqstats.costDayBuckets(requests),
                 // AI_SCOPE-101: the token-performance rings ride every answer, offline included (082/093 rule)
                 tpsHistory: tpsHist, contextHistory: ctxHist,
                 processCards: hwstats.getStats().info.gpus.map(function (g) { return { name: g.name, vramTotal: g.vramTotal, source: g.source }; }) };
@@ -832,6 +877,11 @@ module.exports = { start: start, stop: stop, getState: getState, getLogo: getLog
   // 106 item 4: no setModelsDir on the public API - the route must not be able to retarget the folder.
   // The _test setter stays so the shipped 098 probe can still drive resolveModelFile deterministically.
   _test: { trackSlots: trackSlots, isLlama: isLlama, modelInfo: modelInfo, hfRepo: hfRepo, withFit: withFit, resolveModelFile: resolveModelFile,
+    // AI_SCOPE-128: the energy stamp, the saved-row read map (the D9 retirement path), the shipped save wait and
+    // the store itself, so a probe can put lines through the real read/write path with no server and no timers.
+    attachEnergy: attachEnergy, mapReqRow: mapReqRow, later: later, saveRequest: saveRequest,
+    energyVer: function () { return ENERGY_VER; },
+    store: store, requests: requests,
     setModelsDir: function (v) { modelsDir = String(v || '').trim() || null; }, effectiveDir: function () { return modelsDir; },
            setLocal: function (v) { local = !!v; },
            clearFileSizes: function () { Object.keys(fileSizes).forEach(function (k) { delete fileSizes[k]; }); } } };

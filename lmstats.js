@@ -214,20 +214,10 @@ function applyEnergy(r, e) {
 
 // The 121 costDays shape over the log rows (for bionic.costtotal's Days range): one bucket per LOCAL
 // calendar day, oldest first { d, ws, n, miss } - n rows carry energy, miss rows count as nothing (a gap
-// in the two Requests columns); the client picks the window and applies the price.
-function costDayBuckets(rows) {
-  const b = {};
-  rows.forEach(function (r) {
-    if (r.end == null) return;
-    const x = new Date(r.end); x.setHours(0, 0, 0, 0);
-    const k = x.getTime();
-    const day = b[k] || (b[k] = { d: k, ws: 0, n: 0, miss: 0 });
-    if (r.energyWs != null) { day.ws += r.energyWs; day.n++; } else day.miss++;
-  });
-  return Object.keys(b).map(Number).sort(function (a, c) { return a - c; }).map(function (k) {
-    const day = b[k]; day.ws = Math.round(day.ws * 10) / 10; return day;
-  });
-}
+// in the two Requests columns); the client picks the window and applies the price. The builder itself is the
+// shared one (AI_SCOPE-128 settled it in reqstats.js, the same shape llama.cpp now uses); this stays as the
+// name the /api/bionic route calls.
+function costDayBuckets(rows) { return reqstats.costDayBuckets(rows); }
 
 // Returns the newest `limit` requests, newest first.
 function getLatestRequests(limit) {  limit = limit || 100;

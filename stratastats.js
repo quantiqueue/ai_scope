@@ -201,20 +201,10 @@ function collectRequests(instances) {
 // oldest first: { d: <midnight ms>, ws, n, miss } - `n` rows that carry energy, `miss` rows that do not (saved
 // before this feature, or a window nothing was measured inside), which count as NOTHING and must be worded on
 // the face that shows them. Bounded by the store's own ring (1000 rows), so this is at most a few dozen
-// objects; the client picks the window and applies the price.
-function costDayBuckets() {
-  const b = {};
-  requests.forEach(function (r) {
-    if (r.end == null) return;
-    const x = new Date(r.end); x.setHours(0, 0, 0, 0);
-    const k = x.getTime();
-    const day = b[k] || (b[k] = { d: k, ws: 0, n: 0, miss: 0 });
-    if (r.energyWs != null) { day.ws += r.energyWs; day.n++; } else day.miss++;
-  });
-  return Object.keys(b).map(Number).sort(function (a, c) { return a - c; }).map(function (k) {
-    const day = b[k]; day.ws = Math.round(day.ws * 10) / 10; return day;
-  });
-}
+// objects; the client picks the window and applies the price. The builder itself settled into
+// reqstats.costDayBuckets in AI_SCOPE-128 (Strata, Bionic and llama.cpp share the shape); this wrapper keeps
+// Strata's shipped no-argument call, which the 121 probe drives.
+function costDayBuckets() { return reqstats.costDayBuckets(requests); }
 
 // ---------- live generation-speed history (AI_SCOPE-093 slice 1, strata.tps lens) ----------
 // One point per poll while Strata reports live.tok_s - the engine's own number; the field is optional, and an

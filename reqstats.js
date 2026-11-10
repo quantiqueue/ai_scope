@@ -78,4 +78,31 @@ function prov(r, field) {
 // The one question the tables ask: does this number need a marker?
 function isMarked(r, field) { return !!MARKED[prov(r, field)]; }
 
-module.exports = { avgSpeed: avgSpeed, PROV: PROV, setProv: setProv, prov: prov, isMarked: isMarked };
+// ---------- per-calendar-day ENERGY buckets over saved request rows (AI_SCOPE-121 D6's shape; settled once
+// for every cost scope by 128) ----------
+// What the GPU Total Cost lens's "Days" range sums. One bucket per LOCAL calendar day, oldest first:
+// { d: <midnight ms>, ws, n, miss } - `n` rows that carry energyWs, `miss` rows that do not (saved before this
+// measurement existed, stamped by a superseded version of it, or a window nothing was measured inside). Miss
+// rows count as NOTHING and must be worded on the face that shows them; a day with only miss rows is still a
+// day the lens has to name. Bounded by the caller's store ring (1000 rows), so this is a few dozen objects at
+// most, and it never rides a chart. Joules only - the $/kWh price is a Settings number the client applies at
+// draw time (121 D5), so a corrected price re-prices history without touching these numbers. A row with no end
+// time lands nowhere.
+// Strata (121) and Bionic (127) each shipped their own copy; llama.cpp (128) uses this one, and the other two
+// now call it through a thin wrapper that keeps their shipped signatures.
+function costDayBuckets(rows) {
+  const b = {};
+  (rows || []).forEach(function (r) {
+    if (!r || r.end == null) return;
+    const x = new Date(r.end); x.setHours(0, 0, 0, 0);
+    const k = x.getTime();
+    const day = b[k] || (b[k] = { d: k, ws: 0, n: 0, miss: 0 });
+    if (r.energyWs != null) { day.ws += r.energyWs; day.n++; } else day.miss++;
+  });
+  return Object.keys(b).map(Number).sort(function (a, c) { return a - c; }).map(function (k) {
+    const day = b[k]; day.ws = Math.round(day.ws * 10) / 10; return day;
+  });
+}
+
+module.exports = { avgSpeed: avgSpeed, PROV: PROV, setProv: setProv, prov: prov, isMarked: isMarked,
+  costDayBuckets: costDayBuckets };   // AI_SCOPE-128: the shared Days-range shape
